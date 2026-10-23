@@ -1,0 +1,14 @@
+{
+  // Whole-repo type check (sources + tests). Workspace packages resolve to their
+  // sources here, so no build is needed first. Builds use tsconfig.build.json.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "paths": {
+      "@loop-engineering/*": ["./packages/*/src/index.ts"]
+    }
+  },
+  "include": ["packages/*/src", "apps/*/src", "vitest.config.ts"],
+  // The Next.js dashboard has its own tsconfig (JSX, bundler resolution); `npm run typecheck` runs both.
+  "exclude": ["apps/dashboard"]
+}

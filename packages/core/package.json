@@ -1,0 +1,21 @@
+{
+  "name": "@loop-engineering/core",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Data model, SQLite store, shared types and clock.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "better-sqlite3": "^12.11.1"
+  }
+}

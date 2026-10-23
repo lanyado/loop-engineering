@@ -1,0 +1,79 @@
+import { loadTelegramConfig, TelegramConfigError } from '@loop-engineering/telegram';
+import { ConfigError, describeListenError, loadConfig, nonLocalBindWarning } from './config.js';
+import { fromRoot, loadRootEnv, REPO_ROOT } from './env.js';
+import { claudeUsageModule } from './modules/claude-usage.js';
+import { terminalModule } from './modules/terminal.js';
+import { opencodeSubagentsModule } from './modules/opencode-subagents.js';
+import { dashboardApi } from './modules/dashboard-api.js';
+import { loopModuleFromEnv } from './modules/loop.js';
+import { routerModule } from './modules/router.js';
+import { historyModule } from './modules/history.js';
+import { telegramModule } from './modules/telegram.js';
+import { runnerFromEnv } from './runner.js';
+import { createServer } from './server.js';
+
+// Entry point: `npm start` at the repo root (after `npm run build`). Reads REPO_ROOT/.env whatever
+// the working directory, and resolves a relative LOOP_DB_PATH against the repo root too.
+loadRootEnv();
+
+let config;
+let telegram;
+let loop;
+let runner;
+try {
+  config = loadConfig();
+  telegram = loadTelegramConfig(process.env);
+  runner = runnerFromEnv(process.env, config);
+  loop = loopModuleFromEnv(process.env);
+} catch (error) {
+  if (!(error instanceof ConfigError || error instanceof TelegramConfigError)) throw error;
+  console.error(error.message);
+  process.exit(1);
+}
+
+const bindWarning = nonLocalBindWarning(config.host);
+if (bindWarning) console.warn(`\n!!! ${bindWarning} (allowed by ALLOW_NON_LOCAL_BIND=on) !!!\n`);
+
+const server = createServer({
+  config: { ...config, dbPath: fromRoot(config.dbPath) },
+  // The one SessionRunner and usage-limit monitor, shared by the PR loop and the router.
+  ...(runner ? { runner } : {}),
+  // The router comes after the channels, so they are listening when it asks a routing question, and
+  // before the loop, so it hears the loop's fix requests. It stays off without ctx.runner. History comes
+  // last: it only adds an MCP tool and a background sweep.
+  modules: [
+    dashboardApi(),
+    claudeUsageModule(),
+    terminalModule(),
+    opencodeSubagentsModule(),
+    telegramModule({ telegram }),
+    routerModule(),
+    ...(loop ? [loop] : []),
+    historyModule(),
+  ],
+});
+// Registered before start(), so the server can always be stopped, even while it is starting.
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.once(signal, () => {
+    console.log(`[server] ${signal}: shutting down`);
+    void server.close().then(
+      () => process.exit(0),
+      (error: unknown) => {
+        console.error('[server] shutdown failed:', error);
+        process.exit(1);
+      },
+    );
+  });
+}
+
+if (!loop) console.log('[loop] PR loop off (set LOOP_ENGINE=on to run it)');
+let bound;
+try {
+  bound = await server.start();
+} catch (error) {
+  console.error(`[server] ${describeListenError(error, config.host, config.port)}`);
+  process.exit(1);
+}
+console.log(
+  `[server] listening on ${bound.url} (bound ${bound.address}:${bound.port} for SERVER_HOST=${config.host}; public URL: ${config.publicUrl ?? 'not set'}, repo: ${REPO_ROOT})`,
+);

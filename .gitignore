@@ -1,0 +1,17 @@
+node_modules/
+.env*
+!.env.example
+dist/
+.next/
+coverage/
+*.db
+*.db-*
+.vercel/
+test-results/
+playwright-report/
+*.tsbuildinfo
+.boost/
+.overnight/
+.DS_Store
+data/*.bak*
+.claude/settings.local.json

@@ -1,0 +1,13 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/core/tsconfig.build.json" },
+    { "path": "packages/runner/tsconfig.build.json" },
+    { "path": "packages/ask-human/tsconfig.build.json" },
+    { "path": "packages/telegram/tsconfig.build.json" },
+    { "path": "packages/router/tsconfig.build.json" },
+    { "path": "packages/loop/tsconfig.build.json" },
+    { "path": "packages/history/tsconfig.build.json" },
+    { "path": "apps/server/tsconfig.build.json" }
+  ]
+}

@@ -1,0 +1,13 @@
+dist/
+coverage/
+.boost/
+package-lock.json
+# Hand-maintained docs; keep their formatting as written.
+CLAUDE.md
+PLAN.md
+SPEC.md
+.next/
+test-results/
+playwright-report/
+next-env.d.ts
+.claude/

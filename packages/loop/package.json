@@ -1,0 +1,24 @@
+{
+  "name": "@loop-engineering/loop",
+  "version": "0.0.0",
+  "private": true,
+  "description": "PR loop engine: review, tests, QA, merge, deploy, cleanup (M6).",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@loop-engineering/ask-human": "0.0.0",
+    "@loop-engineering/core": "0.0.0",
+    "@loop-engineering/runner": "0.0.0",
+    "zod": "^4.6.7"
+  }
+}

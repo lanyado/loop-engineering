@@ -1,0 +1,24 @@
+{
+  "name": "@loop-engineering/history",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Searchable session history: transcript ingest and the search_history MCP tool (M8).",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@loop-engineering/ask-human": "0.0.0",
+    "@loop-engineering/core": "0.0.0",
+    "@modelcontextprotocol/server": "^2.3.1",
+    "zod": "^4.6.7"
+  }
+}

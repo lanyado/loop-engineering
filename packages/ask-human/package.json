@@ -1,0 +1,23 @@
+{
+  "name": "@loop-engineering/ask-human",
+  "version": "0.0.0",
+  "private": true,
+  "description": "ask_human MCP server and question bus (M3).",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@loop-engineering/core": "0.0.0",
+    "@modelcontextprotocol/server": "^2.3.1",
+    "zod": "^4.6.7"
+  }
+}

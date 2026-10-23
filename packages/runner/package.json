@@ -1,0 +1,21 @@
+{
+  "name": "@loop-engineering/runner",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Session runner: Claude CLI / OpenCode in tmux, worktree per session per repo (M2).",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@loop-engineering/core": "0.0.0"
+  }
+}
