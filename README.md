@@ -4,7 +4,7 @@ Give it a task, and it runs a Claude Code session on your repo in the background
 
 - **Sessions** run the Claude Code CLI in tmux, one git worktree per session. When Claude hits its usage limit, they can move to a free OpenCode model.
 - **Questions** come to the dashboard and Telegram as one-tap options with a default answer. If you don't reply in time, the default wins.
-- **The PR loop** (optional) tests, reviews, QA-checks and merges every PR a session opens, sends failures back to the agent, and reverts a deploy that fails.
+- **The PR loop** (optional) tests, reviews, QA-checks and merges every PR a session opens, sends failures back to the agent, and, for repos with a Vercel project set, reverts a deploy that fails.
 - **The dashboard** shows every project as a live pipeline, along with your Claude usage limits.
 
 Everything runs on your machine, reachable only from it. It's a personal project, built mostly by the agents it runs, and developed on macOS. It starts agents with write access to your repos, so read [SECURITY.md](SECURITY.md) first.
@@ -27,14 +27,14 @@ npm run setup   # checks tools, builds, writes .env with fresh tokens
 npm start       # server + dashboard
 ```
 
-Open **http://127.0.0.1:3737**, and in a second terminal, add a project:
+Open the dashboard at **http://127.0.0.1:3737** (setup prints the address if you changed the port). In a second terminal, add a project:
 
 ```sh
 npm run add-project -- ~/code/my-app            # a git repo with a GitHub remote
 npm run add-project -- ~/notes --folder         # or any folder, edited in place
 ```
 
-**Trust each folder once.** Claude asks "Do you trust this folder?" the first time it runs somewhere, and a background session can't answer that. Run `claude` once in each project folder and once in `~/loop-worktrees`, and choose **Yes, I trust this folder**. If you forget, the session asks you on the dashboard with the command to fix it.
+**Trust each folder once.** Claude asks "Is this a project you created or one you trust?" the first time it runs in a folder, and a background session can't answer that. Run `claude` once in each project folder and once in your `WORKTREES_ROOT` (`~/loop-worktrees` by default), and choose **Yes, I trust this folder**. If you forget, the session asks you on the dashboard, with the command to fix it.
 
 Then press **+ Session** on the project, type what you want done, and watch the pipeline.
 
@@ -62,7 +62,7 @@ These are the `.env` values you're most likely to change. Everything else has a 
 
 **Telegram.** Create a bot with [@BotFather](https://t.me/BotFather) (`/newbot`), put its token in `TELEGRAM_BOT_TOKEN`, and set `TELEGRAM_OWNER_ID` to your numeric id from [@userinfobot](https://t.me/userinfobot). Then open your bot and press **Start**. It uses long polling, so nothing is exposed.
 
-**The PR loop.** Run `gh auth login`, set `LOOP_ENGINE=on`, and restart. Every PR a session opens then gets tests, a code review by a separate agent (up to 5 rounds), QA when the change needs it, and a merge when auto-merge is on for that project, or your approval when it's off. After the merge, the loop watches the deploy and reverts it if it fails.
+**The PR loop.** Run `gh auth login`, set `LOOP_ENGINE=on`, and restart. Every PR a session opens then gets tests, a code review by a separate agent (up to 5 rounds), QA when the change needs it, and a merge when auto-merge is on for that project, or your approval when it's off. After the merge, the loop watches the deploy and reverts it if it fails (for repos with a `vercelProject` set; see [the reference](docs/reference.md#the-pr-loop)).
 
 **Usage meters.** To show Claude's 5-hour and weekly limits in the dashboard, add this line to your Claude Code status line script:
 
@@ -72,14 +72,14 @@ printf '%s' "$input" | /path/to/loop-engineering/scripts/capture-claude-usage.sh
 
 ## Commands
 
-| Command                                         | What it does                                                |
-| ----------------------------------------------- | ----------------------------------------------------------- |
-| `npm run setup`                                 | Check tools, build, create or complete `.env`               |
-| `npm start`                                     | Run the server and the dashboard (Ctrl-C stops both)        |
-| `npm run add-project -- <path>`                 | Register a project (`--name <name>`, `--folder`)            |
-| `npm run build`                                 | Rebuild after pulling changes                               |
-| `npm test`, `npm run typecheck`, `npm run lint` | The checks CI runs                                          |
-| `npm run dev -w @loop-engineering/dashboard`    | Dashboard in development mode (`SERVER_URL=` for demo data) |
+| Command                                         | What it does                                                            |
+| ----------------------------------------------- | ----------------------------------------------------------------------- |
+| `npm run setup`                                 | Check tools, build, create or complete `.env`                           |
+| `npm start`                                     | Run the server and the dashboard (Ctrl-C stops both)                    |
+| `npm run add-project -- <path>`                 | Register a project (`--name`, `--branch`, `--folder`, `--outside-home`) |
+| `npm run build`                                 | Rebuild after pulling changes                                           |
+| `npm test`, `npm run typecheck`, `npm run lint` | The checks CI runs                                                      |
+| `npm run dev -w @loop-engineering/dashboard`    | Dashboard in development mode (`SERVER_URL=` for demo data)             |
 
 ## More
 

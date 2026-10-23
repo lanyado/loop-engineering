@@ -28,21 +28,27 @@ if (parts.some((p) => !existsSync(`${root}${p.built}`))) {
 }
 
 let exitCode = 0;
+let stopping = false;
+/** @param {NodeJS.Signals} signal */
+function stopAll(signal) {
+  stopping = true;
+  for (const c of children) if (c.exitCode === null && c.signalCode === null) c.kill(signal);
+}
 const children = parts.map(({ name, cwd, args }) => {
   const child = spawn(process.execPath, args, { cwd, stdio: 'inherit' });
   child.on('exit', (code, signal) => {
-    if (code) exitCode = code;
-    const running = children.filter((c) => c.exitCode === null && c.signalCode === null);
-    if (running.length > 0) {
+    // A crash or a kill we did not ask for is a failure, even when it carries no exit code.
+    if (code || (signal && !stopping)) exitCode = code || 1;
+    if (!stopping) {
       console.error(`[start] ${name} stopped (${signal ?? `exit ${code}`}); stopping the rest`);
-      for (const c of running) c.kill('SIGTERM');
-    } else process.exit(exitCode);
+      stopAll('SIGTERM');
+    }
+    if (children.every((c) => c.exitCode !== null || c.signalCode !== null)) process.exit(exitCode);
   });
   return child;
 });
-// Ctrl-C already reaches the children (same process group); a second SIGINT would cut the server's
-// clean shutdown short, so only SIGTERM and SIGHUP are passed on.
-process.on('SIGINT', () => {});
-for (const signal of /** @type {const} */ (['SIGTERM', 'SIGHUP'])) {
-  process.on(signal, () => children.forEach((c) => c.kill(signal)));
+// Ctrl-C also reaches the children directly (same process group). Passing it on as SIGTERM is safe
+// (the server's shutdown runs once) and covers a SIGINT sent to this process alone.
+for (const signal of /** @type {const} */ (['SIGINT', 'SIGTERM', 'SIGHUP'])) {
+  process.on(signal, () => stopAll(signal === 'SIGINT' ? 'SIGTERM' : signal));
 }

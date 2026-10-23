@@ -24,12 +24,19 @@ if (rest.some((a) => /^(-H|--hostname|-p|--port)(=|$)/.test(a))) {
   console.error('[dashboard] refusing to start: set DASHBOARD_HOST / DASHBOARD_PORT instead of -H / -p.');
   process.exit(1);
 }
-try {
-  const text = readFileSync(new URL('../../../.env', import.meta.url), 'utf8');
-  Object.assign(process.env, dashboardEnvFrom(text, process.env));
-} catch (error) {
-  if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT') throw error;
+/** @param {string} path relative to this script */
+function readIfThere(path) {
+  try {
+    return readFileSync(new URL(path, import.meta.url), 'utf8');
+  } catch (error) {
+    if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ENOENT') return '';
+    throw error;
+  }
 }
+Object.assign(
+  process.env,
+  dashboardEnvFrom(readIfThere('../../../.env'), process.env, readIfThere('../.env.local')),
+);
 const host = dashboardHost(process.env);
 const port = (process.env.DASHBOARD_PORT ?? '').trim() || '3737';
 const { problem } = accessConfig(process.env);

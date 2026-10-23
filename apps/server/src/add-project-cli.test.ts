@@ -32,14 +32,39 @@ describe('detectProject', () => {
     });
   });
 
-  it('falls back to the current branch without origin/HEAD', () => {
+  const branchOf = (answers: Record<string, string>, opts = {}) => {
     const git = fakeGit({
       'rev-parse --show-toplevel': '/r',
       'remote get-url origin': 'https://github.com/me/r.git',
-      'rev-parse --abbrev-ref HEAD': 'develop',
+      ...answers,
     });
-    const project = detectProject('/r', git, {});
-    expect(project.kind === 'git' && project.repos[0]?.defaultBranch).toBe('develop');
+    const project = detectProject('/r', git, opts);
+    return project.kind === 'git' ? project.repos[0]?.defaultBranch : null;
+  };
+
+  it('without origin/HEAD, prefers main or master over the branch checked out', () => {
+    const onFeature = { 'rev-parse --abbrev-ref HEAD': 'feature-x' };
+    expect(branchOf({ ...onFeature, 'rev-parse --verify --quiet refs/heads/master': 'abc' })).toBe('master');
+    expect(branchOf({ ...onFeature, 'rev-parse --verify --quiet refs/remotes/origin/main': 'abc' })).toBe(
+      'main',
+    );
+    expect(branchOf(onFeature)).toBe('feature-x');
+    // Detached HEAD names no branch.
+    expect(branchOf({ 'rev-parse --abbrev-ref HEAD': 'HEAD' })).toBe('main');
+    expect(branchOf(onFeature, { branch: 'release' })).toBe('release');
+  });
+
+  it('registers the main checkout when given a linked worktree', () => {
+    const git = fakeGit({
+      'rev-parse --show-toplevel': '/wt/shop-fix',
+      'rev-parse --path-format=absolute --git-common-dir': '/Users/me/shop/.git',
+      'remote get-url origin': 'https://github.com/me/shop.git',
+      'symbolic-ref --short refs/remotes/origin/HEAD': 'origin/main',
+    });
+    expect(detectProject('/wt/shop-fix', git, {})).toMatchObject({
+      name: 'shop',
+      repos: [{ name: 'shop', path: '/Users/me/shop' }],
+    });
   });
 
   it('refuses a git repository without origin, pointing at --folder', () => {
@@ -119,6 +144,11 @@ describe('npm run add-project', () => {
     });
     expect(out[0]).toBe(`✓ Added folder project "notes" (${dir}).`);
     expect(out[1]).toContain(`cd ${dir} && claude`);
+  });
+
+  it('resolves a relative path from where the command was typed (INIT_CWD)', async () => {
+    expect(await cli(['.', '--name', 'here'], created, { env: { ...env, INIT_CWD: dir } })).toBe(0);
+    expect(JSON.parse(requests[0]!.init.body as string)).toMatchObject({ folderPath: dir });
   });
 
   it("prints the server's refusal", async () => {

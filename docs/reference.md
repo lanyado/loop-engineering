@@ -39,7 +39,7 @@ npm run format      # prettier --write
 npm run setup       # check tools, build, write .env (keeps values already set)
 npm start           # run the built server and dashboard together (scripts/start.mjs), reading .env
 npm run start:server  # the server alone
-npm run add-project -- <path> [--name n] [--folder]  # register a project with the running server
+npm run add-project -- <path> [--name n] [--branch b] [--folder] [--outside-home]  # register a project with the running server
 ```
 
 Tests resolve `@loop-engineering/*` imports to package sources, so they need no build. CI (`.github/workflows/ci.yml`) runs typecheck, lint, test and build on every PR.

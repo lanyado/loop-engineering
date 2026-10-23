@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
+import { parseEnv } from 'node:util';
 
 /** A CLI the system calls; `need` is what it is for, `install` how to get it. */
 interface Tool {
@@ -53,17 +54,21 @@ export interface SetupIo {
 }
 
 /**
- * Sets `KEY=value` for each key whose line is missing or empty. Values already set are kept, so
- * running setup again never replaces a token or a folder you chose.
+ * Sets `KEY=value` for each key that is unset or empty as Node reads the file (`export KEY=`,
+ * `KEY = ""`, a later empty duplicate). Values already set are kept, so running setup again never
+ * replaces a token or a folder you chose. The key's last line is the one rewritten, since it is the
+ * one Node uses.
  */
 export function fillEnv(text: string, values: Record<string, string>): { text: string; filled: string[] } {
   const filled: string[] = [];
   let out = text;
   for (const [key, value] of Object.entries(values)) {
-    const line = new RegExp(`^${key}=(.*)$`, 'm');
-    const match = line.exec(out);
-    if (match && match[1]!.trim() !== '') continue;
-    out = match ? out.replace(line, `${key}=${value}`) : `${out.replace(/\n*$/, '\n')}${key}=${value}\n`;
+    if (parseEnv(out)[key]?.trim()) continue;
+    const lines = [...out.matchAll(new RegExp(`^[ \\t]*(?:export[ \\t]+)?${key}[ \\t]*=.*$`, 'gm'))];
+    const last = lines.at(-1);
+    out = last
+      ? `${out.slice(0, last.index)}${key}=${value}${out.slice(last.index + last[0].length)}`
+      : `${out.replace(/\n*$/, '\n')}${key}=${value}\n`;
     filled.push(key);
   }
   return { text: out, filled };
@@ -101,7 +106,9 @@ export function runSetup(io: SetupIo): number {
     MCP_TOKEN: io.randomToken(),
     WORKTREES_ROOT: worktrees,
   });
-  if (created || filled.length > 0) writeFileSync(envPath, text, { mode: 0o600 });
+  if (created || filled.length > 0) writeFileSync(envPath, text);
+  // writeFileSync's mode only applies to a new file; a .env copied by hand is often 0644.
+  chmodSync(envPath, 0o600);
   io.out(
     created
       ? `✓ created .env (${filled.join(', ')} filled in)`
@@ -122,6 +129,8 @@ export function runSetup(io: SetupIo): number {
   io.out('Ready. Next:');
   io.out(`  1. npm start  (server + dashboard at http://127.0.0.1:${port})`);
   io.out('  2. npm run add-project -- /path/to/your/repo  (in a second terminal)');
-  io.out(`  3. Once, so sessions can start: cd ${root} && claude, then accept "Yes, I trust this folder"`);
+  io.out(
+    `  3. Once, so sessions can start: run \`claude\` in ${root} and in each project folder, and accept "Yes, I trust this folder"`,
+  );
   return 0;
 }

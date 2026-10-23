@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, existsSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -13,6 +13,19 @@ describe('fillEnv', () => {
 
   it('treats a whitespace-only value as empty', () => {
     expect(fillEnv('A=   \n', { A: 'x' }).text).toBe('A=x\n');
+  });
+
+  it('reads the file the way Node does', () => {
+    // export and spaces: set, so kept.
+    expect(fillEnv('export A=kept\nB = kept\n', { A: 'x', B: 'y' }).filled).toEqual([]);
+    // Empty to Node: quoted empty, a comment, and a later empty duplicate (the last line counts).
+    expect(fillEnv('A=""\n', { A: 'x' }).text).toBe('A=x\n');
+    expect(fillEnv('A= # note\n', { A: 'x' }).text).toBe('A=x\n');
+    expect(fillEnv('A=old\nA=\n', { A: 'x' }).text).toBe('A=old\nA=x\n');
+  });
+
+  it('writes a value literally, even with $ in it', () => {
+    expect(fillEnv('A=\n', { A: "$&$'" }).text).toBe("A=$&$'\n");
   });
 });
 
@@ -61,6 +74,13 @@ describe('npm run setup', () => {
     expect(runSetup(io())).toBe(0);
     expect(readFileSync(join(root, '.env'), 'utf8')).toBe(first);
     expect(out).toContain('✓ .env already set up (nothing changed)');
+  });
+
+  it('makes an existing .env private (a hand-copied .env.example is usually 0644)', () => {
+    writeFileSync(join(root, '.env'), 'DASHBOARD_TOKEN=\nMCP_TOKEN=\nWORKTREES_ROOT=\n');
+    chmodSync(join(root, '.env'), 0o644);
+    runSetup(io());
+    expect(statSync(join(root, '.env')).mode & 0o777).toBe(0o600);
   });
 
   it('creates the WORKTREES_ROOT you set instead of the default', () => {

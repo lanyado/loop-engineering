@@ -1,14 +1,15 @@
 import { statSync } from 'node:fs';
-import { basename, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { errorMessage } from '@loop-engineering/core';
 
-export const ADD_PROJECT_USAGE = `Usage: npm run add-project -- <path> [--name <name>] [--folder] [--outside-home]
+export const ADD_PROJECT_USAGE = `Usage: npm run add-project -- <path> [--name <name>] [--branch <b>] [--folder] [--outside-home]
 
 Registers a project with the running server (start it first with \`npm start\`).
 
   <path>         a git repository with a GitHub remote named origin, or any folder
   --name <name>  project name (default: the folder's name)
+  --branch <b>   the repo's default branch, which PRs target (default: detected)
   --folder       a plain folder project, even if <path> is a git repository: sessions edit it in
                  place, with no branches or PRs
   --outside-home allow a folder project outside your home folder (refused by default)
@@ -49,26 +50,46 @@ export function projectName(raw: string): string {
  * The project for `path`: a git project when it is in a git repository with an origin remote, else a
  * folder project. Throws with a message for the user when a git repository has no origin.
  */
-export function detectProject(path: string, git: Git, opts: { name?: string; folder?: boolean }): NewProject {
-  const top = git(['rev-parse', '--show-toplevel'], path);
-  if (opts.folder || top === null) {
+/**
+ * origin/HEAD when set (clone sets it; a repo that was `git init`ed and pushed may not have it), else
+ * main or master if either exists, else the branch checked out now.
+ */
+function detectDefaultBranch(top: string, git: Git): string {
+  const head = git(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], top);
+  if (head) return head.replace(/^origin\//, '');
+  for (const branch of ['main', 'master']) {
+    for (const ref of [`refs/remotes/origin/${branch}`, `refs/heads/${branch}`]) {
+      if (git(['rev-parse', '--verify', '--quiet', ref], top) !== null) return branch;
+    }
+  }
+  const current = git(['rev-parse', '--abbrev-ref', 'HEAD'], top);
+  return current && current !== 'HEAD' ? current : 'main';
+}
+
+export function detectProject(
+  path: string,
+  git: Git,
+  opts: { name?: string; folder?: boolean; branch?: string },
+): NewProject {
+  const tree = git(['rev-parse', '--show-toplevel'], path);
+  if (opts.folder || tree === null) {
     return {
       name: projectName(opts.name ?? basename(path)),
       kind: 'folder',
       folderPath: path,
-      ...(top !== null ? { allowGitFolder: true } : {}),
+      ...(tree !== null ? { allowGitFolder: true } : {}),
     };
   }
+  // Sessions get worktrees of the main checkout; a linked worktree's common dir is <main>/.git.
+  const common = git(['rev-parse', '--path-format=absolute', '--git-common-dir'], tree);
+  const top = common?.endsWith('/.git') ? dirname(common) : tree;
   const remote = git(['remote', 'get-url', 'origin'], top);
   if (!remote) {
     throw new Error(
       `${top} has no remote named origin. Add one (git remote add origin <GitHub URL>), or pass --folder to edit it in place.`,
     );
   }
-  // origin/HEAD is set by clone; a repo that was `git init`ed and pushed may not have it.
-  const head = git(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], top);
-  const defaultBranch =
-    head?.replace(/^origin\//, '') || git(['rev-parse', '--abbrev-ref', 'HEAD'], top) || 'main';
+  const defaultBranch = opts.branch ?? detectDefaultBranch(top, git);
   const name = projectName(opts.name ?? basename(top));
   return {
     name,
@@ -92,6 +113,7 @@ export async function runAddProjectCli(argv: string[], io: AddProjectIo): Promis
       args: argv,
       options: {
         name: { type: 'string' },
+        branch: { type: 'string' },
         folder: { type: 'boolean' },
         'outside-home': { type: 'boolean' },
         help: { type: 'boolean', short: 'h' },
@@ -111,7 +133,8 @@ export async function runAddProjectCli(argv: string[], io: AddProjectIo): Promis
     io.err(ADD_PROJECT_USAGE);
     return 2;
   }
-  const path = resolve(positionals[0]!);
+  // npm runs scripts from the repo root; INIT_CWD is where the command was typed.
+  const path = resolve(io.env.INIT_CWD ?? process.cwd(), positionals[0]!);
   try {
     if (!statSync(path).isDirectory()) throw new Error('not a folder');
   } catch {
@@ -129,6 +152,7 @@ export async function runAddProjectCli(argv: string[], io: AddProjectIo): Promis
     project = detectProject(path, io.git, {
       ...(values.name ? { name: values.name } : {}),
       ...(values.folder ? { folder: true } : {}),
+      ...(values.branch ? { branch: values.branch } : {}),
     });
   } catch (error) {
     io.err(errorMessage(error));
@@ -160,14 +184,18 @@ export async function runAddProjectCli(argv: string[], io: AddProjectIo): Promis
   }
 
   const where = project.kind === 'git' ? project.repos[0]!.path : project.folderPath;
+  const remote = project.kind === 'git' ? project.repos[0]!.remote.replace(/\/\/[^/@]*@/, '//') : '';
   io.out(
     project.kind === 'git'
-      ? `✓ Added git project "${project.name}" (${project.repos[0]!.remote}, branch ${project.repos[0]!.defaultBranch}).`
+      ? `✓ Added git project "${project.name}" (${remote}, default branch ${project.repos[0]!.defaultBranch}; --branch changes it).`
       : `✓ Added folder project "${project.name}" (${where}).`,
   );
   io.out(
     `Once: cd ${where} && claude, and accept "Yes, I trust this folder" (sessions can't start until you do).`,
   );
+  if (remote && !/github\.com[:/]/.test(remote)) {
+    io.out('Note: the PR loop works with GitHub remotes only; sessions still run on this repo.');
+  }
   io.out('Then press + Session on the project in the dashboard.');
   return 0;
 }
