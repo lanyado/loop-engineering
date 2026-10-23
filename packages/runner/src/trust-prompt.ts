@@ -95,7 +95,7 @@ export function trustQuestion(
     context:
       `Run \`tmux attach -t ${tmuxTarget}\`, choose "Yes, I trust this folder" if you do, then detach with Ctrl-b d. ` +
       "A git worktree inherits trust from its repo's main checkout: run `claude` once in that checkout " +
-      'and accept the prompt there, and later sessions of the repo will not stop here (README, "Folder trust").',
+      'and accept the prompt there, and later sessions of the repo will not stop here (docs/reference.md, "Folder trust").',
     options: [TRUST_DONE, TRUST_LATER],
     recommendedOption: TRUST_LATER,
   };

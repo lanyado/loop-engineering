@@ -1,0 +1,173 @@
+import { statSync } from 'node:fs';
+import { basename, resolve } from 'node:path';
+import { parseArgs } from 'node:util';
+import { errorMessage } from '@loop-engineering/core';
+
+export const ADD_PROJECT_USAGE = `Usage: npm run add-project -- <path> [--name <name>] [--folder] [--outside-home]
+
+Registers a project with the running server (start it first with \`npm start\`).
+
+  <path>         a git repository with a GitHub remote named origin, or any folder
+  --name <name>  project name (default: the folder's name)
+  --folder       a plain folder project, even if <path> is a git repository: sessions edit it in
+                 place, with no branches or PRs
+  --outside-home allow a folder project outside your home folder (refused by default)
+  -h, --help     this text`;
+
+/** Runs git in `cwd` and returns its trimmed output, or null when it fails. */
+export type Git = (args: string[], cwd: string) => string | null;
+
+export interface AddProjectIo {
+  env: Record<string, string | undefined>;
+  git: Git;
+  fetch: typeof fetch;
+  out: (line: string) => void;
+  err: (line: string) => void;
+}
+
+/** What the server's POST /api/projects takes. */
+export type NewProject =
+  | {
+      name: string;
+      kind: 'git';
+      repos: { name: string; path: string; remote: string; defaultBranch: string }[];
+    }
+  | {
+      name: string;
+      kind: 'folder';
+      folderPath: string;
+      allowGitFolder?: boolean;
+      allowOutsideHome?: boolean;
+    };
+
+/** Folder names may hold any character; project and repo names only these. */
+export function projectName(raw: string): string {
+  return raw.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'project';
+}
+
+/**
+ * The project for `path`: a git project when it is in a git repository with an origin remote, else a
+ * folder project. Throws with a message for the user when a git repository has no origin.
+ */
+export function detectProject(path: string, git: Git, opts: { name?: string; folder?: boolean }): NewProject {
+  const top = git(['rev-parse', '--show-toplevel'], path);
+  if (opts.folder || top === null) {
+    return {
+      name: projectName(opts.name ?? basename(path)),
+      kind: 'folder',
+      folderPath: path,
+      ...(top !== null ? { allowGitFolder: true } : {}),
+    };
+  }
+  const remote = git(['remote', 'get-url', 'origin'], top);
+  if (!remote) {
+    throw new Error(
+      `${top} has no remote named origin. Add one (git remote add origin <GitHub URL>), or pass --folder to edit it in place.`,
+    );
+  }
+  // origin/HEAD is set by clone; a repo that was `git init`ed and pushed may not have it.
+  const head = git(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], top);
+  const defaultBranch =
+    head?.replace(/^origin\//, '') || git(['rev-parse', '--abbrev-ref', 'HEAD'], top) || 'main';
+  const name = projectName(opts.name ?? basename(top));
+  return {
+    name,
+    kind: 'git',
+    repos: [{ name: projectName(basename(top)), path: top, remote, defaultBranch }],
+  };
+}
+
+export function serverUrl(env: Record<string, string | undefined>): string {
+  return (env.SERVER_URL?.trim() || `http://127.0.0.1:${env.SERVER_PORT?.trim() || '8787'}`).replace(
+    /\/+$/,
+    '',
+  );
+}
+
+/** Runs the CLI; returns the exit code (0 added, 1 failed, 2 usage). */
+export async function runAddProjectCli(argv: string[], io: AddProjectIo): Promise<number> {
+  let parsed;
+  try {
+    parsed = parseArgs({
+      args: argv,
+      options: {
+        name: { type: 'string' },
+        folder: { type: 'boolean' },
+        'outside-home': { type: 'boolean' },
+        help: { type: 'boolean', short: 'h' },
+      },
+      allowPositionals: true,
+    });
+  } catch (error) {
+    io.err(`${errorMessage(error)}\n\n${ADD_PROJECT_USAGE}`);
+    return 2;
+  }
+  const { values, positionals } = parsed;
+  if (values.help) {
+    io.out(ADD_PROJECT_USAGE);
+    return 0;
+  }
+  if (positionals.length !== 1) {
+    io.err(ADD_PROJECT_USAGE);
+    return 2;
+  }
+  const path = resolve(positionals[0]!);
+  try {
+    if (!statSync(path).isDirectory()) throw new Error('not a folder');
+  } catch {
+    io.err(`${path} is not a folder.`);
+    return 1;
+  }
+  const token = io.env.DASHBOARD_TOKEN?.trim();
+  if (!token) {
+    io.err('DASHBOARD_TOKEN is not set in .env. Run `npm run setup` first.');
+    return 1;
+  }
+
+  let project;
+  try {
+    project = detectProject(path, io.git, {
+      ...(values.name ? { name: values.name } : {}),
+      ...(values.folder ? { folder: true } : {}),
+    });
+  } catch (error) {
+    io.err(errorMessage(error));
+    return 1;
+  }
+
+  if (values['outside-home'] && project.kind === 'folder') project.allowOutsideHome = true;
+
+  const url = serverUrl(io.env);
+  let response;
+  try {
+    response = await io.fetch(`${url}/api/projects`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(project),
+    });
+  } catch {
+    io.err(`Cannot reach the server at ${url}. Start it with \`npm start\`, then run this again.`);
+    return 1;
+  }
+  const body = (await response.json().catch(() => ({}))) as { error?: unknown };
+  if (!response.ok) {
+    // The API names its own fields; point at this CLI's flags instead.
+    const why = (typeof body.error === 'string' ? body.error : `HTTP ${response.status}`)
+      .replace('pass allowOutsideHome: true', 'pass --outside-home')
+      .replace('pass allowGitFolder: true', 'pass --folder');
+    io.err(`The server refused the project: ${why}`);
+    return 1;
+  }
+
+  const where = project.kind === 'git' ? project.repos[0]!.path : project.folderPath;
+  io.out(
+    project.kind === 'git'
+      ? `✓ Added git project "${project.name}" (${project.repos[0]!.remote}, branch ${project.repos[0]!.defaultBranch}).`
+      : `✓ Added folder project "${project.name}" (${where}).`,
+  );
+  io.out(
+    `Once: cd ${where} && claude, and accept "Yes, I trust this folder" (sessions can't start until you do).`,
+  );
+  io.out('Then press + Session on the project in the dashboard.');
+  return 0;
+}
