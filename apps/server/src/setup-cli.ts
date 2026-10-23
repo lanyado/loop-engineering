@@ -108,7 +108,11 @@ export function runSetup(io: SetupIo): number {
   });
   if (created || filled.length > 0) writeFileSync(envPath, text);
   // writeFileSync's mode only applies to a new file; a .env copied by hand is often 0644.
-  chmodSync(envPath, 0o600);
+  try {
+    chmodSync(envPath, 0o600);
+  } catch {
+    io.out(`! could not make .env private (owned by another user?): run chmod 600 ${envPath}`);
+  }
   io.out(
     created
       ? `✓ created .env (${filled.join(', ')} filled in)`

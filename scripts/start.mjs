@@ -48,7 +48,8 @@ const children = parts.map(({ name, cwd, args }) => {
   return child;
 });
 // Ctrl-C also reaches the children directly (same process group). Passing it on as SIGTERM is safe
-// (the server's shutdown runs once) and covers a SIGINT sent to this process alone.
+// (the server's shutdown runs once) and covers a SIGINT sent to this process alone. SIGHUP becomes
+// SIGTERM too: the server shuts down cleanly only on SIGINT/SIGTERM.
 for (const signal of /** @type {const} */ (['SIGINT', 'SIGTERM', 'SIGHUP'])) {
-  process.on(signal, () => stopAll(signal === 'SIGINT' ? 'SIGTERM' : signal));
+  process.on(signal, () => stopAll('SIGTERM'));
 }

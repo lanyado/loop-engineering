@@ -2,7 +2,14 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { detectProject, projectName, runAddProjectCli, serverUrl, type Git } from './add-project-cli.js';
+import {
+  detectProject,
+  projectName,
+  runAddProjectCli,
+  serverUrl,
+  withoutCredentials,
+  type Git,
+} from './add-project-cli.js';
 
 /** A fake git: answers by the command's first words, null for anything else. */
 const fakeGit =
@@ -52,6 +59,17 @@ describe('detectProject', () => {
     // Detached HEAD names no branch.
     expect(branchOf({ 'rev-parse --abbrev-ref HEAD': 'HEAD' })).toBe('main');
     expect(branchOf(onFeature, { branch: 'release' })).toBe('release');
+  });
+
+  it('leaves credentials in the origin URL out of the project', () => {
+    const git = fakeGit({
+      'rev-parse --show-toplevel': '/r',
+      'remote get-url origin': 'https://me:ghp_secret@github.com/me/r.git',
+    });
+    const project = detectProject('/r', git, {});
+    expect(project.kind === 'git' && project.repos[0]?.remote).toBe('https://github.com/me/r.git');
+    expect(withoutCredentials('git@github.com:me/r.git')).toBe('git@github.com:me/r.git');
+    expect(withoutCredentials('ssh://git@github.com/me/r.git')).toBe('ssh://git@github.com/me/r.git');
   });
 
   it('registers the main checkout when given a linked worktree', () => {

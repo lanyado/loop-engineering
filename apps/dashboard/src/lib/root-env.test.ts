@@ -22,9 +22,19 @@ describe('dashboardEnvFrom', () => {
     expect(dashboardEnvFrom(file, { SERVER_URL: '', DASHBOARD_TOKEN: 'from-shell' })).toEqual({});
   });
 
-  it('leaves what apps/dashboard/.env.local sets to Next, so password mode stays on', () => {
+  it('lets apps/dashboard/.env.local win over the root .env, so password mode stays on', () => {
     const local = 'DASHBOARD_AUTH=password\nSERVER_URL=http://127.0.0.1:9999\n';
     const withAuth = `${file}\nDASHBOARD_AUTH=`;
-    expect(dashboardEnvFrom(withAuth, {}, local)).toEqual({ DASHBOARD_TOKEN: 'abc123abc123abc123' });
+    expect(dashboardEnvFrom(withAuth, {}, local)).toEqual({
+      DASHBOARD_AUTH: 'password',
+      SERVER_URL: 'http://127.0.0.1:9999',
+      DASHBOARD_TOKEN: 'abc123abc123abc123',
+    });
+    // SERVER_URL= in .env.local means demo mode, so the root value stays out.
+    expect(dashboardEnvFrom(file, {}, 'SERVER_URL=\n')).toMatchObject({ SERVER_URL: '' });
+    // The launcher binds the port itself, so a .env.local port must reach it.
+    expect(dashboardEnvFrom('DASHBOARD_PORT=3757\n', {}, 'DASHBOARD_PORT=4000\n')).toEqual({
+      DASHBOARD_PORT: '4000',
+    });
   });
 });

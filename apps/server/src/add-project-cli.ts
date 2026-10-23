@@ -83,7 +83,7 @@ export function detectProject(
   // Sessions get worktrees of the main checkout; a linked worktree's common dir is <main>/.git.
   const common = git(['rev-parse', '--path-format=absolute', '--git-common-dir'], tree);
   const top = common?.endsWith('/.git') ? dirname(common) : tree;
-  const remote = git(['remote', 'get-url', 'origin'], top);
+  const remote = withoutCredentials(git(['remote', 'get-url', 'origin'], top));
   if (!remote) {
     throw new Error(
       `${top} has no remote named origin. Add one (git remote add origin <GitHub URL>), or pass --folder to edit it in place.`,
@@ -96,6 +96,15 @@ export function detectProject(
     kind: 'git',
     repos: [{ name: projectName(basename(top)), path: top, remote, defaultBranch }],
   };
+}
+
+/**
+ * A token in an https remote (https://user:token@github.com/...) is not stored: the API returns
+ * projects whole. The loop pushes to the stored URL, so it then needs a credential helper
+ * (`gh auth setup-git`). ssh URLs (git@github.com:...) are kept as they are.
+ */
+export function withoutCredentials(remote: string | null): string | null {
+  return remote?.replace(/^(https?:\/\/)[^/@]*@/, '$1') ?? null;
 }
 
 export function serverUrl(env: Record<string, string | undefined>): string {
@@ -184,7 +193,7 @@ export async function runAddProjectCli(argv: string[], io: AddProjectIo): Promis
   }
 
   const where = project.kind === 'git' ? project.repos[0]!.path : project.folderPath;
-  const remote = project.kind === 'git' ? project.repos[0]!.remote.replace(/\/\/[^/@]*@/, '//') : '';
+  const remote = project.kind === 'git' ? project.repos[0]!.remote : '';
   io.out(
     project.kind === 'git'
       ? `✓ Added git project "${project.name}" (${remote}, default branch ${project.repos[0]!.defaultBranch}; --branch changes it).`
@@ -193,6 +202,12 @@ export async function runAddProjectCli(argv: string[], io: AddProjectIo): Promis
   io.out(
     `Once: cd ${where} && claude, and accept "Yes, I trust this folder" (sessions can't start until you do).`,
   );
+  const raw = project.kind === 'git' ? io.git(['remote', 'get-url', 'origin'], where) : null;
+  if (raw && raw !== remote) {
+    io.out(
+      'Note: the token in the origin URL was left out; run `gh auth setup-git` so the PR loop can push.',
+    );
+  }
   if (remote && !/github\.com[:/]/.test(remote)) {
     io.out('Note: the PR loop works with GitHub remotes only; sessions still run on this repo.');
   }
