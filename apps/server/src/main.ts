@@ -12,8 +12,9 @@ import { telegramModule } from './modules/telegram.js';
 import { runnerFromEnv } from './runner.js';
 import { createServer } from './server.js';
 
-// Entry point: `npm start` at the repo root (after `npm run build`). Reads REPO_ROOT/.env whatever
-// the working directory, and resolves a relative LOOP_DB_PATH against the repo root too.
+// Entry point: `npm start` at the repo root runs it with the dashboard (`npm run start:server` alone),
+// after `npm run build`. Reads REPO_ROOT/.env whatever the working directory, and resolves a relative
+// LOOP_DB_PATH against the repo root too.
 loadRootEnv();
 
 let config;
@@ -66,6 +67,8 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   });
 }
 
+if (!runner)
+  console.warn('[runner] sessions are off: set WORKTREES_ROOT in .env (`npm run setup` does this)');
 if (!loop) console.log('[loop] PR loop off (set LOOP_ENGINE=on to run it)');
 let bound;
 try {
