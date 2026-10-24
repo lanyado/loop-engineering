@@ -10,6 +10,7 @@ import {
 import { bodyLimit } from 'hono/body-limit';
 import * as z from 'zod';
 import type { ServerModule } from '../context.js';
+import { idParam } from '../ids.js';
 
 /**
  * The PR loop's pipeline and stage files (packages/loop/stages, overridden by STAGES_DIR), for the
@@ -73,9 +74,9 @@ export function pipelineModule({
         const parsed = skipBody.safeParse(await c.req.json().catch(() => null));
         if (!parsed.success) return c.json({ error: z.prettifyError(parsed.error) }, 400);
         // An unknown PR is a NotFoundError: 404 (app.ts).
-        const id = Number(c.req.param('id'));
-        if (!Number.isInteger(id)) return c.json({ error: 'the PR id must be a number' }, 400);
-        const pullRequest = skipCheck(ctx.store, stages, id, parsed.data.check, parsed.data.skip);
+        const id = idParam.safeParse(c.req.param('id'));
+        if (!id.success) return c.json({ error: 'the PR id must be a positive whole number' }, 400);
+        const pullRequest = skipCheck(ctx.store, stages, id.data, parsed.data.check, parsed.data.skip);
         poke();
         return c.json({ pullRequest });
       });

@@ -21,6 +21,7 @@ import { Hono, type Context } from 'hono';
 import * as z from 'zod';
 import type { ServerContext, ServerModule } from '../context.js';
 import { REPO_ROOT } from '../env.js';
+import { idParam } from '../ids.js';
 
 /**
  * The dashboard's read/write API, mounted under the authenticated /api (DASHBOARD_TOKEN):
@@ -106,7 +107,7 @@ function defaultProtectedRoots(ctx: ServerContext): string[] {
 
 const LIMITS = { name: 100, path: 1000, remote: 500, branch: 200, model: 200, request: 4000, allowlist: 200 };
 
-const id = z.coerce.number().int().positive();
+const id = idParam;
 const text = (max: number) => z.string().trim().min(1).max(max);
 const absolutePath = text(LIMITS.path).refine((p) => p.startsWith('/'), 'must be an absolute path');
 // Env files are copied into a worktree: the target must stay inside it.

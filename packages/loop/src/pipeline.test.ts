@@ -488,8 +488,56 @@ describe('the human skips a check for one PR', () => {
     await h.builderWithPr();
     for (let i = 0; i < 3; i++) await h.engine.tick();
     expect(h.pr()).toMatchObject({ outcome: 'merged' });
-    expect(loopState(h.pr())).toMatchObject({ attempts: 0 });
-    expect(loopState(h.pr()).lastError).toBeUndefined();
+    expect(h.logs.some((l) => l.includes('sent to the human'))).toBe(false);
+  });
+
+  it('a check skipped while every model is at its limit moves on instead of waiting', async () => {
+    const lib = library({ checks: ['tests', 'review'] });
+    const h = harness(lib);
+    h.launcher
+      .on('tests', () => {
+        skipCheck(h.store, lib, h.pr().id, 'tests', true);
+        return { text: 'API overloaded', costUsd: 0.1, tokensIn: 1, tokensOut: 1, isError: true };
+      })
+      .on('review', clean());
+    await h.builderWithPr();
+    await h.engine.tick();
+    expect(h.pr()).toMatchObject({ outcome: 'merged' }); // no limit wait (retryAfter) in between
+  });
+
+  it("a model-limit wait holds when a pipeline edit moves the PR to another check (the limit is the provider's)", async () => {
+    const lib = library({ checks: ['tests', 'review'] });
+    const h = harness(lib);
+    const limited = { text: 'API overloaded', costUsd: 0, tokensIn: 0, tokensOut: 0, isError: true };
+    h.launcher.on('tests', limited).on('review', clean());
+    await h.builderWithPr();
+    await h.engine.tick();
+    expect(loopState(h.pr()).retryAfter).toBeDefined();
+    lib.set({ checks: ['review'] });
+    await h.engine.tick();
+    expect(h.launcher.kinds()).toEqual(['tests']); // review waits out the same limit
+    h.clock.advance(6 * 60_000);
+    await h.engine.tick();
+    expect(h.launcher.kinds()).toEqual(['tests', 'review']);
+    expect(h.pr().outcome).toBe('merged');
+  });
+
+  it('a PR moved to another check by a pipeline edit starts it with no failed attempts', async () => {
+    const lib = library({ checks: ['tests', 'review'] });
+    const h = harness(lib);
+    let attemptsAtReview: number | undefined = -1;
+    h.launcher
+      .on('tests', verdictResult({})) // no decision: a failed attempt, the PR stays at tests
+      .on('review', () => {
+        attemptsAtReview = loopState(h.pr()).attempts;
+        return clean();
+      });
+    await h.builderWithPr();
+    await h.engine.tick();
+    expect(loopState(h.pr()).attempts).toBe(1);
+    lib.set({ checks: ['review'] });
+    await h.engine.tick();
+    expect(attemptsAtReview).toBe(0);
   });
 
   it('the merge question says when the human skipped every check', async () => {

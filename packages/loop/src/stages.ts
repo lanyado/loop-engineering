@@ -111,6 +111,9 @@ export function isBuiltinCheck(id: string): id is BuiltinCheck {
 export const checkJobKind = (check: string): PrJobKind => (isBuiltinCheck(check) ? check : `check-${check}`);
 /** The custom stage a "check-<id>" job runs. */
 export const checkOfJobKind = (kind: CheckJobKind): string => kind.slice('check-'.length);
+/** The check a job runs; the conflict fixer runs none. */
+export const jobCheck = (kind: PrJobKind): string | undefined =>
+  kind === 'conflict' ? undefined : kind.startsWith('check-') ? checkOfJobKind(kind as CheckJobKind) : kind;
 
 const oneOf = <T extends string>(values: readonly T[], value: string, what: string): T => {
   if ((values as readonly string[]).includes(value)) return value as T;

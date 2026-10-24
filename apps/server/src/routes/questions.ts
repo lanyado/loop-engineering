@@ -2,6 +2,7 @@ import { QUESTION_LIMITS } from '@loop-engineering/ask-human';
 import { QUESTION_STATUSES } from '@loop-engineering/core';
 import { Hono } from 'hono';
 import * as z from 'zod';
+import { idParam } from '../ids.js';
 import type { ServerContext } from '../context.js';
 
 const statusList = z
@@ -10,9 +11,8 @@ const statusList = z
   .pipe(z.array(z.enum(QUESTION_STATUSES)));
 const listQuery = z.object({
   status: statusList.optional(),
-  sessionId: z.coerce.number().int().positive().optional(),
+  sessionId: idParam.optional(),
 });
-const idParam = z.coerce.number().int().positive();
 const answerBody = z.object({ answer: z.string().trim().min(1).max(QUESTION_LIMITS.answer) });
 
 /**
