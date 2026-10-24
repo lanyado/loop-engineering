@@ -1,4 +1,5 @@
 import { STAGE_ACCESS, STAGE_ICONS, STAGE_RUNS, type EditableStageLibrary } from '@loop-engineering/loop';
+import { bodyLimit } from 'hono/body-limit';
 import * as z from 'zod';
 import type { ServerModule } from '../context.js';
 
@@ -38,7 +39,8 @@ export function pipelineModule({ stages }: { stages: EditableStageLibrary }): Se
     name: 'pipeline',
     api(api) {
       api.get('/pipeline', (c) => c.json(view()));
-      api.put('/pipeline', async (c) => {
+      // 30 stages of 4,000 characters, at up to 3 bytes each in UTF-8.
+      api.put('/pipeline', bodyLimit({ maxSize: 400 * 1024 }), async (c) => {
         const parsed = pipelineUpdate.safeParse(await c.req.json().catch(() => null));
         if (!parsed.success) return c.json({ error: z.prettifyError(parsed.error) }, 400);
         stages.update(parsed.data);

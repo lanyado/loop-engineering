@@ -30,6 +30,8 @@ export interface StageNode {
   icon: string;
   /** A custom stage (a stage file), not one of the built-in ones. */
   custom: boolean;
+  /** A check whose stage file is missing or broken: the loop holds PRs here until it is fixed. */
+  problem?: string;
   state: NodeState;
   questions: Question[];
 }
@@ -179,11 +181,14 @@ function lane(
   const states = pr ? stageStates(nodeOf(pr), pr.outcome, order) : order.map((): NodeState => 'todo');
   const node = (stage: string, state: NodeState): StageNode => {
     const file = view.stages.find((s) => s.id === stage);
+    const check = !(stage in FIXED_LABELS);
+    const problem = !check ? undefined : !file ? 'no stage file' : file.error ? 'file broken' : undefined;
     return {
       stage,
       label: file?.label ?? FIXED_LABELS[stage] ?? stage,
       icon: file?.icon ?? stage,
       custom: file !== undefined && !file.builtin,
+      ...(problem ? { problem } : {}),
       state,
       questions: [],
     };

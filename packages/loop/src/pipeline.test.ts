@@ -318,6 +318,25 @@ describe('fail closed: a broken stage file or pipeline.json never lets a PR skip
     lib.pipeline = () => real;
     await h.engine.tick();
     expect(h.pr().outcome).toBe('merged');
+    expect(loopState(h.pr()).lastError).toBeUndefined(); // the hold's message is gone once it is fixed
+  });
+
+  it('neither watches nor reverts a deploy while pipeline.json cannot be read', async () => {
+    const lib = library({});
+    const h = harness(lib, { vercelProject: 'shop' });
+    h.launcher.on('tests', testsPass()).on('review', clean());
+    await h.builderWithPr();
+    await h.engine.tick();
+    expect(h.pr()).toMatchObject({ stage: 'deploying', outcome: 'merged' });
+    const calls = h.deployments.calls.length;
+    const real = lib.pipeline();
+    lib.pipeline = () => ({ ...real, error: 'pipeline.json: not valid JSON' });
+    await h.engine.tick();
+    expect(h.deployments.calls).toHaveLength(calls);
+    expect(h.pr().stage).toBe('deploying');
+    lib.pipeline = () => real;
+    await h.engine.tick();
+    expect(h.deployments.calls.length).toBeGreaterThan(calls);
   });
 });
 

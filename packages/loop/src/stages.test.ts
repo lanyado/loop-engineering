@@ -173,7 +173,7 @@ describe('FileStageLibrary', () => {
     lib.update({ pipeline: { checks: ['tests'], deploy: false, guardian: false } });
     write('pipeline.json', text);
     expect(lib.pipeline().error).toContain(why);
-    expect(logs.some((l) => l.includes('merges nothing'))).toBe(true);
+    expect(logs.some((l) => l.includes('the PR loop waits until it is fixed'))).toBe(true);
   });
 
   it('a title longer than a label needs its own label', () => {
@@ -194,7 +194,7 @@ describe('FileStageLibrary', () => {
     expect(() =>
       lib.update({ pipeline: { checks: [], deploy: true, guardian: true }, stages: { merge: fields } }),
     ).toThrow(/pipeline node's name/);
-    for (const id of ['escalated', 'reverted', 'end', 'deploy'])
+    for (const id of ['escalated', 'reverted', 'merged', 'end', 'deploy'])
       expect(() =>
         lib.update({ pipeline: { checks: [], deploy: true, guardian: true }, stages: { [id]: fields } }),
       ).toThrow(/pipeline node's name/);

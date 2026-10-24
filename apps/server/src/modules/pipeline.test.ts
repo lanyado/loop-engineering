@@ -98,6 +98,17 @@ describe('GET and PUT /api/pipeline', () => {
     expect(existsSync(join(dir, 'stages'))).toBe(false);
   });
 
+  it('takes a full change of long non-ASCII prompts (bytes, not characters, count against the body limit)', async () => {
+    const stages = Object.fromEntries(
+      Array.from({ length: 12 }, (_, i) => [`check-${i}`, { ...security, prompt: 'בדוק'.repeat(1000) }]),
+    );
+    const res = await call('PUT', {
+      pipeline: { checks: Object.keys(stages), deploy: true, guardian: true },
+      stages,
+    });
+    expect(res.status).toBe(200);
+  });
+
   it('needs the dashboard token', async () => {
     expect((await call('GET', undefined, 'wrong')).status).toBe(401);
   });

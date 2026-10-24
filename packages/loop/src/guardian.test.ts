@@ -99,7 +99,10 @@ describe('ProductionGuardian', () => {
     rmSync(evidence, { recursive: true, force: true });
   });
 
-  it('runs nothing on schedule when the pipeline has no Guardian', async () => {
+  it.each([
+    ['has no Guardian', { guardian: false }],
+    ['cannot be read', { error: 'pipeline.json: not valid JSON' }],
+  ])('runs nothing on schedule when the pipeline %s', async (_, change) => {
     guardian = new ProductionGuardian(
       {
         store: h.store,
@@ -108,7 +111,10 @@ describe('ProductionGuardian', () => {
         workspace: h.workspace,
         questions: h.questions,
         timers: h.timers,
-        stages: builtinStageLibrary({ guardian: false }),
+        stages: {
+          ...builtinStageLibrary(),
+          pipeline: () => ({ ...builtinStageLibrary().pipeline(), ...change }),
+        },
         log: (m) => h.logs.push(m),
       },
       { evidenceDir: evidence },

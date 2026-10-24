@@ -19,7 +19,7 @@ Look for secrets committed in the diff and for unsafe handling of user input.
 | Setting  | Values                                                                                         |
 | -------- | ---------------------------------------------------------------------------------------------- |
 | `title`  | Its full name, used in PR comments                                                             |
-| `label`  | The pipeline node's name, 10 characters at most (default: the title)                           |
+| `label`  | The pipeline node's name, 10 characters at most; needed when the title is longer               |
 | `icon`   | `tests`, `review`, `qa`, `shield`, `lock`, `bug`, `book`, `gauge`, `globe`, `sparkle`, `check` |
 | `access` | `read` (files only), `shell` (can run commands) or `browser` (a shell and a headless browser)  |
 | `runs`   | `always`, or `ui-changes` (only when the diff touches UI files)                                |
@@ -30,7 +30,7 @@ can edit files or push. The file name is the id: lowercase letters, digits and d
 built-in `tests`, `review` and `qa`, `access` and `runs` are fixed.
 
 A file that doesn't parse is never skipped: PRs wait at that check (the server logs why) until it's
-fixed. Likewise, while `pipeline.json` can't be read, nothing is merged.
+fixed. While `pipeline.json` can't be read, the loop does nothing at all.
 
 `pipeline.json` sets the order of the checks, and whether the loop watches deploys and runs the
 Production Guardian after a merge:

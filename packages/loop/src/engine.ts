@@ -590,6 +590,11 @@ export class LoopEngine {
       return false;
     }
     const c: Ctx = { pr, s, project, repo, ref: repoRef(repo) };
+    // Fail closed: while pipeline.json cannot be read, the loop does nothing (no merge, deploy watch,
+    // revert or cleanup), since it cannot know what the user wants.
+    const broken = this.pipeline().error;
+    if (broken) return this.hold(c, broken);
+    if (s.held) this.save(c, {}, { held: undefined, lastError: undefined });
     if (s.revertOf !== undefined && pr.outcome === null) return false; // the reverted PR drives its revert
     if (pr.outcome === null) return this.advanceOpen(c);
     if (pr.outcome === 'escalated') return this.watchTakenOver(c);
@@ -610,8 +615,6 @@ export class LoopEngine {
     }
     if (c.s.branch !== gh.headRefName) return this.save(c, {}, { branch: gh.headRefName });
     // Fail closed: an unreadable pipeline.json merges nothing.
-    const broken = this.pipeline().error;
-    if (broken && c.pr.stage !== 'escalated') return this.hold(c, broken);
     if (atCheck(c.pr.stage) && !c.s.feedback) {
       // Commits after a check passed: every check runs again on the new head.
       if (newCommitsSince(c.s, gh.headRefOid))
@@ -826,7 +829,7 @@ export class LoopEngine {
   /** The loop cannot move this PR on until `why` is fixed: say so once, and show it on the PR. */
   private hold(c: Ctx, why: string): boolean {
     this.warnOnce(`hold-${c.pr.id}-${why}`, `PR ${c.pr.repo}#${c.pr.number} waits: ${why}`);
-    if (c.s.lastError !== why) this.save(c, {}, { lastError: why });
+    if (c.s.lastError !== why) this.save(c, {}, { lastError: why, held: true });
     return false;
   }
 
@@ -1649,7 +1652,13 @@ export class LoopEngine {
     context: PrContext,
   ): Pick<AgentJob, 'prompt' | 'systemPrompt' | 'rights'> {
     const limit = this.config.diffLimit;
-    const prompt = (id: string) => this.stages.stage(id)!.prompt;
+    // Read again here, after the awaits since advanceOpen checked it: a file broken meanwhile fails the job.
+    const usable = (id: string) => {
+      const stage = this.stages.stage(id);
+      if (!stage || stage.error) throw new Error(`stage ${id} changed before its job started`);
+      return stage;
+    };
+    const prompt = (id: string) => usable(id).prompt;
     switch (kind) {
       case 'review':
         return {
@@ -1684,7 +1693,7 @@ export class LoopEngine {
           rights: CONFLICT_RIGHTS,
         };
       default: {
-        const stage = this.stages.stage(checkOfJobKind(kind))!;
+        const stage = usable(checkOfJobKind(kind));
         return {
           prompt: checkPrompt({ ...context, stageTitle: stage.title }, limit, stage.prompt),
           systemPrompt: checkSystem(stage.title, stage.access),

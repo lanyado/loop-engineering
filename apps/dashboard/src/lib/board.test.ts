@@ -283,7 +283,10 @@ describe('the pipeline (stage files) shapes every lane', () => {
     builtin: false,
     overridden: false,
   };
-  const view = (pipeline: Partial<PipelineView['pipeline']>, extra = [security]): PipelineView => ({
+  const view = (
+    pipeline: Partial<PipelineView['pipeline']>,
+    extra: PipelineView['stages'] = [security],
+  ): PipelineView => ({
     pipeline: { ...PIPELINE.pipeline, ...pipeline },
     stages: [...PIPELINE.stages, ...extra],
   });
@@ -334,6 +337,13 @@ describe('the pipeline (stage files) shapes every lane', () => {
     const l = lane(view({ checks: ['tests', 'security'] }, []), [
       pr(1, 1, 'check', { loopState: { check: 'security' } }),
     ]);
-    expect(l.nodes[1]).toMatchObject({ stage: 'security', label: 'security', state: 'current' });
+    expect(l.nodes[1]).toMatchObject({
+      stage: 'security',
+      label: 'security',
+      state: 'current',
+      problem: 'no stage file',
+    });
+    const broken = lane(view({ checks: ['tests', 'security'] }, [{ ...security, error: 'bad' }]), []);
+    expect(broken.nodes[1]).toMatchObject({ label: 'Security', problem: 'file broken' });
   });
 });

@@ -296,7 +296,7 @@ const edgeInto = (state: NodeState): NodeState =>
 
 /** What a lane node shows in its detail: who it waits on, else the plain state word. */
 const nodeDetail = (node: StageNode): string =>
-  node.questions.length > 0 ? 'waiting on you' : STATE_WORDS[node.state];
+  node.questions.length > 0 ? 'waiting on you' : (node.problem ?? STATE_WORDS[node.state]);
 
 /** The deploy node also carries where the lane ended: shipped, merged, or how it stopped. */
 function deployDetail(node: StageNode, lane: Lane): string {

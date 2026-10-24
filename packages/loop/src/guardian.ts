@@ -224,8 +224,10 @@ export class ProductionGuardian {
     const now = store.clock.now().getTime();
     const age = (iso: string) => now - Date.parse(iso);
     const found: ReturnType<ProductionGuardian['due']> = [];
-    // The pipeline without the Guardian: no scheduled runs (an explicit runNow still runs).
-    if (this.deps.stages && !this.deps.stages.pipeline().guardian) return found;
+    // The pipeline without the Guardian, or a pipeline.json that cannot be read: no scheduled runs
+    // (an explicit runNow still runs).
+    const pipeline = this.deps.stages?.pipeline();
+    if (pipeline && (!pipeline.guardian || pipeline.error)) return found;
     for (const project of store.projects.list()) {
       if (project.kind !== 'git') continue;
       for (const repo of project.repos) {

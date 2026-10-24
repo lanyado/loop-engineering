@@ -1,7 +1,7 @@
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PR_STAGES, ValidationError } from '@loop-engineering/core';
+import { PR_OUTCOMES, PR_STAGES, ValidationError } from '@loop-engineering/core';
 import type { CheckJobKind, PrJobKind } from './ports.js';
 
 /*
@@ -36,14 +36,15 @@ export const STAGE_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
 /** The PR's stages and the pipeline's other nodes and jobs: no stage file may take one of their names. */
 const RESERVED_IDS = new Set<string>([
   ...PR_STAGES.filter((s) => !isBuiltinCheck(s)),
-  ...['session', 'builder', 'approval', 'deploy', 'guardian', 'end', 'conflict', 'ci', 'pipeline', 'closed'],
+  ...PR_OUTCOMES,
+  ...['session', 'builder', 'approval', 'deploy', 'guardian', 'end', 'conflict', 'ci', 'pipeline'],
 ]);
 export const isStageId = (id: string) => STAGE_ID.test(id) && !RESERVED_IDS.has(id);
 const badId = (id: string) =>
   new ValidationError(
     `stage id "${id}": use a-z, 0-9 and dashes (32 at most), and not a pipeline node's name`,
   );
-/** Sizes a stage may have. A whole pipeline of full prompts stays under the API's 64 KB body limit. */
+/** Sizes a stage may have. */
 export const STAGE_LIMITS = { title: 60, label: 10, prompt: 4_000 } as const;
 const MAX_FILE = STAGE_LIMITS.prompt + 2_000;
 const MAX_CHECKS = 12;
@@ -74,7 +75,7 @@ export interface Pipeline {
   deploy: boolean;
   /** Run the Production Guardian (repos with a production URL). */
   guardian: boolean;
-  /** pipeline.json cannot be read: the loop merges nothing until it is fixed. */
+  /** pipeline.json cannot be read: the loop does nothing until it is fixed (the other fields are the built-in ones). */
   error?: string;
 }
 
@@ -260,7 +261,7 @@ const writeAtomic = (path: string, text: string) => {
  * The built-ins plus a folder of the user's stage files. Read again whenever a file in the folder
  * changed (by name, size and mtime), so the loop sees hand edits on its next step. It fails closed: a
  * stage file that does not parse is kept with its error (the loop holds PRs at that check), and a
- * pipeline.json that cannot be read is reported on the pipeline (the loop merges nothing), each with
+ * pipeline.json that cannot be read is reported on the pipeline (the loop does nothing), each with
  * one warning, never a silent fallback to the built-ins.
  */
 export class FileStageLibrary implements EditableStageLibrary {
@@ -330,7 +331,7 @@ export class FileStageLibrary implements EditableStageLibrary {
         stages.set(id, { id, builtin, overridden: builtin, ...fields });
       } catch (err) {
         const error = (err as Error).message;
-        this.warnOnce(`${signature}:${f.name}`, `${f.name} is broken, PRs wait at that check: ${error}`);
+        this.warnOnce(`${f.name}:${f.size}:${f.mtimeMs}`, `${f.name} is broken: ${error}`);
         stages.set(id, { ...brokenStage(id), builtin, overridden: builtin, error });
       }
     }
@@ -340,7 +341,11 @@ export class FileStageLibrary implements EditableStageLibrary {
         pipeline = readPipeline(readFileSync(join(this.dir, 'pipeline.json'), 'utf8'));
       } catch (err) {
         const error = `pipeline.json: ${(err as Error).message}`;
-        this.warnOnce(`${signature}:pipeline`, `${error}; the loop merges nothing until it is fixed`);
+        const file = files.find((f) => f.name === 'pipeline.json')!;
+        this.warnOnce(
+          `pipeline:${file.size}:${file.mtimeMs}`,
+          `${error}; the PR loop waits until it is fixed`,
+        );
         pipeline = { ...base.pipeline, error };
       }
     }
