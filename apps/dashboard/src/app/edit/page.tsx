@@ -1,5 +1,5 @@
 import { Editor } from '../../components/editor';
-import { ServerUnavailable } from '../../components/server-unavailable';
+import { backendFailure, ServerUnavailable } from '../../components/server-unavailable';
 import { BackendError } from '../../lib/backend';
 import { demoData } from '../../lib/fixtures';
 import { parseLayout } from '../../lib/layout';
@@ -21,14 +21,11 @@ export default async function EditPage() {
     backend.settings().catch(() => null),
     backend.pipeline(),
     backend.usage().catch(() => null),
-  ]).catch((error: unknown) => {
-    if (error instanceof BackendError) return error;
-    throw error;
-  });
+  ]).catch(backendFailure);
   if (loaded instanceof BackendError)
     return (
       <main className="content">
-        <ServerUnavailable message={loaded.message} />
+        <ServerUnavailable error={loaded} path="/edit" />
       </main>
     );
   const [settings, view, usage] = loaded;

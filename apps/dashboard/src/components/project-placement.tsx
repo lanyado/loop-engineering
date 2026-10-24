@@ -1,31 +1,34 @@
 'use client';
 
-import { saveLayout } from '../app/actions';
-import { move, toggle, type Layout } from '../lib/layout';
+import { saveProjectOrder, setProjectHidden } from '../app/actions';
+import { move } from '../lib/layout';
 import { useAction } from './settings-controls';
 
 /** Up, down and Hide for one project, in its settings panel. Saved in the dashboard's layout. */
 export function ProjectPlacement({
   projectId,
   shownIds,
-  layout,
+  hidden,
   readOnly,
 }: {
   projectId: number;
   /** The projects on the board, in order. */
   shownIds: number[];
-  layout: Layout;
+  /** Hidden, yet on the board because it waits on you. */
+  hidden: boolean;
   readOnly: boolean;
 }) {
   const { pending, run, message } = useAction();
   const at = shownIds.indexOf(projectId);
-  const save = (next: Partial<Layout>) => run(() => saveLayout({ ...layout, ...next }));
   // The whole order of what is shown, so the saved order matches the board.
-  const shift = (by: -1 | 1) => save({ projectOrder: move(shownIds, at, at + by) });
+  const shift = (by: -1 | 1) => run(() => saveProjectOrder(move(shownIds, at, at + by)));
   const disabled = pending || readOnly;
   return (
     <div className="placement" data-testid="project-placement">
-      <span className="grow">Place on the board</span>
+      <span className="grow">
+        Place on the board
+        {hidden && <span className="muted small block">Hidden; shown while it waits on you.</span>}
+      </span>
       <button type="button" className="ghost small" disabled={disabled || at <= 0} onClick={() => shift(-1)}>
         Move up
       </button>
@@ -41,24 +44,22 @@ export function ProjectPlacement({
         type="button"
         className="ghost small"
         disabled={disabled}
-        onClick={() => save({ hiddenProjects: toggle(layout.hiddenProjects, projectId) })}
+        onClick={() => run(() => setProjectHidden(projectId, !hidden))}
         data-testid="hide-project"
       >
-        Hide
+        {hidden ? 'Show' : 'Hide'}
       </button>
       {message}
     </div>
   );
 }
 
-/** "2 hidden projects": each one with Show, under the board. A project that waits on you is never hidden. */
+/** "2 hidden projects": each one with Show, under the board. */
 export function HiddenProjects({
   projects,
-  layout,
   readOnly,
 }: {
   projects: { id: number; name: string }[];
-  layout: Layout;
   readOnly: boolean;
 }) {
   const { pending, run, message } = useAction();
@@ -75,14 +76,7 @@ export function HiddenProjects({
               type="button"
               className="ghost small"
               disabled={pending || readOnly}
-              onClick={() =>
-                run(() =>
-                  saveLayout({
-                    ...layout,
-                    hiddenProjects: layout.hiddenProjects.filter((id) => id !== p.id),
-                  }),
-                )
-              }
+              onClick={() => run(() => setProjectHidden(p.id, false))}
             >
               Show
             </button>

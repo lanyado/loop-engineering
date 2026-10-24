@@ -94,7 +94,7 @@ export function BoardView({
               ))}
             </ul>
           )}
-          {p.finished.length > 0 && shows(layout, 'finished') && (
+          {p.finished.length > 0 && shows(layout.hiddenDetails, 'finished') && (
             <FinishedGroup sessions={p.finished} now={now} />
           )}
         </ProjectShell>

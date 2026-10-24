@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { buildBoard as buildWith, laneOrder, stageStates } from './board';
+import { buildBoard as buildWith, laneOrder, stageStates, type BoardPipeline } from './board';
 import { demoData } from './fixtures';
 import type { PipelineView, PullRequest, Question, TreeProject, TreeSession } from './schemas';
 
 const NOW = new Date('2026-10-18T12:00:00.000Z');
 // The demo's pipeline is the built-in one: tests, review, QA.
 const PIPELINE = demoData(NOW).pipeline;
-const buildBoard = (tree: TreeProject[], prs: PullRequest[], pending: Question[], view = PIPELINE) =>
-  buildWith(tree, prs, pending, view);
+const buildBoard = (
+  tree: TreeProject[],
+  prs: PullRequest[],
+  pending: Question[],
+  view: BoardPipeline = PIPELINE,
+) => buildWith(tree, prs, pending, view);
 
 const session = (id: number, projectId: number, extra: Partial<TreeSession> = {}): TreeSession => ({
   id,
@@ -286,11 +290,11 @@ describe('the pipeline (stage files) shapes every lane', () => {
   const view = (
     pipeline: Partial<PipelineView['pipeline']>,
     extra: PipelineView['stages'] = [security],
-  ): PipelineView => ({
+  ): BoardPipeline => ({
     pipeline: { ...PIPELINE.pipeline, ...pipeline },
     stages: [...PIPELINE.stages, ...extra],
   });
-  const lane = (v: PipelineView, prs: PullRequest[], autoMerge = false) => {
+  const lane = (v: BoardPipeline, prs: PullRequest[], autoMerge = false) => {
     const tree = [{ ...project(1, [session(1, 1)]), autoMerge }];
     return buildBoard(tree, prs, [], v).projects[0]!.rows[0]!.lanes[0]!;
   };

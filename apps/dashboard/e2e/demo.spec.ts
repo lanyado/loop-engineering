@@ -443,6 +443,15 @@ test('the pencil edits a draft on the demo board; Discard changes nothing, and d
   await page.getByTestId('stage-save').click();
   await expect(editor.getByTestId('lane').first().locator('[data-stage="docs-check"]')).toContainText('Docs');
 
+  // A custom stage that is not in the pipeline can be edited and deleted from "+ Add"; Escape closes sheets.
+  await editor.getByTestId('editor-add').click();
+  await page.getByRole('button', { name: 'Edit Security review' }).click();
+  await page.getByTestId('stage-delete').click();
+  await editor.getByTestId('editor-add').click();
+  await expect(page.getByRole('button', { name: 'Edit Security review' })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('add-sheet')).toHaveCount(0);
+
   // Removing review warns that every PR will wait for approval.
   await editor.getByRole('button', { name: 'Remove Code review' }).click();
   await expect(editor.getByTestId('no-review-warning')).toBeVisible();

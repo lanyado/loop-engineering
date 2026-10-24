@@ -58,8 +58,16 @@ describe('GET and PUT /api/pipeline', () => {
   it('serves the built-in pipeline and stages', async () => {
     const res = await call('GET');
     expect(res.status).toBe(200);
-    const json = (await res.json()) as { pipeline: unknown; stages: { id: string; builtin: boolean }[] };
+    const json = (await res.json()) as {
+      pipeline: unknown;
+      stages: { id: string; builtin: boolean }[];
+      choices: { reserved: string[]; icons: string[] };
+    };
     expect(json.pipeline).toEqual({ checks: ['tests', 'review', 'qa'], deploy: true, guardian: true });
+    expect(json.choices).toMatchObject({
+      icons: expect.arrayContaining(['shield']) as unknown,
+      reserved: expect.arrayContaining(['merge', 'deploy']) as unknown,
+    });
     expect(json.stages.map((s) => [s.id, s.builtin])).toEqual([
       ['tests', true],
       ['review', true],

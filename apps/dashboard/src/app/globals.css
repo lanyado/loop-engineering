@@ -1877,6 +1877,14 @@ button.node-plus:hover:not(:disabled) {
 .editor .topbar {
   flex-wrap: wrap;
 }
+/* Room for the "−" badges, so they cover no text. */
+.editor .topbar .wiggle {
+  padding: 8px 0 0 12px;
+}
+.add-stage {
+  display: inline-flex;
+  align-items: center;
+}
 .pipeline-editor {
   display: grid;
   gap: var(--s-2);
@@ -1976,24 +1984,19 @@ button.node-plus:hover:not(:disabled) {
   font-size: var(--text-xs);
   line-height: 1.4;
 }
-.sheet-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 40;
-  display: grid;
-  place-items: center;
-  padding: var(--s-4);
-  background: color-mix(in srgb, var(--text) 30%, transparent);
-}
 .editor-sheet {
-  width: min(520px, 100%);
+  width: min(520px, calc(100% - 2 * var(--s-4)));
   max-height: 90vh;
   overflow: auto;
+  color: var(--text);
   padding: var(--s-5);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
+}
+.editor-sheet::backdrop {
+  background: color-mix(in srgb, var(--text) 30%, transparent);
 }
 .editor-sheet h2,
 .editor-sheet h3 {

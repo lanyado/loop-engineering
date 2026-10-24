@@ -1,12 +1,13 @@
 'use client';
 
 import { useState } from 'react';
-import type { Stage } from '../lib/schemas';
-import { Icon, STAGE_ICONS } from './pipeline';
+import type { Stage, StageChoices } from '../lib/schemas';
+import { Dialog } from './dialog';
+import { Icon } from './pipeline';
 
 export type StageFields = Pick<Stage, 'title' | 'label' | 'icon' | 'access' | 'runs' | 'prompt'>;
 /** A stage's file fields only, as the server writes them. */
-const fieldsOf = ({ title, label, icon, access, runs, prompt }: StageFields): StageFields => ({
+export const fieldsOf = ({ title, label, icon, access, runs, prompt }: StageFields): StageFields => ({
   title,
   label,
   icon,
@@ -15,15 +16,16 @@ const fieldsOf = ({ title, label, icon, access, runs, prompt }: StageFields): St
   prompt,
 });
 
-const ACCESS = [
-  ['read', 'Read files only'],
-  ['shell', 'Run commands'],
-  ['browser', 'Run commands and a browser'],
-] as const;
-const RUNS = [
-  ['always', 'On every PR'],
-  ['ui-changes', 'Only when UI files change'],
-] as const;
+/** Words for the server's values; a value with no words here is shown as it is. */
+const ACCESS_WORDS: Record<string, string> = {
+  read: 'Read files only',
+  shell: 'Run commands',
+  browser: 'Run commands and a browser',
+};
+const RUNS_WORDS: Record<string, string> = {
+  always: 'On every PR',
+  'ui-changes': 'Only when UI files change',
+};
 
 /** A stage id from its title: "Security review" → "security-review". */
 const slug = (title: string) =>
@@ -31,57 +33,79 @@ const slug = (title: string) =>
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
-    .slice(0, 32) || 'stage';
+    .slice(0, 32);
 
 /** A stage's settings and prompt; for a new stage also its id, from the title. */
 export function StageSheet({
   stage,
   isNew,
-  inPipeline,
+  choices,
   taken,
   onSave,
   onReset,
+  onDelete,
   onClose,
 }: {
   stage: Stage;
   isNew: boolean;
-  inPipeline: boolean;
+  choices: StageChoices;
   /** A stage with this id exists already. */
   taken: (id: string) => boolean;
   onSave: (id: string, fields: StageFields) => void;
   onReset: (id: string) => void;
+  onDelete: (id: string) => void;
   onClose: () => void;
 }) {
   const [f, setF] = useState<StageFields>(fieldsOf(stage));
   const set = (patch: Partial<StageFields>) => setF((prev) => ({ ...prev, ...patch }));
   const id = isNew ? slug(f.title) : stage.id;
-  const clash = isNew && taken(id);
+  const problem = !isNew
+    ? null
+    : !id
+      ? 'Use a name with letters or digits.'
+      : choices.reserved.includes(id)
+        ? `"${id}" is a pipeline node's name; pick another.`
+        : taken(id)
+          ? `A stage named ${id} exists already.`
+          : null;
   return (
-    <div
-      className="sheet-backdrop"
-      role="dialog"
-      aria-modal="true"
-      aria-label={isNew ? 'New stage' : stage.title}
-    >
+    <Dialog label={isNew ? 'New stage' : stage.title} onClose={onClose} testId="stage-sheet">
       <form
-        className="editor-sheet stack"
+        className="stack"
         onSubmit={(e) => {
           e.preventDefault();
           onSave(id, f);
         }}
       >
         <h2>{isNew ? 'New stage' : stage.title}</h2>
+        {stage.error && (
+          <p className="warning small">
+            Its file is broken ({stage.error}), so PRs wait at it. Saving here writes a working one.
+          </p>
+        )}
         <label className="field">
           Name
-          <input value={f.title} maxLength={60} required onChange={(e) => set({ title: e.target.value })} />
+          <input
+            type="text"
+            value={f.title}
+            maxLength={60}
+            required
+            onChange={(e) => set({ title: e.target.value })}
+          />
         </label>
         <label className="field">
           Label on the node (10 characters at most)
-          <input value={f.label} maxLength={10} required onChange={(e) => set({ label: e.target.value })} />
+          <input
+            type="text"
+            value={f.label}
+            maxLength={10}
+            required
+            onChange={(e) => set({ label: e.target.value })}
+          />
         </label>
         <fieldset className="icon-picker">
           <legend>Icon</legend>
-          {STAGE_ICONS.map((icon) => (
+          {choices.icons.map((icon) => (
             <label key={icon} className={f.icon === icon ? 'picked' : ''}>
               <input
                 type="radio"
@@ -102,9 +126,9 @@ export function StageSheet({
             <label className="field">
               It may
               <select value={f.access} onChange={(e) => set({ access: e.target.value })}>
-                {ACCESS.map(([value, text]) => (
+                {choices.access.map((value) => (
                   <option key={value} value={value}>
-                    {text}
+                    {ACCESS_WORDS[value] ?? value}
                   </option>
                 ))}
               </select>
@@ -112,9 +136,9 @@ export function StageSheet({
             <label className="field">
               Runs
               <select value={f.runs} onChange={(e) => set({ runs: e.target.value })}>
-                {RUNS.map(([value, text]) => (
+                {choices.runs.map((value) => (
                   <option key={value} value={value}>
-                    {text}
+                    {RUNS_WORDS[value] ?? value}
                   </option>
                 ))}
               </select>
@@ -127,7 +151,8 @@ export function StageSheet({
             value={f.prompt}
             rows={8}
             maxLength={4000}
-            required
+            required={!(stage.builtin && !stage.overridden && !f.prompt)}
+            placeholder={stage.builtin ? 'The built-in prompt (restored when you Approve).' : undefined}
             onChange={(e) => set({ prompt: e.target.value })}
             data-testid="stage-prompt"
           />
@@ -136,25 +161,32 @@ export function StageSheet({
           The loop adds the PR, the request and the diff, and asks for pass or fail. Failures go back to the
           builder. No stage can edit files or push.
         </p>
+        {problem && <p className="error small">{problem}</p>}
+        {isNew && !problem && <p className="muted small mono">Saved as {id}.md in your stages folder</p>}
         <div className="row-actions">
-          <button type="submit" disabled={clash} data-testid="stage-save">
+          <button type="submit" disabled={problem !== null} data-testid="stage-save">
             {isNew ? 'Add stage' : 'Done'}
           </button>
           <button type="button" className="ghost" onClick={onClose}>
             Cancel
           </button>
-          {!isNew && (stage.builtin ? stage.overridden : !inPipeline) && (
-            <button type="button" className="ghost danger" onClick={() => onReset(stage.id)}>
-              {stage.builtin ? 'Reset to built-in' : 'Delete stage'}
+          {!isNew && stage.builtin && stage.overridden && (
+            <button type="button" className="ghost" onClick={() => onReset(stage.id)}>
+              Reset to built-in
+            </button>
+          )}
+          {!isNew && !stage.builtin && (
+            <button
+              type="button"
+              className="ghost danger"
+              onClick={() => onDelete(stage.id)}
+              data-testid="stage-delete"
+            >
+              Delete stage
             </button>
           )}
         </div>
-        {isNew && (
-          <p className={`small mono ${clash ? 'error' : 'muted'}`}>
-            {clash ? `A stage named ${id} exists already.` : `Saved as data/stages/${id}.md`}
-          </p>
-        )}
       </form>
-    </div>
+    </Dialog>
   );
 }

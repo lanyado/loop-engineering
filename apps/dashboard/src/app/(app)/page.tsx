@@ -1,5 +1,5 @@
 import { BoardView } from '../../components/board-view';
-import { ServerUnavailable } from '../../components/server-unavailable';
+import { backendFailure, ServerUnavailable } from '../../components/server-unavailable';
 import { BackendError } from '../../lib/backend';
 import { HiddenProjects, ProjectPlacement } from '../../components/project-placement';
 import { ProjectSettings } from '../../components/settings-controls';
@@ -17,11 +17,8 @@ export default async function BoardPage() {
     backend.pipeline(),
     // The default layout when the settings cannot be read: the board itself still shows.
     backend.settings().catch(() => null),
-  ]).catch((error: unknown) => {
-    if (error instanceof BackendError) return error;
-    throw error;
-  });
-  if (loaded instanceof BackendError) return <ServerUnavailable message={loaded.message} />;
+  ]).catch(backendFailure);
+  if (loaded instanceof BackendError) return <ServerUnavailable error={loaded} path="/" />;
   const [tree, prs, pending, pipeline, settings] = loaded;
   const board = buildBoard(tree, prs, pending, pipeline);
   const layout = parseLayout(settings?.dashboardLayout);
@@ -43,7 +40,7 @@ export default async function BoardPage() {
             <ProjectPlacement
               projectId={p.project.id}
               shownIds={shownIds}
-              layout={layout}
+              hidden={layout.hiddenProjects.includes(p.project.id)}
               readOnly={readOnly}
             />
           </>
@@ -52,7 +49,6 @@ export default async function BoardPage() {
       {hidden.length > 0 && (
         <HiddenProjects
           projects={hidden.map((p) => ({ id: p.project.id, name: p.project.name }))}
-          layout={layout}
           readOnly={readOnly}
         />
       )}

@@ -456,6 +456,25 @@ export function demoData(now: Date): DemoData {
           builtin: false,
         },
       ],
+      // Sample values; a real server sends its own lists.
+      choices: {
+        icons: [
+          'tests',
+          'review',
+          'qa',
+          'shield',
+          'lock',
+          'bug',
+          'book',
+          'gauge',
+          'globe',
+          'sparkle',
+          'check',
+        ],
+        access: ['read', 'shell', 'browser'],
+        runs: ['always', 'ui-changes'],
+        reserved: ['merge', 'deploy', 'guardian', 'approval', 'session', 'builder'],
+      },
     },
   };
 }

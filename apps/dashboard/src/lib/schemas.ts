@@ -1,5 +1,5 @@
 import * as z from 'zod';
-import { layoutSchema } from './layout';
+import { layoutPatch } from './layout';
 
 /*
  * Wire types for the always-on server's /api (apps/server). The dashboard is deployed on its own
@@ -210,7 +210,19 @@ export const pipelineSchema = z.object({
   error: z.string().optional(),
 });
 export type Pipeline = z.infer<typeof pipelineSchema>;
-export const pipelineViewSchema = z.object({ pipeline: pipelineSchema, stages: z.array(stageSchema) });
+/** The values a stage may take and the ids it may not (the server's lists, for the editor). */
+export const stageChoicesSchema = z.object({
+  icons: z.array(z.string()),
+  access: z.array(z.string()),
+  runs: z.array(z.string()),
+  reserved: z.array(z.string()),
+});
+export type StageChoices = z.infer<typeof stageChoicesSchema>;
+export const pipelineViewSchema = z.object({
+  pipeline: pipelineSchema,
+  stages: z.array(stageSchema),
+  choices: stageChoicesSchema,
+});
 export type PipelineView = z.infer<typeof pipelineViewSchema>;
 
 /** Response envelopes, keyed by the route that returns them. */
@@ -281,7 +293,7 @@ export const settingsInput = z
     opencodeBackupModels: z
       .array(z.string().trim().min(1).max(LIMITS.model).regex(/^\S+$/, 'One model name per line'))
       .max(10),
-    dashboardLayout: layoutSchema,
+    dashboardLayout: z.record(z.string(), z.unknown()),
   })
   .partial();
 export type SettingsPatch = z.infer<typeof settingsInput>;
@@ -305,4 +317,5 @@ export const pipelineUpdateInput = z.object({
 });
 export type PipelineUpdate = z.infer<typeof pipelineUpdateInput>;
 /** What the editor's Approve sends: the layout, and the pipeline when it changed. */
-export const editsInput = z.object({ layout: layoutSchema, pipeline: pipelineUpdateInput.optional() });
+export const editsInput = z.object({ layout: layoutPatch, pipeline: pipelineUpdateInput.optional() });
+export const hideProjectInput = z.object({ projectId: z.number().int().positive(), hidden: z.boolean() });

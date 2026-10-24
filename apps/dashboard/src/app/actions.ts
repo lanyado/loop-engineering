@@ -18,6 +18,7 @@ import {
   answerInput,
   editsInput,
   endSessionInput,
+  hideProjectInput,
   stageTerminalInput,
   newRequestInput,
   permissionModeInput,
@@ -25,6 +26,7 @@ import {
   sessionMessageInput,
   settingsInput,
 } from '../lib/schemas';
+import { layoutPatch, parseLayout, type LayoutPatch } from '../lib/layout';
 import { getAuthConfig, noLogin } from '../lib/server/env';
 import { backendForViewer, requireLogin } from '../lib/server/session';
 import { parseTheme, THEME_COOKIE } from '../lib/theme';
@@ -92,24 +94,39 @@ export async function updateSettings(patch: unknown): Promise<ActionResult> {
   );
 }
 
-/** Saves the dashboard's layout (project order and hiding on the board). */
-export async function saveLayout(layout: unknown): Promise<ActionResult> {
-  return write(
-    settingsInput.pick({ dashboardLayout: true }).required(),
-    { dashboardLayout: layout },
-    async (d, backend) => {
-      await backend.updateSettings(d);
-      return undefined;
-    },
-  );
+/**
+ * Merges `patch` into the layout as the server has it now, so saves from two tabs or two quick clicks
+ * keep each other's changes; refused when the current layout cannot be read.
+ */
+async function mergeLayout(backend: Backend, patch: LayoutPatch): Promise<void> {
+  const current = parseLayout((await backend.settings()).dashboardLayout);
+  await backend.updateSettings({ dashboardLayout: { ...current, ...patch } });
+}
+
+/** A new project order on the board (the whole order of what it shows). */
+export async function saveProjectOrder(projectOrder: unknown): Promise<ActionResult> {
+  return write(layoutPatch.required({ projectOrder: true }), { projectOrder }, async (d, backend) => {
+    await mergeLayout(backend, d);
+    return undefined;
+  });
+}
+
+/** Hides a project from the board, or shows it again. */
+export async function setProjectHidden(projectId: number, hidden: boolean): Promise<ActionResult> {
+  return write(hideProjectInput, { projectId, hidden }, async (d, backend) => {
+    const current = parseLayout((await backend.settings()).dashboardLayout).hiddenProjects;
+    const others = current.filter((id) => id !== d.projectId);
+    await mergeLayout(backend, { hiddenProjects: d.hidden ? [...others, d.projectId] : others });
+    return undefined;
+  });
 }
 
 /** The editor's Approve: the pipeline first (the server may refuse it), then the layout. */
 export async function applyEdits(edits: unknown): Promise<ActionResult> {
   return write(editsInput, edits, async (d, backend) => {
     if (d.pipeline) await backend.updatePipeline(d.pipeline);
-    await backend.updateSettings({ dashboardLayout: d.layout });
-    return 'Applied to your dashboard.';
+    await mergeLayout(backend, d.layout);
+    return undefined;
   });
 }
 

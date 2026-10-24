@@ -25,28 +25,47 @@ export const ROW_DETAIL_LABELS: Record<RowDetail, string> = {
   finished: 'Finished sessions',
 };
 
-const ids = z.array(z.number().int().positive()).catch([]);
-export const layoutSchema = z.object({
+/** The layout as saved: every field strict (what the actions accept as a patch). */
+export const layoutInput = z.object({
   /** Shown left to right; an item left out is hidden. */
-  topbar: z.array(z.enum(TOPBAR_ITEMS)).catch([...TOPBAR_ITEMS]),
-  hiddenDetails: z.array(z.enum(ROW_DETAILS)).catch([]),
-  /** Projects listed here come in this order, the rest after them as before. */
-  projectOrder: ids,
-  hiddenProjects: ids,
+  topbar: z.array(z.enum(TOPBAR_ITEMS)).max(TOPBAR_ITEMS.length),
+  hiddenDetails: z.array(z.enum(ROW_DETAILS)).max(ROW_DETAILS.length),
+  /** Projects listed here come in this order, the rest after them. */
+  projectOrder: z.array(z.number().int().positive()).max(500),
+  hiddenProjects: z.array(z.number().int().positive()).max(500),
 });
-export type Layout = z.infer<typeof layoutSchema>;
+export type Layout = z.infer<typeof layoutInput>;
+export const layoutPatch = layoutInput.partial();
+export type LayoutPatch = z.infer<typeof layoutPatch>;
 
-export const DEFAULT_LAYOUT: Layout = layoutSchema.parse({});
+export const DEFAULT_LAYOUT: Layout = {
+  topbar: [...TOPBAR_ITEMS],
+  hiddenDetails: [],
+  projectOrder: [],
+  hiddenProjects: [],
+};
 
+/** The values of `list` that `ok` accepts, each once: an unknown one is dropped, not the whole list. */
+const known = <T>(list: unknown, ok: (v: unknown) => v is T): T[] | undefined =>
+  Array.isArray(list) ? [...new Set(list.filter(ok))] : undefined;
+const oneOf =
+  <T extends string>(values: readonly T[]) =>
+  (v: unknown): v is T =>
+    (values as readonly unknown[]).includes(v);
+const isId = (v: unknown): v is number => Number.isInteger(v) && (v as number) > 0;
+
+/** The saved layout, read leniently: what is missing or unknown is the default. */
 export function parseLayout(raw: unknown): Layout {
-  const parsed = layoutSchema.safeParse(raw ?? {});
-  if (!parsed.success) return DEFAULT_LAYOUT;
-  const layout = parsed.data;
-  // The same item twice would render twice.
-  return { ...layout, topbar: [...new Set(layout.topbar)] };
+  const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return {
+    topbar: known(o.topbar, oneOf(TOPBAR_ITEMS)) ?? DEFAULT_LAYOUT.topbar,
+    hiddenDetails: known(o.hiddenDetails, oneOf(ROW_DETAILS)) ?? [],
+    projectOrder: known(o.projectOrder, isId) ?? [],
+    hiddenProjects: known(o.hiddenProjects, isId) ?? [],
+  };
 }
 
-export const shows = (layout: Layout, detail: RowDetail) => !layout.hiddenDetails.includes(detail);
+export const shows = (hidden: readonly RowDetail[], detail: RowDetail) => !hidden.includes(detail);
 
 /** `list` with the item at `from` moved to `to`. */
 export function move<T>(list: readonly T[], from: number, to: number): T[] {

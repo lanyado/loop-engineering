@@ -8,8 +8,10 @@ describe('parseLayout', () => {
     expect(parseLayout(undefined)).toEqual(DEFAULT_LAYOUT);
     expect(parseLayout('x')).toEqual(DEFAULT_LAYOUT);
     expect(DEFAULT_LAYOUT.topbar).toEqual(['brand', 'claude', 'fiveHour', 'weekly']);
-    expect(parseLayout({ topbar: ['weekly', 'nope'], hiddenProjects: [3] })).toEqual({
+    // One unknown item is dropped, not the whole list; duplicates once.
+    expect(parseLayout({ topbar: ['weekly', 'nope'], hiddenProjects: [3, 3, -1] })).toEqual({
       ...DEFAULT_LAYOUT,
+      topbar: ['weekly'],
       hiddenProjects: [3],
     });
     expect(parseLayout({ topbar: ['weekly', 'weekly', 'brand'] }).topbar).toEqual(['weekly', 'brand']);

@@ -62,13 +62,21 @@ export function TopbarItem({
   item,
   usage,
   now,
+  preview = false,
 }: {
   item: TopbarItemName;
   usage: ClaudeUsage | null;
   now: number;
+  /** In the editor: the logo is not a link that would leave it. */
+  preview?: boolean;
 }) {
   if (item === 'brand')
-    return (
+    return preview ? (
+      <span className="brand">
+        <Logo />
+        Loop
+      </span>
+    ) : (
       <Link href="/" className="brand">
         <Logo />
         Loop

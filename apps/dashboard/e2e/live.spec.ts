@@ -551,6 +551,12 @@ test('ends a session from its details after a confirm step', async ({ page }, in
 test('the editor applies the layout and the pipeline on Approve', async ({ page }, info) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await open(page);
+  // A project hidden on the board first: the editor's Approve must keep it hidden (the server merges).
+  const names = () => page.getByTestId('project').evaluateAll((els) => els.map((e) => e.dataset.project));
+  const last = (await names()).at(-1)!;
+  await projectSettings(page, last);
+  await page.locator(`[data-testid="project"][data-project="${last}"]`).getByTestId('hide-project').click();
+  await expect.poll(names).not.toContain(last);
   await page.getByRole('link', { name: 'Edit the dashboard' }).click();
   const editor = page.getByTestId('editor');
   await editor.getByRole('button', { name: 'Remove Weekly limit' }).click();
@@ -577,6 +583,7 @@ test('the editor applies the layout and the pipeline on Approve', async ({ page 
   const lane = page.getByTestId('lane').first();
   await expect(lane.locator('[data-testid="node"]').first()).toHaveAttribute('data-stage', 'review');
   await expect(lane.locator('[data-stage="docs-check"]')).toContainText('Docs');
+  expect(await names()).not.toContain(last);
 });
 
 test('a project moves up and hides from its settings, and shows again from the list under the board', async ({

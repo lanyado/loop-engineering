@@ -1,7 +1,7 @@
 import type { CSSProperties, ReactNode } from 'react';
 import { type Lane, type NodeStage, type NodeState, type Row, type StageNode } from '../lib/board';
 import { formatPrMetrics, humanize, pauseLabel, roundLabel, sessionRuntime } from '../lib/format';
-import type { RowDetail } from '../lib/layout';
+import { shows, type RowDetail } from '../lib/layout';
 import type { PullRequest, Question, TreeSession } from '../lib/schemas';
 import { EndSessionButton } from './end-session-button';
 import { QuestionCard } from './question-card';
@@ -496,7 +496,7 @@ export function PipelineRow({
   readOnly: boolean;
   now: number;
 }) {
-  const show = (detail: RowDetail) => !hidden.includes(detail);
+  const show = (detail: RowDetail) => shows(hidden, detail);
   const { session, builder } = row;
   const pause = pauseLabel(session.pauseReason);
   const open = session.status !== 'ended';
