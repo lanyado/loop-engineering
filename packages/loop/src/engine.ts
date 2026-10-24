@@ -266,8 +266,6 @@ export interface LoopStatus {
     lastError: string | null;
     /** Why the loop holds it (a broken pipeline.json or stage file), or null. */
     heldFor: string | null;
-    /** Checks the human skipped for it. */
-    skipped: string[];
   }[];
 }
 
@@ -503,7 +501,6 @@ export class LoopEngine {
           round: p.round,
           lastError: loopState(p).lastError ?? null,
           heldFor: loopState(p).heldFor ?? null,
-          skipped: loopState(p).skip ?? [],
         })),
     };
   }
@@ -824,6 +821,14 @@ export class LoopEngine {
     return this.stages.pipeline();
   }
 
+  /** "passed its checks", naming the ones the human skipped: what the merge question says. */
+  private passedText(c: Ctx): string {
+    const ran = this.checksOf(c).length > 0;
+    const skipped = (c.s.skip ?? []).map((id) => this.stages.stage(id)?.title ?? id);
+    const passed = ran ? 'passed its checks' : 'has no checks before merge';
+    return skipped.length > 0 ? `${passed} (you skipped ${skipped.join(', ')})` : passed;
+  }
+
   /** The PR gets a code review: the pipeline has it and the human did not skip it. */
   private reviews(c: Ctx): boolean {
     return this.pipeline().checks.includes('review') && !c.s.skip?.includes('review');
@@ -855,8 +860,8 @@ export class LoopEngine {
   }
 
   /** The PR stage and loopState of the pipeline's first check (tests when it has none: advanceOpen moves on). */
-  private firstCheck(): { stage: PullRequestPatch; state: Partial<LoopState> } {
-    const first = this.pipeline().checks[0] ?? 'tests';
+  private firstCheck(c: Ctx): { stage: PullRequestPatch; state: Partial<LoopState> } {
+    const first = this.checksOf(c)[0] ?? 'tests';
     return { stage: stageFor(first), state: checkField(first) };
   }
 
@@ -867,7 +872,9 @@ export class LoopEngine {
   private recheck(c: Ctx, head: string, why: string): boolean {
     if (newCommitsSince(c.s, head)) return this.restartChecks(c, why);
     const next = this.nextCheck(c, head)!;
-    this.log(`PR ${c.pr.repo}#${c.pr.number}: the pipeline gained ${next}; running it before merge`);
+    this.log(
+      `PR ${c.pr.repo}#${c.pr.number}: ${next} has not run at this head (new in the pipeline, or brought back); running it before merge`,
+    );
     return this.save(c, stageFor(next), { ...checkField(next), question: undefined, approvedSha: undefined });
   }
 
@@ -901,13 +908,15 @@ export class LoopEngine {
       if (!q && held < this.config.holdReaskMs) return false;
       // The head and round are in the text, so no answer about another head can ever be reused.
       return this.ask(c, 'approval', head, {
-        text: `PR ${c.pr.repo}#${c.pr.number} at ${short(head)} (round ${c.pr.round}) ${this.pipeline().checks.length > 0 ? 'passed its checks' : 'has no checks before merge'}. Merge it?`,
+        text: `PR ${c.pr.repo}#${c.pr.number} at ${short(head)} (round ${c.pr.round}) ${this.passedText(c)}. Merge it?`,
         context: `${gh.title}\n${gh.url}\nHead ${head}. ${
           !c.project.autoMerge
             ? `Auto-merge is off for ${c.project.name}.`
-            : !this.reviews(c)
-              ? 'It gets no code review (the pipeline has none, or it was skipped), so it is not merged automatically.'
-              : 'Only a free OpenCode model reviewed it (Claude was out of usage), so it is not merged automatically.'
+            : !this.pipeline().checks.includes('review')
+              ? 'The pipeline has no code review, so it is not merged automatically.'
+              : !this.reviews(c)
+                ? 'Its code review was skipped, so it is not merged automatically.'
+                : 'Only a free OpenCode model reviewed it (Claude was out of usage), so it is not merged automatically.'
         }`,
         options: [...APPROVAL_OPTIONS],
         recommendedOption: 'Hold',
@@ -1035,7 +1044,7 @@ export class LoopEngine {
       !e.infra && e.items.length > 0
         ? { kind: 'review', ...e.from, items: e.items, sha: gh.headRefOid, sentAt: null }
         : undefined;
-    const first = this.firstCheck();
+    const first = this.firstCheck(c);
     return this.save(c, first.stage, {
       ...first.state,
       maxRounds: Math.max(c.pr.round, this.maxRounds(c)) + more,
@@ -1060,8 +1069,10 @@ export class LoopEngine {
     usage: MetricsDelta = {},
     stage?: string,
   ): boolean {
+    // Skipped while its job ran: its failures no longer count; the next step moves the PR on.
+    const from = { kind, ...(stage ? { stage } : {}) };
+    if (c.s.skip?.includes(feedbackCheck({ ...from, items, sha: '', sentAt: null }) ?? '')) return true;
     if (c.pr.round >= this.maxRounds(c)) {
-      const from = { kind, ...(stage ? { stage } : {}) };
       return this.escalate(c, `PR #${c.pr.number} hit ${c.pr.round} rounds`, items, false, usage, from);
     }
     return this.save(
@@ -1176,7 +1187,7 @@ export class LoopEngine {
         false,
       );
     }
-    const first = this.firstCheck();
+    const first = this.firstCheck(c);
     this.log(`PR ${c.pr.repo}#${c.pr.number}: back to the first check, round ${c.pr.round + 1} (${why})`);
     // advanceOpen moves on from there to the first check this head has not passed.
     return this.save(c, { ...first.stage, round: c.pr.round + 1 }, { ...reset, ...first.state }, usage);

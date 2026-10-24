@@ -300,7 +300,9 @@ const edgeInto = (state: NodeState): NodeState =>
 const nodeDetail = (node: StageNode): string =>
   node.questions.length > 0
     ? 'waiting on you'
-    : (node.problem ?? (node.skipped ? 'skipped' : STATE_WORDS[node.state]));
+    : node.skipped
+      ? 'skipped'
+      : (node.problem ?? STATE_WORDS[node.state]);
 
 /** The deploy node also carries where the lane ended: shipped, merged, or how it stopped. */
 function deployDetail(node: StageNode, lane: Lane): string {
@@ -406,8 +408,7 @@ function LaneView({ lane, metrics, readOnly }: { lane: Lane; metrics: boolean; r
                     node.stage === 'deploying' ? [...node.questions, ...lane.end.questions] : node.questions
                   }
                   chip={
-                    // Any check of a PR still in the loop can be skipped, or brought back.
-                    pr && node.check && pr.outcome === null && pr.stage !== 'escalated' ? (
+                    pr && node.skippable ? (
                       <SkipCheck
                         prId={pr.id}
                         pr={`${pr.repo}#${pr.number}`}

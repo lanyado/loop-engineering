@@ -72,9 +72,8 @@ export function pipelineModule({
       api.post('/prs/:id/skip', async (c) => {
         const parsed = skipBody.safeParse(await c.req.json().catch(() => null));
         if (!parsed.success) return c.json({ error: z.prettifyError(parsed.error) }, 400);
+        // An unknown PR is a NotFoundError: 404 (app.ts).
         const id = Number(c.req.param('id'));
-        if (!Number.isInteger(id) || !ctx.store.pullRequests.get(id))
-          return c.json({ error: 'no such PR' }, 404);
         const pullRequest = skipCheck(ctx.store, stages, id, parsed.data.check, parsed.data.skip);
         poke();
         return c.json({ pullRequest });

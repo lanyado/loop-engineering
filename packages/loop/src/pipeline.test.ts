@@ -412,7 +412,9 @@ describe('the human skips a check for one PR', () => {
     skipCheck(h.store, lib, h.pr().id, 'review', true);
     await h.engine.tick();
     expect(h.pr()).toMatchObject({ stage: 'awaiting_approval', outcome: null });
-    expect(h.asked().at(-1)?.context).toContain('no code review');
+    const q = h.asked().at(-1);
+    expect(q?.context).toContain('Its code review was skipped');
+    expect(q?.text).toMatch(/passed its checks \(you skipped Code review\)\. Merge it\?/);
   });
 
   it('stays skipped after new commits, and a skip taken back runs before merge', async () => {
@@ -437,13 +439,28 @@ describe('the human skips a check for one PR', () => {
     expect(loopState(h.pr()).skip).toBeUndefined();
   });
 
+  it('a check skipped while its job runs in the last round does not escalate the PR', async () => {
+    const lib = library({});
+    const h = harness(lib, { config: { maxRounds: 1 } });
+    h.launcher
+      .on('tests', () => {
+        skipCheck(h.store, lib, h.pr().id, 'tests', true);
+        return verdictResult({ passed: false, failures: ['x fails'] });
+      })
+      .on('review', clean());
+    await h.builderWithPr();
+    await h.engine.tick();
+    expect(h.pr()).toMatchObject({ outcome: 'merged' });
+    expect(h.launcher.kinds()).toEqual(['tests', 'review']);
+  });
+
   it('refuses a check outside the pipeline and a PR that left the loop', async () => {
     const lib = library({ checks: ['tests', 'review'] });
     const h = harness(lib);
     h.launcher.on('tests', testsPass()).on('review', clean());
     await h.builderWithPr();
     await h.engine.tick();
-    expect(() => skipCheck(h.store, lib, h.pr().id, 'tests', true)).toThrow(/not waiting on a check/); // merged
+    expect(() => skipCheck(h.store, lib, h.pr().id, 'tests', true)).toThrow(/left the loop's checks/); // merged
     const otherLib = library({ checks: ['tests'] });
     const other = harness(otherLib);
     other.launcher.on('tests', verdictResult({ passed: false, failures: ['x'] }));
