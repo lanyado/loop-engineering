@@ -9,8 +9,6 @@ import type { PipelineView, PullRequest, Question, TreeProject, TreeSession } fr
  * buildBoard returns.
  */
 
-/* The default pipeline's lane, in order. "deployed" is past the last node: every node done. */
-export const LANE_STAGES = ['tests', 'review', 'qa', 'awaiting_approval', 'merge', 'deploying'] as const;
 /** The node after Deploy: the Production Guardian's check of the live site. It has no PR stage of its own. */
 export const GUARDIAN_NODE = 'guardian';
 /** A node's id: a check's stage id (tests, review, qa or a custom stage), or one of the fixed nodes. */
@@ -89,7 +87,7 @@ const GUARDIAN_QUESTION = 'Production Guardian';
 export function stageStates(
   stage: string,
   outcome: string | null = null,
-  order: readonly string[] = LANE_STAGES,
+  order: readonly string[],
 ): NodeState[] {
   const last = order.length - 1;
   // Merged where nothing deploys: the PR stays at "merge", which is done.
@@ -123,7 +121,8 @@ export function laneOrder(
   view: PipelineView,
   pr: PullRequest | null,
 ): string[] {
-  const checks = view.pipeline.checks.filter((id) => view.stages.some((s) => s.id === id));
+  // A check with no stage file stays in: the loop holds PRs there until the file is back.
+  const { checks } = view.pipeline;
   const approval = !(project.autoMerge && checks.includes('review')) || pr?.stage === 'awaiting_approval';
   const deployed = pr !== null && ['deploying', 'deployed', 'reverted'].includes(pr.stage);
   return [

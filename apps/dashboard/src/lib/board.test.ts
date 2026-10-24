@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildBoard as buildWith, LANE_STAGES, laneOrder, stageStates } from './board';
+import { buildBoard as buildWith, laneOrder, stageStates } from './board';
 import { demoData } from './fixtures';
 import type { PipelineView, PullRequest, Question, TreeProject, TreeSession } from './schemas';
 
@@ -80,18 +80,28 @@ const question = (id: number, sessionId: number): Question => ({
   answeredAt: null,
 });
 
+// The default pipeline's lane, in order. "deployed" is past the last node: every node done.
+const LANE = ['tests', 'review', 'qa', 'awaiting_approval', 'merge', 'deploying'];
+
 describe('stageStates', () => {
   it('marks nodes before the stage done, the stage current, the rest not yet', () => {
-    expect(stageStates('qa')).toEqual(['done', 'done', 'current', 'todo', 'todo', 'todo']);
-    expect(stageStates('tests')[0]).toBe('current');
+    expect(stageStates('qa', null, LANE)).toEqual(['done', 'done', 'current', 'todo', 'todo', 'todo']);
+    expect(stageStates('tests', null, LANE)[0]).toBe('current');
   });
 
   it('is all done once deployed, fails Deploy when reverted and when escalated, and stops on close', () => {
-    expect(stageStates('deployed')).toEqual(LANE_STAGES.map(() => 'done'));
-    expect(stageStates('reverted')).toEqual(['done', 'done', 'done', 'done', 'done', 'failed']);
+    expect(stageStates('deployed', null, LANE)).toEqual(LANE.map(() => 'done'));
+    expect(stageStates('reverted', null, LANE)).toEqual(['done', 'done', 'done', 'done', 'done', 'failed']);
     // The escalation ends red on Deploy; the stages the loop reached stay stopped.
-    expect(stageStates('escalated')).toEqual(['halted', 'halted', 'halted', 'halted', 'halted', 'failed']);
-    expect(stageStates('canary_check')).toEqual(LANE_STAGES.map(() => 'halted'));
+    expect(stageStates('escalated', null, LANE)).toEqual([
+      'halted',
+      'halted',
+      'halted',
+      'halted',
+      'halted',
+      'failed',
+    ]);
+    expect(stageStates('canary_check', null, LANE)).toEqual(LANE.map(() => 'halted'));
   });
 });
 
@@ -320,11 +330,10 @@ describe('the pipeline (stage files) shapes every lane', () => {
     expect(laneOrder(p, PIPELINE, pr(1, 1, 'awaiting_approval'))).toContain('awaiting_approval');
   });
 
-  it('skips a check whose stage file is gone, and halts a PR still at it', () => {
+  it('keeps a check whose stage file is gone: the PR waits there', () => {
     const l = lane(view({ checks: ['tests', 'security'] }, []), [
       pr(1, 1, 'check', { loopState: { check: 'security' } }),
     ]);
-    expect(l.nodes.map((n) => n.stage)).not.toContain('security');
-    expect(l.nodes.every((n) => n.state === 'halted' || n.stage === 'guardian')).toBe(true);
+    expect(l.nodes[1]).toMatchObject({ stage: 'security', label: 'security', state: 'current' });
   });
 });

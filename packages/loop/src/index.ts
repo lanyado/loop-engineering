@@ -54,22 +54,15 @@ export {
   type TestVerdict,
 } from './prompts.js';
 export {
-  BUILTIN_CHECKS,
-  BUILTIN_STAGES_DIR,
-  builtinStageLibrary,
+  checkJobKind,
   FileStageLibrary,
-  isBuiltinCheck,
   isStageId,
-  RESERVED_STAGE_IDS,
   STAGE_ACCESS,
   STAGE_ICONS,
-  STAGE_ID,
   STAGE_RUNS,
   type EditableStageLibrary,
   type Pipeline,
-  type PipelineUpdate,
   type Stage,
-  type StageFields,
   type StageLibrary,
 } from './stages.js';
 export { loopState, type Feedback, type FeedbackKind, type LoopState, type QuestionKind } from './state.js';

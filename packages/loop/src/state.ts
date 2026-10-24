@@ -67,7 +67,8 @@ export type LoopState = {
   /** Consecutive waits for network errors (retryAfter holds the next try); cleared by the next success. */
   networkWaits?: number;
   /** infra: a job, merge or push kept failing; its error is not something the builder can fix. */
-  escalation?: { reason: string; items: string[]; infra: boolean };
+  /** from: the check whose failures hit the round cap; "Continue" sends them back as its feedback. */
+  escalation?: { reason: string; items: string[]; infra: boolean; from?: Pick<Feedback, 'kind' | 'stage'> };
   /** The tester's reason for manual QA. */
   qaReason?: string;
   /** When the human answered Hold; the approval question is asked again after a while. */

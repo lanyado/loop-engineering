@@ -382,7 +382,7 @@ export interface QaVerdict {
   report: string;
 }
 
-/** QA's verdict; a custom check answers in the same shape (parseCheck). */
+/** QA's verdict; a custom check answers in the same shape. */
 export function parseQa(text: string): QaVerdict | null {
   const answer = splitAnswer(text);
   const passed = flag.safeParse(answer?.decision.passed);
@@ -394,8 +394,6 @@ export function parseQa(text: string): QaVerdict | null {
   const failures = listed.length > 0 ? listed : [report || 'QA reported a failure without details.'];
   return { passed: false, failures, report };
 }
-
-export const parseCheck = parseQa;
 
 /** UI file types: a diff that touches none of them has nothing for a browser to check. */
 const UI_FILE = /\.(tsx|jsx|vue|svelte|astro|html?|css|scss|sass|less)$/i;

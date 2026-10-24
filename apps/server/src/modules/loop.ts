@@ -153,7 +153,7 @@ export function loopConfigFromEnv(env: NodeJS.ProcessEnv): Partial<LoopConfig> {
       tests: stageProvider(env, 'LOOP_TESTS_PROVIDER', 'opencode', problems),
       qa: stageProvider(env, 'LOOP_QA_PROVIDER', 'claude', problems),
       conflict: stageProvider(env, 'LOOP_CONFLICT_PROVIDER', 'claude', problems),
-      // Custom stages (stage files) gate the merge like review does.
+      // Custom stages (stage files) run on Claude by default, like review.
       check: stageProvider(env, 'LOOP_CHECK_PROVIDER', 'claude', problems),
     },
   };

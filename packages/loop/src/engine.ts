@@ -37,14 +37,13 @@ import type {
   StageJobKind,
   Workspace,
 } from './ports.js';
-import { checkJobKind, stageJobKind } from './ports.js';
+import { stageJobKind } from './ports.js';
 import {
   checkPrompt,
   checkSystem,
   CONFLICT_RIGHTS,
   CONFLICT_SYSTEM,
   conflictPrompt,
-  parseCheck,
   parseConflict,
   parseQa,
   parseReview,
@@ -62,12 +61,18 @@ import {
   touchesUi,
   type ReviewVerdict,
 } from './prompts.js';
-import { builtinStageLibrary, isBuiltinCheck, type Pipeline, type StageLibrary } from './stages.js';
+import {
+  builtinStageLibrary,
+  checkJobKind,
+  checkOfJobKind,
+  isBuiltinCheck,
+  type Pipeline,
+  type StageLibrary,
+} from './stages.js';
 import {
   loopState,
   nextCheck,
   newCommitsSince,
-  passedAt,
   testsBeforeQa,
   patchState,
   type Feedback,
@@ -142,7 +147,7 @@ export interface LoopConfig {
   logsDir: string | null;
 }
 
-/** The log of a PR's review, tests or QA jobs: every round appended, for the dashboard's stage terminal. */
+/** The log of a PR's jobs of one kind (a check or the conflict fixer): every round appended, for the dashboard's stage terminal. */
 export function jobLogFile(logsDir: string, prId: number, kind: JobKind): string {
   return join(logsDir, `pr${prId}-${kind}.log`);
 }
@@ -604,14 +609,21 @@ export class LoopEngine {
       return this.save(c, { outcome: 'closed' }, { question: undefined, feedback: undefined });
     }
     if (c.s.branch !== gh.headRefName) return this.save(c, {}, { branch: gh.headRefName });
-    if (CHECK_STAGES.has(c.pr.stage) && !c.s.feedback) {
+    // Fail closed: an unreadable pipeline.json merges nothing.
+    const broken = this.pipeline().error;
+    if (broken && c.pr.stage !== 'escalated') return this.hold(c, broken);
+    if (atCheck(c.pr.stage) && !c.s.feedback) {
       // Commits after a check passed: every check runs again on the new head.
       if (newCommitsSince(c.s, gh.headRefOid))
-        return this.restartReview(c, `new commits (${short(gh.headRefOid)})`);
+        return this.restartChecks(c, `new commits (${short(gh.headRefOid)})`);
       // Which check runs comes from the pipeline, so an edit to it applies on the PR's next step.
       const next = this.nextCheck(c, gh.headRefOid);
       if (next === null) return this.toMerge(c, {}, {});
       if (next !== checkAt(c.pr.stage, c.s)) return this.save(c, stageFor(next), checkField(next));
+      // Fail closed: a check whose stage file is missing or broken holds the PR, never skips.
+      const stage = this.stages.stage(next);
+      if (!stage || stage.error)
+        return this.hold(c, `stage ${next} ${stage ? `is broken: ${stage.error}` : 'has no stage file'}`);
       // A fresh PR starts at round 1 with its first check: the comments of that check are round 1.
       if (c.pr.round === 0) return this.save(c, { round: 1 }, {});
     }
@@ -646,7 +658,7 @@ export class LoopEngine {
     const after = await this.deps.github.getPr(c.ref, c.pr.number);
     // A verdict about an old head says nothing about the new one.
     if (after.headRefOid !== gh.headRefOid)
-      return this.restartReview(c, 'new commits during the review', job.usage);
+      return this.restartChecks(c, 'new commits during the review', job.usage);
     const v = job.verdict;
     await this.postReview(c, gh, v);
     // v.blocking already includes any unhandled request items (parseReview converts them).
@@ -699,7 +711,7 @@ export class LoopEngine {
     if (job.pushed?.status === 'pushed') {
       // New commits nobody reviewed: the next round reviews the tests too.
       this.log(`PR ${c.pr.repo}#${c.pr.number}: pushed the tester's tests as ${short(job.pushed.sha)}`);
-      return this.restartReview(c, "the loop pushed the tester's tests", job.usage, {
+      return this.restartChecks(c, "the loop pushed the tester's tests", job.usage, {
         testsAdded: true,
         // Its checkout, tests included, is exactly the pushed head: tested there, so the tests are not
         // run a second time; the other checks run on it.
@@ -710,7 +722,7 @@ export class LoopEngine {
     }
     const after = await this.deps.github.getPr(c.ref, c.pr.number);
     if (after.headRefOid !== gh.headRefOid)
-      return this.restartReview(c, 'new commits during the tests', job.usage);
+      return this.restartChecks(c, 'new commits during the tests', job.usage);
     if (!v.passed) {
       await this.comment(
         c,
@@ -745,7 +757,7 @@ export class LoopEngine {
     const job = await this.runJob(c, gh, 'qa', parseQa);
     if (!job.ok) return job.progressed;
     const after = await this.deps.github.getPr(c.ref, c.pr.number);
-    if (after.headRefOid !== gh.headRefOid) return this.restartReview(c, 'new commits during QA', job.usage);
+    if (after.headRefOid !== gh.headRefOid) return this.restartChecks(c, 'new commits during QA', job.usage);
     const v = job.verdict;
     if (!v.passed) {
       await this.comment(
@@ -769,11 +781,12 @@ export class LoopEngine {
       this.log(`PR ${c.pr.repo}#${c.pr.number}: the diff changes no UI files; skipping ${stage.title}`);
       return passed({});
     }
-    const job = await this.runJob(c, gh, checkJobKind(id), parseCheck);
+    // A custom check answers like QA: passed, and the failures.
+    const job = await this.runJob(c, gh, checkJobKind(id), parseQa);
     if (!job.ok) return job.progressed;
     const after = await this.deps.github.getPr(c.ref, c.pr.number);
     if (after.headRefOid !== gh.headRefOid)
-      return this.restartReview(c, `new commits during ${stage.title}`, job.usage);
+      return this.restartChecks(c, `new commits during ${stage.title}`, job.usage);
     const v = job.verdict;
     if (!v.passed) {
       await this.comment(
@@ -806,10 +819,21 @@ export class LoopEngine {
     return touchesUi(await this.deps.github.diff(c.ref, c.pr.number));
   }
 
-  /** The pipeline's next check at `head`; a check whose stage file is gone is not waited for. */
   private nextCheck(c: Ctx, head: string): string | null {
-    const checks = this.pipeline().checks.filter((id) => this.stages.stage(id));
-    return nextCheck(c.s, head, checks);
+    return nextCheck(c.s, head, this.pipeline().checks);
+  }
+
+  /** The loop cannot move this PR on until `why` is fixed: say so once, and show it on the PR. */
+  private hold(c: Ctx, why: string): boolean {
+    this.warnOnce(`hold-${c.pr.id}-${why}`, `PR ${c.pr.repo}#${c.pr.number} waits: ${why}`);
+    if (c.s.lastError !== why) this.save(c, {}, { lastError: why });
+    return false;
+  }
+
+  /** The PR stage and loopState of the pipeline's first check (tests when it has none: advanceOpen moves on). */
+  private firstCheck(): { stage: PullRequestPatch; state: Partial<LoopState> } {
+    const first = this.pipeline().checks[0] ?? 'tests';
+    return { stage: stageFor(first), state: checkField(first) };
   }
 
   /**
@@ -817,7 +841,7 @@ export class LoopEngine {
    * while a check added to the pipeline since just runs, in the same round.
    */
   private recheck(c: Ctx, head: string, why: string): boolean {
-    if (newCommitsSince(c.s, head)) return this.restartReview(c, why);
+    if (newCommitsSince(c.s, head)) return this.restartChecks(c, why);
     const next = this.nextCheck(c, head)!;
     this.log(`PR ${c.pr.repo}#${c.pr.number}: the pipeline gained ${next}; running it before merge`);
     return this.save(c, stageFor(next), { ...checkField(next), question: undefined, approvedSha: undefined });
@@ -853,7 +877,7 @@ export class LoopEngine {
       if (!q && held < this.config.holdReaskMs) return false;
       // The head and round are in the text, so no answer about another head can ever be reused.
       return this.ask(c, 'approval', head, {
-        text: `PR ${c.pr.repo}#${c.pr.number} at ${short(head)} (round ${c.pr.round}) passed ${this.passedText(c, head)}. Merge it?`,
+        text: `PR ${c.pr.repo}#${c.pr.number} at ${short(head)} (round ${c.pr.round}) ${this.pipeline().checks.length > 0 ? 'passed its checks' : 'has no checks before merge'}. Merge it?`,
         context: `${gh.title}\n${gh.url}\nHead ${head}. ${
           !c.project.autoMerge
             ? `Auto-merge is off for ${c.project.name}.`
@@ -898,7 +922,7 @@ export class LoopEngine {
           this.log(
             `PR ${c.pr.repo}#${c.pr.number}: resolved the conflict with ${gh.baseRefName} as ${short(job.pushed.sha)}`,
           );
-          return this.restartReview(c, `the loop merged ${gh.baseRefName} to fix a conflict`, job.usage, {
+          return this.restartChecks(c, `the loop merged ${gh.baseRefName} to fix a conflict`, job.usage, {
             conflictTriedSha: undefined,
           });
         }
@@ -985,22 +1009,20 @@ export class LoopEngine {
     // Review comments and test failures go back to the builder; an infrastructure error does not.
     const feedback: Feedback | undefined =
       !e.infra && e.items.length > 0
-        ? { kind: 'review', items: e.items, sha: gh.headRefOid, sentAt: null }
+        ? { kind: 'review', ...e.from, items: e.items, sha: gh.headRefOid, sentAt: null }
         : undefined;
-    return this.save(
-      c,
-      { stage: 'tests' },
-      {
-        maxRounds: Math.max(c.pr.round, this.maxRounds(c)) + more,
-        escalation: undefined,
-        question: undefined,
-        feedback,
-        attempts: 0,
-        lastError: undefined,
-        retryAfter: undefined,
-        limitWaits: undefined,
-      },
-    );
+    const first = this.firstCheck();
+    return this.save(c, first.stage, {
+      ...first.state,
+      maxRounds: Math.max(c.pr.round, this.maxRounds(c)) + more,
+      escalation: undefined,
+      question: undefined,
+      feedback,
+      attempts: 0,
+      lastError: undefined,
+      retryAfter: undefined,
+      limitWaits: undefined,
+    });
   }
 
   // ---------------------------------------------------------------- builder feedback
@@ -1015,7 +1037,8 @@ export class LoopEngine {
     stage?: string,
   ): boolean {
     if (c.pr.round >= this.maxRounds(c)) {
-      return this.escalate(c, `PR #${c.pr.number} hit ${c.pr.round} rounds`, items, false, usage);
+      const from = { kind, ...(stage ? { stage } : {}) };
+      return this.escalate(c, `PR #${c.pr.number} hit ${c.pr.round} rounds`, items, false, usage, from);
     }
     return this.save(
       c,
@@ -1038,7 +1061,7 @@ export class LoopEngine {
   private async awaitFix(c: Ctx, gh: GhPr): Promise<boolean> {
     const f = c.s.feedback;
     if (!f) return false;
-    if (gh.headRefOid !== f.sha) return this.restartReview(c, `the builder pushed ${short(gh.headRefOid)}`);
+    if (gh.headRefOid !== f.sha) return this.restartChecks(c, `the builder pushed ${short(gh.headRefOid)}`);
     if (f.sentAt) return false;
     const session = c.pr.sessionId === null ? undefined : this.deps.store.sessions.get(c.pr.sessionId);
     if (!session || session.status === 'ended') {
@@ -1073,15 +1096,6 @@ export class LoopEngine {
     return `${this.stages.stage(f.stage ?? '')?.title ?? f.stage ?? 'check'} feedback`;
   }
 
-  /** The checks that passed at `head`, in pipeline order ("Tests and Code review"): what the merge question names. */
-  private passedText(c: Ctx, head: string): string {
-    const titles = this.pipeline()
-      .checks.filter((id) => passedAt(c.s, id) === head)
-      .map((id) => this.stages.stage(id)?.title ?? id);
-    if (titles.length === 0) return 'CI';
-    return titles.length === 1 ? titles[0]! : `${titles.slice(0, -1).join(', ')} and ${titles.at(-1)}`;
-  }
-
   private feedbackFile(c: Ctx, gh: GhPr, f: Feedback): string {
     return [
       `# ${this.feedbackLabel(f)} for PR #${c.pr.number}`,
@@ -1106,7 +1120,7 @@ export class LoopEngine {
    * without limit. `extra` can mark a check passed at the new head already (the tester's tests, run in
    * the loop's own checkout): the first check not passed runs then.
    */
-  private restartReview(
+  private restartChecks(
     c: Ctx,
     why: string,
     usage: MetricsDelta = {},
@@ -1138,15 +1152,10 @@ export class LoopEngine {
         false,
       );
     }
-    const first = this.pipeline().checks.find((id) => this.stages.stage(id)) ?? 'tests';
-    this.log(`PR ${c.pr.repo}#${c.pr.number}: back to ${first}, round ${c.pr.round + 1} (${why})`);
+    const first = this.firstCheck();
+    this.log(`PR ${c.pr.repo}#${c.pr.number}: back to the first check, round ${c.pr.round + 1} (${why})`);
     // advanceOpen moves on from there to the first check this head has not passed.
-    return this.save(
-      c,
-      { ...stageFor(first), round: c.pr.round + 1 },
-      { ...reset, ...checkField(first) },
-      usage,
-    );
+    return this.save(c, { ...first.stage, round: c.pr.round + 1 }, { ...reset, ...first.state }, usage);
   }
 
   /** pass: no failed, cancelled or pending check. sent: failures went back to the builder. wait: checks pending. */
@@ -1171,12 +1180,14 @@ export class LoopEngine {
     items: string[],
     infra: boolean,
     usage: MetricsDelta = {},
+    from?: Pick<Feedback, 'kind' | 'stage'>,
   ): boolean {
     this.history(c, `PR ${c.pr.repo}#${c.pr.number} sent to the human: ${reason}.`);
+    const escalation = { reason, items, infra, ...(from ? { from } : {}) };
     return this.save(
       c,
       { stage: 'escalated' },
-      { escalation: { reason, items, infra }, feedback: undefined, question: undefined, attempts: 0 },
+      { escalation, feedback: undefined, question: undefined, attempts: 0 },
       usage,
     );
   }
@@ -1612,7 +1623,7 @@ export class LoopEngine {
           { once: true },
         );
       });
-      const browser = job.kind === 'qa' || job.rights.playwright;
+      const browser = job.rights.playwright;
       const timeout = browser
         ? Math.min(this.config.qaTimeoutMs, this.config.jobTimeoutMs)
         : this.config.jobTimeoutMs;
@@ -1673,7 +1684,7 @@ export class LoopEngine {
           rights: CONFLICT_RIGHTS,
         };
       default: {
-        const stage = this.stages.stage(kind.slice('check-'.length))!;
+        const stage = this.stages.stage(checkOfJobKind(kind))!;
         return {
           prompt: checkPrompt({ ...context, stageTitle: stage.title }, limit, stage.prompt),
           systemPrompt: checkSystem(stage.title, stage.access),
@@ -1922,7 +1933,7 @@ const FEEDBACK_LABEL: Record<Exclude<FeedbackKind, 'check'>, string> = {
 };
 
 /** The PR stages a check runs in; advanceOpen picks which check from the pipeline. */
-const CHECK_STAGES = new Set<string>(['tests', 'review', 'qa', 'check']);
+const atCheck = (stage: string) => isBuiltinCheck(stage) || stage === 'check';
 
 /** A custom stage may read, run commands or drive a browser: never edit files or push. */
 const CHECK_RIGHTS = {

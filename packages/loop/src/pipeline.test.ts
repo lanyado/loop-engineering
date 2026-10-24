@@ -102,7 +102,7 @@ describe('removed checks', () => {
     await h.engine.tick();
     expect(h.pr()).toMatchObject({ stage: 'awaiting_approval', outcome: null });
     const [q] = h.asked();
-    expect(q?.text).toMatch(/passed Tests\. Merge it\?/);
+    expect(q?.text).toMatch(/passed its checks\. Merge it\?/);
     expect(q?.context).toContain('no code review');
   });
 
@@ -112,7 +112,7 @@ describe('removed checks', () => {
     await h.engine.tick();
     expect(h.launcher.jobs).toEqual([]);
     expect(h.pr()).toMatchObject({ stage: 'awaiting_approval', round: 0 });
-    expect(h.asked()[0]?.text).toMatch(/passed CI\. Merge it\?/);
+    expect(h.asked()[0]?.text).toMatch(/has no checks before merge\. Merge it\?/);
   });
 
   it('without QA, a UI change the tester flags merges without a browser check', async () => {
@@ -266,6 +266,76 @@ describe('editing the pipeline while a PR is in the loop', () => {
     lib.set({ checks: ['tests', 'review'] });
     await h.engine.tick();
     expect(h.pr().outcome).toBe('merged');
+  });
+});
+
+describe('fail closed: a broken stage file or pipeline.json never lets a PR skip a check', () => {
+  /** A library as FileStageLibrary serves a broken folder: the stage kept with its error, or the pipeline's. */
+  const broken = (pipeline: Pipeline, stages: Stage[]): StageLibrary => ({
+    pipeline: () => pipeline,
+    stages: () => [...builtinStageLibrary().stages(), ...stages],
+    stage: (id) => stages.find((s) => s.id === id) ?? builtinStageLibrary().stage(id),
+  });
+  const on = { deploy: true, guardian: true };
+
+  it('holds a PR at a check whose stage file does not parse', async () => {
+    const h = harness(
+      broken({ checks: ['tests', 'security'], ...on }, [{ ...security, error: 'no front matter' }]),
+    );
+    h.launcher.on('tests', testsPass());
+    await h.builderWithPr();
+    await h.engine.tick();
+    await h.engine.tick();
+    expect(h.launcher.kinds()).toEqual(['tests']);
+    expect(h.pr()).toMatchObject({ stage: 'check', outcome: null });
+    expect(loopState(h.pr())).toMatchObject({
+      check: 'security',
+      lastError: 'stage security is broken: no front matter',
+    });
+    expect(h.logs.filter((l) => l.includes('waits: stage security'))).toHaveLength(1);
+  });
+
+  it('holds a PR at a check whose stage file is gone', async () => {
+    const h = harness(broken({ checks: ['ghost', 'tests'], ...on }, []));
+    await h.builderWithPr();
+    await h.engine.tick();
+    expect(h.launcher.jobs).toEqual([]);
+    expect(loopState(h.pr()).lastError).toBe('stage ghost has no stage file');
+    expect(h.pr().outcome).toBeNull();
+  });
+
+  it('merges nothing while pipeline.json cannot be read, even an approved head', async () => {
+    const lib = library({ checks: ['tests', 'review'] });
+    const h = harness(lib);
+    h.launcher.on('tests', testsPass()).on('review', clean());
+    await h.builderWithPr();
+    const real = lib.pipeline();
+    lib.pipeline = () => ({ ...real, error: 'pipeline.json: not valid JSON' });
+    await h.engine.tick();
+    expect(h.launcher.jobs).toEqual([]);
+    expect(h.pr().outcome).toBeNull();
+    expect(loopState(h.pr()).lastError).toBe('pipeline.json: not valid JSON');
+    lib.pipeline = () => real;
+    await h.engine.tick();
+    expect(h.pr().outcome).toBe('merged');
+  });
+});
+
+describe('escalation after a custom stage', () => {
+  it('"Continue" sends that stage\'s failures back as its own feedback, from the first check', async () => {
+    const h = harness(library({ checks: ['security', 'tests'] }, [security]), { config: { maxRounds: 1 } });
+    h.launcher.on('check-security', checkFail('a key is committed'));
+    await h.builderWithPr();
+    await h.engine.tick();
+    expect(h.pr().stage).toBe('escalated');
+    const q = h.asked().at(-1)!;
+    h.answer(q.id, 'Continue 1 more');
+    await h.engine.tick();
+    expect(h.pr()).toMatchObject({ stage: 'check' });
+    expect(loopState(h.pr())).toMatchObject({
+      check: 'security',
+      feedback: { kind: 'check', stage: 'security', items: ['a key is committed'] },
+    });
   });
 });
 

@@ -24,10 +24,13 @@ Look for secrets committed in the diff and for unsafe handling of user input.
 | `access` | `read` (files only), `shell` (can run commands) or `browser` (a shell and a headless browser)  |
 | `runs`   | `always`, or `ui-changes` (only when the diff touches UI files)                                |
 
-The prompt says what to check. The loop adds the PR, the request and the diff, and asks for pass or
-fail; failures go back to the builder like failing tests. No stage can edit files or push. The file
-name is the id: lowercase letters, digits and dashes. For the built-in `tests`, `review` and `qa`,
-`access` and `runs` are fixed.
+The prompt (4,000 characters at most) says what to check. The loop adds the PR, the request and
+the diff, and asks for pass or fail; failures go back to the builder like failing tests. No stage
+can edit files or push. The file name is the id: lowercase letters, digits and dashes. For the
+built-in `tests`, `review` and `qa`, `access` and `runs` are fixed.
+
+A file that doesn't parse is never skipped: PRs wait at that check (the server logs why) until it's
+fixed. Likewise, while `pipeline.json` can't be read, nothing is merged.
 
 `pipeline.json` sets the order of the checks, and whether the loop watches deploys and runs the
 Production Guardian after a merge:

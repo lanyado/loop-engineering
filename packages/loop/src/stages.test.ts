@@ -143,16 +143,41 @@ describe('FileStageLibrary', () => {
     expect(lib.stage('security')?.prompt).toBe('Look harder.');
   });
 
-  it('skips a broken file with one warning, and falls back to the built-in pipeline', () => {
-    lib.update({ pipeline: { checks: ['tests'], deploy: true, guardian: true } });
+  it('fails closed: keeps a broken file with its error and the user pipeline as written', () => {
+    lib.update({ pipeline: { checks: ['tests'], deploy: false, guardian: false } });
     write('broken.md', 'no front matter');
     write('README.md', '# notes');
-    expect(lib.stage('broken')).toBeUndefined();
+    write('pipeline.json', JSON.stringify({ checks: ['broken', 'gone'], deploy: false, guardian: false }));
+    expect(lib.stage('broken')).toMatchObject({
+      label: 'broken',
+      error: expect.stringContaining('---') as unknown,
+    });
+    expect(lib.stage('README')).toBeUndefined(); // notes, not a stage
+    // Unknown and broken checks stay in: the loop holds PRs there, and deploy/guardian stay off.
+    expect(lib.pipeline()).toEqual({ checks: ['broken', 'gone'], deploy: false, guardian: false });
     lib.stages();
     expect(logs.filter((l) => l.includes('broken.md'))).toHaveLength(1);
-    write('pipeline.json', '{ not json');
-    expect(lib.pipeline().checks).toEqual(['tests', 'review', 'qa']);
-    expect(logs.some((l) => l.includes('using the built-in pipeline'))).toBe(true);
+    // A stage that is broken cannot be put in the pipeline from the API.
+    expect(() => lib.update({ pipeline: { checks: ['broken'], deploy: true, guardian: true } })).toThrow(
+      /stage broken is broken/,
+    );
+  });
+
+  it.each([
+    ['bad JSON', '{ not json', 'not valid JSON'],
+    ['null', 'null', 'must be an object'],
+    ['a list', '[]', 'must be an object'],
+    ['an unknown key', '{"hello":1,"checks":[]}', 'unknown setting "hello"'],
+    ['checks as a string', '{"checks":"tests"}', 'must be a list'],
+  ])('reports an unreadable pipeline.json (%s) instead of falling back', (_, text, why) => {
+    lib.update({ pipeline: { checks: ['tests'], deploy: false, guardian: false } });
+    write('pipeline.json', text);
+    expect(lib.pipeline().error).toContain(why);
+    expect(logs.some((l) => l.includes('merges nothing'))).toBe(true);
+  });
+
+  it('a title longer than a label needs its own label', () => {
+    expect(() => parseStageFile('sec', '---\ntitle: Security review\n---\nx')).toThrow(/needs a label/);
   });
 
   it('update validates everything before it writes anything', () => {
@@ -169,6 +194,10 @@ describe('FileStageLibrary', () => {
     expect(() =>
       lib.update({ pipeline: { checks: [], deploy: true, guardian: true }, stages: { merge: fields } }),
     ).toThrow(/pipeline node's name/);
+    for (const id of ['escalated', 'reverted', 'end', 'deploy'])
+      expect(() =>
+        lib.update({ pipeline: { checks: [], deploy: true, guardian: true }, stages: { [id]: fields } }),
+      ).toThrow(/pipeline node's name/);
   });
 
   it('writes, resets and deletes stage files', () => {

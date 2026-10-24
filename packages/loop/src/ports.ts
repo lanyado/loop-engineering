@@ -93,9 +93,6 @@ export type PrJobKind = Exclude<JobKind, 'guardian'>;
 export type StageJobKind = 'review' | 'tests' | 'qa' | 'conflict' | 'check';
 export const stageJobKind = (kind: PrJobKind): StageJobKind =>
   kind.startsWith('check-') ? 'check' : (kind as StageJobKind);
-/** The job a pipeline check runs: the built-ins have their own kind, a custom stage "check-<id>". */
-export const checkJobKind = (check: string): PrJobKind =>
-  check === 'tests' || check === 'review' || check === 'qa' ? check : `check-${check}`;
 
 /** What a headless agent job may do. Mapped to Claude's tool flags and to OpenCode permissions alike. */
 export interface JobRights {

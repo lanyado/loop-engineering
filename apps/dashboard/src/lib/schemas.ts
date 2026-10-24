@@ -194,6 +194,8 @@ export const stageSchema = z.object({
   prompt: z.string(),
   builtin: z.boolean(),
   overridden: z.boolean(),
+  /** The stage's file does not parse; the loop holds PRs at it. */
+  error: z.string().optional(),
 });
 export type Stage = z.infer<typeof stageSchema>;
 /** The checks before merge in the order the loop runs them, and whether it watches deploys and runs the Guardian. */
@@ -201,6 +203,8 @@ export const pipelineSchema = z.object({
   checks: z.array(z.string()),
   deploy: z.boolean(),
   guardian: z.boolean(),
+  /** pipeline.json cannot be read; the loop merges nothing. */
+  error: z.string().optional(),
 });
 export type Pipeline = z.infer<typeof pipelineSchema>;
 export const pipelineViewSchema = z.object({ pipeline: pipelineSchema, stages: z.array(stageSchema) });
