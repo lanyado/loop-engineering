@@ -350,4 +350,14 @@ describe('the pipeline (stage files) shapes every lane', () => {
     const broken = lane(view({ checks: ['tests', 'scan'] }, [{ ...security, id: 'scan', error: 'bad' }]), []);
     expect(broken.nodes[1]).toMatchObject({ label: 'Security', problem: 'file broken' });
   });
+
+  it('a skipped review brings Approval back in an auto-merge project; only checks of open PRs are skippable', () => {
+    const skipped = pr(1, 1, 'tests', { loopState: { skip: ['review'] } });
+    expect(laneOrder({ autoMerge: true }, PIPELINE, skipped)).toContain('awaiting_approval');
+    const l = lane(view({}), [skipped], true);
+    expect(l.nodes.find((n) => n.stage === 'review')).toMatchObject({ skipped: true, skippable: true });
+    expect(l.nodes.find((n) => n.stage === 'merge')).toMatchObject({ skippable: false });
+    const merged = lane(view({}), [pr(2, 1, 'merge', { outcome: 'merged' })]);
+    expect(merged.nodes.every((n) => !n.skippable)).toBe(true);
+  });
 });

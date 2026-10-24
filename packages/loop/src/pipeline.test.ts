@@ -454,6 +454,37 @@ describe('the human skips a check for one PR', () => {
     expect(h.launcher.kinds()).toEqual(['tests', 'review']);
   });
 
+  it('also when nothing refreshes the PR first (posting its failure comment fails), and counts its usage', async () => {
+    const lib = library({});
+    const h = harness(lib, { config: { maxRounds: 1 } });
+    h.launcher
+      .on('tests', () => {
+        skipCheck(h.store, lib, h.pr().id, 'tests', true);
+        // comment() logs this and saves nothing, so the step still holds the PR as it loaded it.
+        h.github.postComment = () => Promise.reject(new Error('comment refused'));
+        return verdictResult({ passed: false, failures: ['x fails'] });
+      })
+      .on('review', clean());
+    await h.builderWithPr();
+    await h.engine.tick();
+    expect(h.pr()).toMatchObject({ outcome: 'merged' });
+    expect(h.store.metrics.get(h.pr().id)).toMatchObject({ failures: 1 });
+  });
+
+  it('the merge question says when the human skipped every check', async () => {
+    const lib = library({ checks: ['tests', 'review'] });
+    const h = harness(lib, { autoMerge: false });
+    const { number } = await h.builderWithPr();
+    h.github.pr(SLUG, number).checks = [{ name: 'build', bucket: 'pending' }]; // hold it before any job
+    await h.engine.tick();
+    skipCheck(h.store, lib, h.pr().id, 'tests', true);
+    skipCheck(h.store, lib, h.pr().id, 'review', true);
+    h.github.pr(SLUG, number).checks = [];
+    await h.engine.tick();
+    expect(h.launcher.jobs).toEqual([]);
+    expect(h.asked().at(-1)?.text).toMatch(/ran no checks \(you skipped Tests, Code review\)\. Merge it\?/);
+  });
+
   it('refuses a check outside the pipeline and a PR that left the loop', async () => {
     const lib = library({ checks: ['tests', 'review'] });
     const h = harness(lib);

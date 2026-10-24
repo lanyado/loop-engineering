@@ -72,10 +72,10 @@ import {
 import {
   loopState,
   nextCheck,
-  feedbackCheck,
   newCommitsSince,
-  testsBeforeQa,
   patchState,
+  skippedFeedback,
+  testsBeforeQa,
   type Feedback,
   type FeedbackKind,
   type LoopState,
@@ -620,8 +620,7 @@ export class LoopEngine {
     }
     if (c.s.branch !== gh.headRefName) return this.save(c, {}, { branch: gh.headRefName });
     // The human skipped the check whose send-back the builder still has: it no longer waits for a fix.
-    if (c.s.feedback && c.s.skip?.includes(feedbackCheck(c.s.feedback) ?? ''))
-      return this.save(c, {}, { feedback: undefined });
+    if (c.s.feedback && skippedFeedback(c.s, c.s.feedback)) return this.save(c, {}, { feedback: undefined });
     if (atCheck(c.pr.stage) && !c.s.feedback) {
       // Commits after a check passed: every check runs again on the new head.
       if (newCommitsSince(c.s, gh.headRefOid))
@@ -823,10 +822,12 @@ export class LoopEngine {
 
   /** "passed its checks", naming the ones the human skipped: what the merge question says. */
   private passedText(c: Ctx): string {
-    const ran = this.checksOf(c).length > 0;
-    const skipped = (c.s.skip ?? []).map((id) => this.stages.stage(id)?.title ?? id);
-    const passed = ran ? 'passed its checks' : 'has no checks before merge';
-    return skipped.length > 0 ? `${passed} (you skipped ${skipped.join(', ')})` : passed;
+    const { checks } = this.pipeline();
+    const skipped = (c.s.skip ?? []).filter((id) => checks.includes(id));
+    const names = skipped.map((id) => this.stages.stage(id)?.title ?? id).join(', ');
+    if (checks.length === 0) return 'has no checks before merge';
+    if (skipped.length === checks.length) return `ran no checks (you skipped ${names})`;
+    return skipped.length > 0 ? `passed its checks (you skipped ${names})` : 'passed its checks';
   }
 
   /** The PR gets a code review: the pipeline has it and the human did not skip it. */
@@ -1069,9 +1070,11 @@ export class LoopEngine {
     usage: MetricsDelta = {},
     stage?: string,
   ): boolean {
-    // Skipped while its job ran: its failures no longer count; the next step moves the PR on.
+    // Skipped while its job ran: its failures no longer count (its usage still does), and the next
+    // step moves the PR on. Read from the row: the skip came in after this step loaded it.
     const from = { kind, ...(stage ? { stage } : {}) };
-    if (c.s.skip?.includes(feedbackCheck({ ...from, items, sha: '', sentAt: null }) ?? '')) return true;
+    if (skippedFeedback(loopState(this.deps.store.pullRequests.require(c.pr.id)), from))
+      return this.save(c, {}, { attempts: 0, lastError: undefined }, usage);
     if (c.pr.round >= this.maxRounds(c)) {
       return this.escalate(c, `PR #${c.pr.number} hit ${c.pr.round} rounds`, items, false, usage, from);
     }

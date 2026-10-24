@@ -1,8 +1,8 @@
 import { FakeTimers } from '@loop-engineering/ask-human';
 import { FakeClock, openStore, type Store } from '@loop-engineering/core';
+import { FileStageLibrary } from '@loop-engineering/loop';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { claudeUsageModule } from '../../../server/src/modules/claude-usage';
-import { FileStageLibrary } from '@loop-engineering/loop';
 import { dashboardApi } from '../../../server/src/modules/dashboard-api';
 import { pipelineModule } from '../../../server/src/modules/pipeline';
 import { createServer, type LoopServer } from '../../../server/src/server';

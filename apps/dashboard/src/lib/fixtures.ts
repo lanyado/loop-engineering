@@ -473,7 +473,7 @@ export function demoData(now: Date): DemoData {
         ],
         access: ['read', 'shell', 'browser'],
         runs: ['always', 'ui-changes'],
-        // Keep in step with RESERVED_STAGE_IDS in packages/loop/src/stages.ts.
+        // The server's RESERVED_STAGE_IDS (http-backend.test.ts checks they match).
         reserved: [
           'check',
           'awaiting_approval',
