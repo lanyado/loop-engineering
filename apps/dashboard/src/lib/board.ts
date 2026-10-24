@@ -35,6 +35,10 @@ export interface StageNode {
   custom: boolean;
   /** A check whose stage file is missing or broken: the loop holds PRs here until it is fixed. */
   problem?: string;
+  /** One of the pipeline's checks (not Approval, Merge, Deploy or Guardian). */
+  check: boolean;
+  /** The human skipped this check for the lane's PR. */
+  skipped: boolean;
   state: NodeState;
   questions: Question[];
 }
@@ -192,6 +196,8 @@ function lane(
       icon: file?.icon ?? stage,
       custom: file !== undefined && !file.builtin,
       ...(problem ? { problem } : {}),
+      check,
+      skipped: check && (pr?.loopState.skip?.includes(stage) ?? false),
       state,
       questions: [],
     };

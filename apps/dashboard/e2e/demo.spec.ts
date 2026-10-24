@@ -469,3 +469,17 @@ test('the pencil edits a draft on the demo board; Discard changes nothing, and d
     'tests',
   );
 });
+
+test('a check node offers Skip behind a confirmation pop-up; demo data cannot be changed', async ({
+  page,
+}) => {
+  await open(page);
+  const skip = page.getByTestId('skip-check').first();
+  await skip.click();
+  const dialog = page.getByTestId('skip-dialog');
+  await expect(dialog).toContainText(/^Skip .+ for .+#\d+\?/);
+  await expect(dialog.getByTestId('skip-confirm')).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await expect(skip).toBeFocused();
+});

@@ -72,6 +72,7 @@ import {
 import {
   loopState,
   nextCheck,
+  feedbackCheck,
   newCommitsSince,
   testsBeforeQa,
   patchState,
@@ -265,6 +266,8 @@ export interface LoopStatus {
     lastError: string | null;
     /** Why the loop holds it (a broken pipeline.json or stage file), or null. */
     heldFor: string | null;
+    /** Checks the human skipped for it. */
+    skipped: string[];
   }[];
 }
 
@@ -500,6 +503,7 @@ export class LoopEngine {
           round: p.round,
           lastError: loopState(p).lastError ?? null,
           heldFor: loopState(p).heldFor ?? null,
+          skipped: loopState(p).skip ?? [],
         })),
     };
   }
@@ -618,6 +622,9 @@ export class LoopEngine {
       return this.save(c, { outcome: 'closed' }, { question: undefined, feedback: undefined });
     }
     if (c.s.branch !== gh.headRefName) return this.save(c, {}, { branch: gh.headRefName });
+    // The human skipped the check whose send-back the builder still has: it no longer waits for a fix.
+    if (c.s.feedback && c.s.skip?.includes(feedbackCheck(c.s.feedback) ?? ''))
+      return this.save(c, {}, { feedback: undefined });
     if (atCheck(c.pr.stage) && !c.s.feedback) {
       // Commits after a check passed: every check runs again on the new head.
       if (newCommitsSince(c.s, gh.headRefOid))
@@ -754,7 +761,7 @@ export class LoopEngine {
   private async qaStep(c: Ctx, gh: GhPr): Promise<boolean> {
     if (c.s.feedback) return this.awaitFix(c, gh);
     // No tester ran before QA to judge whether it is needed: QA runs when the diff touches UI files.
-    if (!testsBeforeQa(this.pipeline().checks)) {
+    if (!testsBeforeQa(this.checksOf(c))) {
       if (!(await this.changesUi(c))) {
         this.log(`PR ${c.pr.repo}#${c.pr.number}: the diff changes no UI files; skipping QA`);
         return this.afterCheck(c, gh, { qaSha: gh.headRefOid }, {});
@@ -817,17 +824,23 @@ export class LoopEngine {
     return this.stages.pipeline();
   }
 
-  /** The pipeline has the code review. */
-  private reviews(): boolean {
-    return this.pipeline().checks.includes('review');
+  /** The PR gets a code review: the pipeline has it and the human did not skip it. */
+  private reviews(c: Ctx): boolean {
+    return this.pipeline().checks.includes('review') && !c.s.skip?.includes('review');
   }
 
   private async changesUi(c: Ctx): Promise<boolean> {
     return touchesUi(await this.deps.github.diff(c.ref, c.pr.number));
   }
 
+  /** The checks this PR runs: the pipeline's, without the ones the human skipped for it. */
+  private checksOf(c: Ctx): string[] {
+    const skipped = c.s.skip ?? [];
+    return this.pipeline().checks.filter((id) => !skipped.includes(id));
+  }
+
   private nextCheck(c: Ctx, head: string): string | null {
-    return nextCheck(c.s, head, this.pipeline().checks);
+    return nextCheck(c.s, head, this.checksOf(c));
   }
 
   /** The loop cannot move this PR on until `why` is fixed: say so once, and record it on the PR. */
@@ -863,7 +876,7 @@ export class LoopEngine {
    * pipeline has no code review at all.
    */
   private needsHuman(c: Ctx): boolean {
-    return !c.project.autoMerge || c.s.reviewedBy === 'opencode' || !this.reviews();
+    return !c.project.autoMerge || c.s.reviewedBy === 'opencode' || !this.reviews(c);
   }
 
   private toMerge(c: Ctx, state: Partial<LoopState>, usage: MetricsDelta): boolean {
@@ -892,8 +905,8 @@ export class LoopEngine {
         context: `${gh.title}\n${gh.url}\nHead ${head}. ${
           !c.project.autoMerge
             ? `Auto-merge is off for ${c.project.name}.`
-            : !this.reviews()
-              ? 'The pipeline has no code review, so nothing is merged automatically.'
+            : !this.reviews(c)
+              ? 'It gets no code review (the pipeline has none, or it was skipped), so it is not merged automatically.'
               : 'Only a free OpenCode model reviewed it (Claude was out of usage), so it is not merged automatically.'
         }`,
         options: [...APPROVAL_OPTIONS],

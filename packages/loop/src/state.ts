@@ -3,6 +3,10 @@ import type { PullRequest } from '@loop-engineering/core';
 /** Why the builder got feedback: review comments, failing tests/QA/CI, a custom check, or a merge conflict. */
 export type FeedbackKind = 'review' | 'tests' | 'qa' | 'check' | 'ci' | 'conflict';
 
+/** The check a send-back came from (a custom stage's id for "check"); CI and conflicts have none. */
+export const feedbackCheck = (f: Feedback): string | undefined =>
+  f.kind === 'check' ? f.stage : f.kind === 'ci' || f.kind === 'conflict' ? undefined : f.kind;
+
 export interface Feedback {
   kind: FeedbackKind;
   /** kind "check": the custom stage that failed. */
@@ -37,6 +41,8 @@ export type LoopState = {
   qaSha?: string;
   /** Custom stages (stage files): the head each one passed at. */
   passed?: Record<string, string>;
+  /** Checks the human skipped for this PR (from the dashboard): passed at every head, until undone. */
+  skip?: string[];
   /** With stage "check": the custom stage the PR is at. */
   check?: string;
   /** The head the human answered Merge for. */

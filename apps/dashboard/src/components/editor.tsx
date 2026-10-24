@@ -83,12 +83,13 @@ export function Editor({
     setDraft((d) => ({ ...d, layout: { ...d.layout, ...patch } }));
   const setPipeline = (patch: Partial<Draft['pipeline']>) =>
     setDraft((d) => ({ ...d, pipeline: { ...d.pipeline, ...patch } }));
-  /** A stage file to write or delete; a stage made and dropped in this draft leaves no trace. */
+  /** A stage file to write or delete; a null only stays when the server has a file to remove. */
   const setEdit = (id: string, edit: StageFields | null) =>
     setDraft((d) => {
       const rest = Object.fromEntries(Object.entries(d.edits).filter(([key]) => key !== id));
-      const onServer = view.stages.some((s) => s.id === id);
-      return { ...d, edits: edit === null && !onServer ? rest : { ...rest, [id]: edit } };
+      const saved = view.stages.find((s) => s.id === id);
+      const fileOnServer = saved !== undefined && (!saved.builtin || saved.overridden);
+      return { ...d, edits: edit === null && !fileOnServer ? rest : { ...rest, [id]: edit } };
     });
   const { checks } = draft.pipeline;
   const stage = (id: string) => stages.find((s) => s.id === id);

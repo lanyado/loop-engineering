@@ -65,6 +65,8 @@ These are the `.env` values you're most likely to change. Everything else has a 
 
 **The PR loop.** Run `gh auth login`, set `LOOP_ENGINE=on`, and restart. Every PR a session opens then gets tests, a code review by a separate agent (up to 5 rounds), QA when the change needs it, and a merge when auto-merge is on for that project, or your approval when it's off. After the merge, the loop watches the deploy and reverts it if it fails (for repos with a `vercelProject` set; see [the reference](docs/reference.md#the-pr-loop)).
 
+**Skip a check for one PR.** Each check on a PR's lane has **Skip**: after you confirm in the pop-up, the loop treats it as passed for that PR (CI still has to pass, and a skipped code review means the merge waits for you). **Run again** undoes it.
+
 **Your own stages.** Each stage is a prompt file. The pencil in the top bar opens an editor on demo projects: reorder, remove or add stages, edit their prompts, and Approve to apply. Or edit the files directly: a `.md` file in `data/stages/` per stage, and the order in `data/stages/pipeline.json` (format in [packages/loop/stages/README.md](packages/loop/stages/README.md)).
 
 **Usage meters.** To show Claude's 5-hour and weekly limits in the dashboard, add this line to your Claude Code status line script:

@@ -49,7 +49,7 @@ const server = createServer({
   // last: it only adds an MCP tool and a background sweep.
   modules: [
     dashboardApi(),
-    pipelineModule({ stages }),
+    pipelineModule({ stages, poke: () => loop?.engine()?.poke() }),
     claudeUsageModule(),
     terminalModule(),
     opencodeSubagentsModule(),
