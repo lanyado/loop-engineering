@@ -1,0 +1,1 @@
+{ "checks": ["tests", "review", "qa"], "deploy": true, "guardian": true }

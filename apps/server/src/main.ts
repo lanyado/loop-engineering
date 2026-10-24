@@ -1,3 +1,4 @@
+import { FileStageLibrary } from '@loop-engineering/loop';
 import { loadTelegramConfig, TelegramConfigError } from '@loop-engineering/telegram';
 import { ConfigError, describeListenError, loadConfig, nonLocalBindWarning } from './config.js';
 import { fromRoot, loadRootEnv, REPO_ROOT } from './env.js';
@@ -6,6 +7,7 @@ import { terminalModule } from './modules/terminal.js';
 import { opencodeSubagentsModule } from './modules/opencode-subagents.js';
 import { dashboardApi } from './modules/dashboard-api.js';
 import { loopModuleFromEnv } from './modules/loop.js';
+import { pipelineModule } from './modules/pipeline.js';
 import { routerModule } from './modules/router.js';
 import { historyModule } from './modules/history.js';
 import { telegramModule } from './modules/telegram.js';
@@ -17,6 +19,9 @@ import { createServer } from './server.js';
 // LOOP_DB_PATH against the repo root too.
 loadRootEnv();
 
+// The PR loop's stage files: the user's versions and new stages (the built-ins ship in packages/loop/stages).
+const stages = new FileStageLibrary(fromRoot(process.env.STAGES_DIR?.trim() || 'data/stages'));
+
 let config;
 let telegram;
 let loop;
@@ -25,7 +30,7 @@ try {
   config = loadConfig();
   telegram = loadTelegramConfig(process.env);
   runner = runnerFromEnv(process.env, config);
-  loop = loopModuleFromEnv(process.env);
+  loop = loopModuleFromEnv(process.env, { stages });
 } catch (error) {
   if (!(error instanceof ConfigError || error instanceof TelegramConfigError)) throw error;
   console.error(error.message);
@@ -44,6 +49,7 @@ const server = createServer({
   // last: it only adds an MCP tool and a background sweep.
   modules: [
     dashboardApi(),
+    pipelineModule({ stages }),
     claudeUsageModule(),
     terminalModule(),
     opencodeSubagentsModule(),

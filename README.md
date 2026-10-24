@@ -64,6 +64,8 @@ These are the `.env` values you're most likely to change. Everything else has a 
 
 **The PR loop.** Run `gh auth login`, set `LOOP_ENGINE=on`, and restart. Every PR a session opens then gets tests, a code review by a separate agent (up to 5 rounds), QA when the change needs it, and a merge when auto-merge is on for that project, or your approval when it's off. After the merge, the loop watches the deploy and reverts it if it fails (for repos with a `vercelProject` set; see [the reference](docs/reference.md#the-pr-loop)).
 
+**Your own stages.** Each stage is a prompt file. To add a check (say, a security review) or change what a stage looks for, drop a `.md` file in `data/stages/`, and list the order in `data/stages/pipeline.json`. The format is in [packages/loop/stages/README.md](packages/loop/stages/README.md).
+
 **Usage meters.** To show Claude's 5-hour and weekly limits in the dashboard, add this line to your Claude Code status line script:
 
 ```sh

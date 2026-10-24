@@ -53,5 +53,17 @@ export {
   type ReviewVerdict,
   type TestVerdict,
 } from './prompts.js';
+export {
+  checkJobKind,
+  FileStageLibrary,
+  isStageId,
+  STAGE_ACCESS,
+  STAGE_ICONS,
+  STAGE_RUNS,
+  type EditableStageLibrary,
+  type Pipeline,
+  type Stage,
+  type StageLibrary,
+} from './stages.js';
 export { loopState, type Feedback, type FeedbackKind, type LoopState, type QuestionKind } from './state.js';
 export { GitWorkspace } from './workspace.js';

@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { buildBoard, LANE_STAGES, stageStates } from './board';
+import { buildBoard as buildWith, laneOrder, stageStates } from './board';
 import { demoData } from './fixtures';
-import type { PullRequest, Question, TreeProject, TreeSession } from './schemas';
+import type { PipelineView, PullRequest, Question, TreeProject, TreeSession } from './schemas';
 
 const NOW = new Date('2026-10-18T12:00:00.000Z');
+// The demo's pipeline is the built-in one: tests, review, QA.
+const PIPELINE = demoData(NOW).pipeline;
+const buildBoard = (tree: TreeProject[], prs: PullRequest[], pending: Question[], view = PIPELINE) =>
+  buildWith(tree, prs, pending, view);
 
 const session = (id: number, projectId: number, extra: Partial<TreeSession> = {}): TreeSession => ({
   id,
@@ -76,18 +80,28 @@ const question = (id: number, sessionId: number): Question => ({
   answeredAt: null,
 });
 
+// The default pipeline's lane, in order. "deployed" is past the last node: every node done.
+const LANE = ['tests', 'review', 'qa', 'awaiting_approval', 'merge', 'deploying'];
+
 describe('stageStates', () => {
   it('marks nodes before the stage done, the stage current, the rest not yet', () => {
-    expect(stageStates('qa')).toEqual(['done', 'done', 'current', 'todo', 'todo', 'todo']);
-    expect(stageStates('tests')[0]).toBe('current');
+    expect(stageStates('qa', null, LANE)).toEqual(['done', 'done', 'current', 'todo', 'todo', 'todo']);
+    expect(stageStates('tests', null, LANE)[0]).toBe('current');
   });
 
   it('is all done once deployed, fails Deploy when reverted and when escalated, and stops on close', () => {
-    expect(stageStates('deployed')).toEqual(LANE_STAGES.map(() => 'done'));
-    expect(stageStates('reverted')).toEqual(['done', 'done', 'done', 'done', 'done', 'failed']);
+    expect(stageStates('deployed', null, LANE)).toEqual(LANE.map(() => 'done'));
+    expect(stageStates('reverted', null, LANE)).toEqual(['done', 'done', 'done', 'done', 'done', 'failed']);
     // The escalation ends red on Deploy; the stages the loop reached stay stopped.
-    expect(stageStates('escalated')).toEqual(['halted', 'halted', 'halted', 'halted', 'halted', 'failed']);
-    expect(stageStates('canary_check')).toEqual(LANE_STAGES.map(() => 'halted'));
+    expect(stageStates('escalated', null, LANE)).toEqual([
+      'halted',
+      'halted',
+      'halted',
+      'halted',
+      'halted',
+      'failed',
+    ]);
+    expect(stageStates('canary_check', null, LANE)).toEqual(LANE.map(() => 'halted'));
   });
 });
 
@@ -254,5 +268,82 @@ describe('buildBoard', () => {
     const shop = projects.find((p) => p.project.name === 'shop')!;
     const search = shop.rows.find((r) => r.session.title === 'Search relevance')!;
     expect(search.lanes[0]!.nodes.find((n) => n.stage === 'awaiting_approval')!.questions).toHaveLength(1);
+  });
+});
+
+describe('the pipeline (stage files) shapes every lane', () => {
+  const security = {
+    id: 'security',
+    title: 'Security review',
+    label: 'Security',
+    icon: 'shield',
+    access: 'read',
+    runs: 'always',
+    prompt: 'x',
+    builtin: false,
+    overridden: false,
+  };
+  const view = (
+    pipeline: Partial<PipelineView['pipeline']>,
+    extra: PipelineView['stages'] = [security],
+  ): PipelineView => ({
+    pipeline: { ...PIPELINE.pipeline, ...pipeline },
+    stages: [...PIPELINE.stages, ...extra],
+  });
+  const lane = (v: PipelineView, prs: PullRequest[], autoMerge = false) => {
+    const tree = [{ ...project(1, [session(1, 1)]), autoMerge }];
+    return buildBoard(tree, prs, [], v).projects[0]!.rows[0]!.lanes[0]!;
+  };
+
+  it('draws the checks in the pipeline order, with a custom stage under its label and icon', () => {
+    const l = lane(view({ checks: ['security', 'review', 'tests'] }), [
+      pr(1, 1, 'check', { loopState: { check: 'security' } }),
+    ]);
+    expect(l.nodes.map((n) => n.stage)).toEqual([
+      'security',
+      'review',
+      'tests',
+      'awaiting_approval',
+      'merge',
+      'deploying',
+      'guardian',
+    ]);
+    expect(l.nodes[0]).toMatchObject({ label: 'Security', icon: 'shield', custom: true, state: 'current' });
+    expect(l.nodes[1]).toMatchObject({ label: 'CR', custom: false, state: 'todo' });
+  });
+
+  it('marks the checks before the current one done, in the pipeline order', () => {
+    const l = lane(view({ checks: ['review', 'tests'] }), [pr(1, 1, 'tests')]);
+    expect(l.nodes.slice(0, 3).map((n) => [n.stage, n.state])).toEqual([
+      ['review', 'done'],
+      ['tests', 'current'],
+      ['awaiting_approval', 'todo'],
+    ]);
+  });
+
+  it('leaves out Deploy and Guardian when the pipeline turns them off', () => {
+    const l = lane(view({ deploy: false, guardian: false }), [pr(1, 1, 'tests')]);
+    expect(l.nodes.map((n) => n.stage)).toEqual(['tests', 'review', 'qa', 'awaiting_approval', 'merge']);
+  });
+
+  it('shows Approval in an auto-merge project only when the pipeline has no review, or a PR waits there', () => {
+    const p = { autoMerge: true };
+    expect(laneOrder(p, PIPELINE, null)).not.toContain('awaiting_approval');
+    expect(laneOrder(p, view({ checks: ['tests'] }), null)).toContain('awaiting_approval');
+    expect(laneOrder(p, PIPELINE, pr(1, 1, 'awaiting_approval'))).toContain('awaiting_approval');
+  });
+
+  it('keeps a check whose stage file is gone: the PR waits there', () => {
+    const l = lane(view({ checks: ['tests', 'security'] }, []), [
+      pr(1, 1, 'check', { loopState: { check: 'security' } }),
+    ]);
+    expect(l.nodes[1]).toMatchObject({
+      stage: 'security',
+      label: 'security',
+      state: 'current',
+      problem: 'no stage file',
+    });
+    const broken = lane(view({ checks: ['tests', 'security'] }, [{ ...security, error: 'bad' }]), []);
+    expect(broken.nodes[1]).toMatchObject({ label: 'Security', problem: 'file broken' });
   });
 });

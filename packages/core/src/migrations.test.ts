@@ -246,12 +246,49 @@ describe('migrations', () => {
     const skip = `INSERT INTO guardian_runs (project_id, repo, trigger, status, created_at)
                   VALUES (1, 'web', 'daily', 'skipped', 't')`;
     expect(() => db.exec(skip)).toThrow(/CHECK/);
-    expect(migrate(db)).toEqual([17]);
+    expect(
+      migrate(
+        db,
+        MIGRATIONS.filter((m) => m.version <= 17),
+      ),
+    ).toEqual([17]);
     db.exec(skip);
     expect(db.prepare('SELECT id, status, summary FROM guardian_runs ORDER BY id').all()).toEqual([
       { id: 1, status: 'passed', summary: 'all checks passed' },
       { id: 2, status: 'skipped', summary: '' },
     ]);
+    db.close();
+  });
+
+  it('migration 18 allows the check stage and keeps PRs, their metrics and their links', () => {
+    const db = new Database(':memory:');
+    db.pragma('foreign_keys = ON');
+    migrate(
+      db,
+      MIGRATIONS.filter((m) => m.version < 18),
+    );
+    db.exec(`
+      INSERT INTO projects (name, created_at) VALUES ('p', 't');
+      INSERT INTO pull_requests (project_id, repo, number, url, stage, created_at, updated_at, loop_state)
+        VALUES (1, 'web', 7, 'u7', 'review', 't', 't', '{"reviewedSha":"abc"}'),
+               (1, 'web', 8, 'u8', 'merge', 't', 't', '{}');
+      UPDATE pull_requests SET reverted_by_pr_id = 2 WHERE id = 1;
+      INSERT INTO loop_metrics (pr_id) VALUES (1);
+    `);
+    const check = `INSERT INTO pull_requests (project_id, repo, number, url, stage, created_at, updated_at)
+                   VALUES (1, 'web', 9, 'u9', 'check', 't', 't')`;
+    expect(() => db.exec(check)).toThrow(/CHECK/);
+    expect(migrate(db)).toEqual([18]);
+    db.exec(check);
+    expect(
+      db.prepare('SELECT id, stage, reverted_by_pr_id, loop_state FROM pull_requests ORDER BY id').all(),
+    ).toEqual([
+      { id: 1, stage: 'review', reverted_by_pr_id: 2, loop_state: '{"reviewedSha":"abc"}' },
+      { id: 2, stage: 'merge', reverted_by_pr_id: null, loop_state: '{}' },
+      { id: 3, stage: 'check', reverted_by_pr_id: null, loop_state: '{}' },
+    ]);
+    expect(db.prepare('SELECT pr_id FROM loop_metrics').all()).toEqual([{ pr_id: 1 }]);
+    expect(() => db.exec(`UPDATE pull_requests SET stage = 'nope' WHERE id = 1`)).toThrow(/CHECK/);
     db.close();
   });
 

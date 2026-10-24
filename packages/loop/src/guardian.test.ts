@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProductionGuardian, type GuardianConfig } from './guardian.js';
 import { verdictResult } from './fakes.js';
 import type { AgentJob, AgentJobResult } from './ports.js';
+import { builtinStageLibrary } from './stages.js';
 import { loopState } from './state.js';
 import { Harness, SLUG } from './test-support/harness.js';
 
@@ -96,6 +97,33 @@ describe('ProductionGuardian', () => {
   afterEach(() => {
     h.close();
     rmSync(evidence, { recursive: true, force: true });
+  });
+
+  it.each([
+    ['has no Guardian', { guardian: false }],
+    ['cannot be read', { error: 'pipeline.json: not valid JSON' }],
+  ])('runs nothing on schedule when the pipeline %s', async (_, change) => {
+    guardian = new ProductionGuardian(
+      {
+        store: h.store,
+        github: h.github,
+        launcher: h.launcher,
+        workspace: h.workspace,
+        questions: h.questions,
+        timers: h.timers,
+        stages: {
+          ...builtinStageLibrary(),
+          pipeline: () => ({ ...builtinStageLibrary().pipeline(), ...change }),
+        },
+        log: (m) => h.logs.push(m),
+      },
+      { evidenceDir: evidence },
+    );
+    deployedPr();
+    on();
+    await guardian.tick();
+    expect(h.store.guardianRuns.list()).toEqual([]);
+    expect(h.launcher.jobs).toEqual([]);
   });
 
   describe('after a deploy', () => {

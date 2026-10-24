@@ -251,7 +251,13 @@ describe('loopModuleFromEnv', () => {
       maxRounds: 5,
       tickIntervalMs: 30_000,
       jobModel: null,
-      stageProviders: { review: 'claude', tests: 'opencode', qa: 'claude', conflict: 'claude' },
+      stageProviders: {
+        review: 'claude',
+        tests: 'opencode',
+        qa: 'claude',
+        conflict: 'claude',
+        check: 'claude',
+      },
     });
     expect(loopConfigFromEnv({ LOOP_TESTS_PROVIDER: 'Builder' }).stageProviders?.tests).toBe('builder');
     expect(() => loopConfigFromEnv({ LOOP_QA_PROVIDER: 'gpt' })).toThrow(/LOOP_QA_PROVIDER must be one of/);

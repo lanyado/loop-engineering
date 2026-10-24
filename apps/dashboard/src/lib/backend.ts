@@ -2,6 +2,7 @@ import type {
   AnswerResult,
   ClaudeUsage,
   Project,
+  PipelineView,
   PullRequest,
   Question,
   Settings,
@@ -43,8 +44,10 @@ export interface Backend {
   endSession(sessionId: number): Promise<{ id: number; status: string }>;
   /** Opens a terminal on the server's Mac showing the session's running agent. */
   openTerminal(sessionId: number): Promise<void>;
-  /** Opens a terminal following a PR stage's job log (review, tests or QA). */
-  openStageTerminal(prId: number, stage: 'review' | 'tests' | 'qa'): Promise<void>;
+  /** Opens a terminal following a PR stage's job log (review, tests, QA or a custom stage). */
+  openStageTerminal(prId: number, stage: string): Promise<void>;
+  /** The PR loop's pipeline and its stages (stage files). */
+  pipeline(): Promise<PipelineView>;
   /**
    * A finished session's stored transcript (its past conversation, redacted), or null when nothing
    * is stored yet.

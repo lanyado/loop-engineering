@@ -1,25 +1,37 @@
 import { newestFinishedFirst } from './format';
-import type { PullRequest, Question, TreeProject, TreeSession } from './schemas';
+import type { PipelineView, PullRequest, Question, TreeProject, TreeSession } from './schemas';
 
 /*
  * The one-screen board: every project, and in it every live session as a pipeline read left to right
- * (n8n style): Session → Builder → one lane per PR: Tests → CR → QA → Approval → Merge → Deploy, and
- * the Deploy node also shows where the lane ended (shipped/merged/…). Pure functions, unit tested;
- * the page only renders what buildBoard returns.
+ * (n8n style): Session → Builder → one lane per PR: the pipeline's checks in order (built-in: Tests →
+ * CR → QA; custom stage files too) → Approval → Merge → Deploy, and the Deploy node also shows where
+ * the lane ended (shipped/merged/…). Pure functions, unit tested; the page only renders what
+ * buildBoard returns.
  */
 
-/* The PR loop's stages as nodes, in order (tests before code review: the reviewer sees a head whose
- * tests pass). "deployed" is past the last node: every node done. */
-export const LANE_STAGES = ['tests', 'review', 'qa', 'awaiting_approval', 'merge', 'deploying'] as const;
-export type LaneStage = (typeof LANE_STAGES)[number];
 /** The node after Deploy: the Production Guardian's check of the live site. It has no PR stage of its own. */
 export const GUARDIAN_NODE = 'guardian';
-export type NodeStage = LaneStage | typeof GUARDIAN_NODE;
+/** A node's id: a check's stage id (tests, review, qa or a custom stage), or one of the fixed nodes. */
+export type NodeStage = string;
+/** Names of the fixed nodes; a check's name is its stage file's label. */
+const FIXED_LABELS: Record<string, string> = {
+  awaiting_approval: 'Approval',
+  merge: 'Merge',
+  deploying: 'Deploy',
+  [GUARDIAN_NODE]: 'Guardian',
+};
 
 export type NodeState = 'todo' | 'current' | 'done' | 'failed' | 'halted';
 
 export interface StageNode {
   stage: NodeStage;
+  /** The node's name (a check's label, e.g. "CR") and icon. */
+  label: string;
+  icon: string;
+  /** A custom stage (a stage file), not one of the built-in ones. */
+  custom: boolean;
+  /** A check whose stage file is missing or broken: the loop holds PRs here until it is fixed. */
+  problem?: string;
   state: NodeState;
   questions: Question[];
 }
@@ -70,25 +82,57 @@ const LOOP_SESSION_BRANCH = 'loop/pr-loop';
 /** A daily-run alert belongs to no PR: it starts with this, so the unplaced list can name who asked. */
 const GUARDIAN_QUESTION = 'Production Guardian';
 
-/** State of each stage node for a PR at `stage`. */
-export function stageStates(stage: string, outcome: string | null = null): NodeState[] {
+/**
+ * State of each node of `order` for a PR at `stage` (for a custom stage: its id, not "check"). The
+ * loop runs the nodes in this order, so the ones before the current node are done.
+ */
+export function stageStates(
+  stage: string,
+  outcome: string | null = null,
+  order: readonly string[],
+): NodeState[] {
+  const last = order.length - 1;
   // Merged where nothing deploys: the PR stays at "merge", which is done.
   if (stage === 'merge' && outcome === 'merged')
-    return LANE_STAGES.map((s) => (s === 'deploying' ? 'todo' : 'done'));
+    return order.map((s) => (s === 'deploying' ? 'todo' : 'done'));
   // Closed by the human: the loop stopped wherever it was.
-  if (outcome === 'closed') return LANE_STAGES.map(() => 'halted');
-  if (stage === 'deployed') return LANE_STAGES.map(() => 'done');
+  if (outcome === 'closed') return order.map(() => 'halted');
+  if (stage === 'deployed') return order.map(() => 'done');
   // Reverted PRs had merged and deployed: the deploy failed.
-  if (stage === 'reverted')
-    return LANE_STAGES.map((_, i) => (i === LANE_STAGES.length - 1 ? 'failed' : 'done'));
+  if (stage === 'reverted') return order.map((_, i) => (i === last ? 'failed' : 'done'));
   // Escalated: the loop gave up on this PR. The stages it reached stay stopped, and the lane ends
   // red: its Deploy node carries the escalation, like a reverted lane's failure does.
   if (stage === 'escalated' || outcome === 'escalated')
-    return LANE_STAGES.map((_, i) => (i === LANE_STAGES.length - 1 ? 'failed' : 'halted'));
-  const index = (LANE_STAGES as readonly string[]).indexOf(stage);
-  // An unknown stage: the loop stopped and the stage it stopped at is not recorded.
-  if (index < 0) return LANE_STAGES.map(() => 'halted');
-  return LANE_STAGES.map((_, i) => (i < index ? 'done' : i === index ? 'current' : 'todo'));
+    return order.map((_, i) => (i === last ? 'failed' : 'halted'));
+  const index = order.indexOf(stage);
+  // An unknown stage (one removed from the pipeline, which the loop moves past on its next step).
+  if (index < 0) return order.map(() => 'halted');
+  return order.map((_, i) => (i < index ? 'done' : i === index ? 'current' : 'todo'));
+}
+
+/** The node a PR is at: a custom stage's id for stage "check". */
+const nodeOf = (pr: PullRequest) => (pr.stage === 'check' ? (pr.loopState.check ?? 'check') : pr.stage);
+
+/**
+ * A lane's nodes before Guardian: the pipeline's checks, Approval (not in auto-merge projects whose
+ * pipeline reviews the code, unless a PR waits there anyway), Merge, and Deploy (when the pipeline
+ * watches deploys, or the PR got that far before it stopped).
+ */
+export function laneOrder(
+  project: { autoMerge: boolean },
+  view: PipelineView,
+  pr: PullRequest | null,
+): string[] {
+  // A check with no stage file stays in: the loop holds PRs there until the file is back.
+  const { checks } = view.pipeline;
+  const approval = !(project.autoMerge && checks.includes('review')) || pr?.stage === 'awaiting_approval';
+  const deployed = pr !== null && ['deploying', 'deployed', 'reverted'].includes(pr.stage);
+  return [
+    ...checks,
+    ...(approval ? ['awaiting_approval'] : []),
+    'merge',
+    ...(view.pipeline.deploy || deployed ? ['deploying'] : []),
+  ];
 }
 
 /**
@@ -118,24 +162,45 @@ function laneEnd(pr: PullRequest | null): Omit<LaneEnd, 'questions'> {
  * The node a loop question belongs on: an approval on Approval, a deploy problem on Deploy, an
  * escalation on the lane's end (the loop stopped and needs a decision).
  */
-function loopQuestionNode(kind: string, pr: PullRequest): NodeStage | 'end' {
+/** The node a loop question goes on, or "end" for the lane's end. */
+function loopQuestionNode(kind: string, pr: PullRequest): string {
   if (kind === GUARDIAN_NODE) return GUARDIAN_NODE;
   if (kind === 'approval') return 'awaiting_approval';
   if (kind === 'deploy_timeout' || kind === 'revert_failed') return 'deploying';
   if (kind === 'escalation') return 'end';
-  const current = (LANE_STAGES as readonly string[]).indexOf(pr.stage);
-  return current >= 0 ? LANE_STAGES[current]! : 'end';
+  return nodeOf(pr);
 }
 
-function lane(pr: PullRequest | null, loopQuestion?: Question): Lane {
-  const states = pr ? stageStates(pr.stage, pr.outcome) : LANE_STAGES.map((): NodeState => 'todo');
-  const nodes: StageNode[] = LANE_STAGES.map((stage, i) => ({ stage, state: states[i]!, questions: [] }));
-  nodes.push({ stage: GUARDIAN_NODE, state: guardianState(pr), questions: [] });
+function lane(
+  project: TreeProject,
+  view: PipelineView,
+  pr: PullRequest | null,
+  loopQuestion?: Question,
+): Lane {
+  const order = laneOrder(project, view, pr);
+  const states = pr ? stageStates(nodeOf(pr), pr.outcome, order) : order.map((): NodeState => 'todo');
+  const node = (stage: string, state: NodeState): StageNode => {
+    const file = view.stages.find((s) => s.id === stage);
+    const check = !(stage in FIXED_LABELS);
+    const problem = !check ? undefined : !file ? 'no stage file' : file.error ? 'file broken' : undefined;
+    return {
+      stage,
+      label: file?.label ?? FIXED_LABELS[stage] ?? stage,
+      icon: file?.icon ?? stage,
+      custom: file !== undefined && !file.builtin,
+      ...(problem ? { problem } : {}),
+      state,
+      questions: [],
+    };
+  };
+  const nodes = order.map((stage, i) => node(stage, states[i]!));
+  if (view.pipeline.guardian || pr?.loopState.guardian) nodes.push(node(GUARDIAN_NODE, guardianState(pr)));
   const end: LaneEnd = { ...laneEnd(pr), questions: [] };
   if (pr && loopQuestion) {
     const kind = pr.loopState.question?.id === loopQuestion.id ? pr.loopState.question.kind : GUARDIAN_NODE;
     const at = loopQuestionNode(kind, pr);
-    (at === 'end' ? end : nodes.find((n) => n.stage === at)!).questions.push(loopQuestion);
+    // A node the lane does not draw (the pipeline changed under the PR): the lane's end carries it.
+    (nodes.find((n) => n.stage === at) ?? end).questions.push(loopQuestion);
   }
   return { pr, nodes, end };
 }
@@ -156,7 +221,12 @@ function builderState(status: string, open: PullRequest[]): BuilderState {
 /** Still in the loop: no outcome yet, or merged and still deploying (the loop sets both at merge). */
 const isOpen = (pr: PullRequest) => pr.outcome === null || pr.stage === 'deploying';
 
-export function buildBoard(tree: TreeProject[], prs: PullRequest[], pending: Question[]): Board {
+export function buildBoard(
+  tree: TreeProject[],
+  prs: PullRequest[],
+  pending: Question[],
+  view: PipelineView,
+): Board {
   const pendingById = new Map(pending.map((q) => [q.id, q]));
   // A loop question names its PR (loopState.question); it goes on that PR's lane, not the builder.
   const loopQuestionOf = new Map<number, Question>();
@@ -186,8 +256,8 @@ export function buildBoard(tree: TreeProject[], prs: PullRequest[], pending: Que
       }
       // Oldest first, so lanes keep their place as their PRs move.
       const drawn = open.length > 0 ? [...open].sort((a, b) => a.id - b.id) : sessionPrs.slice(0, 1);
-      const lanes = drawn.map((pr) => lane(pr, loopQuestionOf.get(pr.id)));
-      if (lanes.length === 0 && project.kind === 'git') lanes.push(lane(null));
+      const lanes = drawn.map((pr) => lane(project, view, pr, loopQuestionOf.get(pr.id)));
+      if (lanes.length === 0 && project.kind === 'git') lanes.push(lane(project, view, null));
       const row: Row = {
         session,
         builder: {

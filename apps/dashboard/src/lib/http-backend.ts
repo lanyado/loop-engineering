@@ -44,7 +44,11 @@ export class HttpBackend implements Backend {
     return (await this.send('PATCH', `/projects/${id}`, patch, responses.project)).project;
   }
 
-  async openStageTerminal(prId: number, stage: 'review' | 'tests' | 'qa') {
+  async pipeline() {
+    return this.get('/pipeline', responses.pipeline);
+  }
+
+  async openStageTerminal(prId: number, stage: string) {
     await this.send('POST', `/prs/${prId}/terminal`, { stage }, responses.terminal);
   }
 

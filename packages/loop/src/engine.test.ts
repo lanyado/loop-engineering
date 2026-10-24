@@ -654,7 +654,7 @@ describe('merge approval (B2)', () => {
     const [q] = h.asked();
     expect(q).toMatchObject({
       sessionId: session.id,
-      text: `PR web#1 at ${head(h).slice(0, 7)} (round 1) passed review and tests. Merge it?`,
+      text: `PR web#1 at ${head(h).slice(0, 7)} (round 1) passed its checks. Merge it?`,
       options: ['Merge', 'Hold', 'Close'],
       recommendedOption: 'Hold',
     });
@@ -1139,7 +1139,13 @@ describe('metrics and providers', () => {
 });
 
 describe('per-stage providers', () => {
-  const stages = { review: 'claude', tests: 'opencode', qa: 'claude', conflict: 'claude' } as const;
+  const stages = {
+    review: 'claude',
+    tests: 'opencode',
+    qa: 'claude',
+    conflict: 'claude',
+    check: 'claude',
+  } as const;
 
   it("runs each job on its stage's CLI, whatever the builder runs on", async () => {
     const h = harness({ config: { stageProviders: stages } });
@@ -1178,7 +1184,7 @@ describe('per-stage providers', () => {
     ]);
     expect(h.pr()).toMatchObject({ stage: 'awaiting_approval', outcome: null });
     expect(loopState(h.pr()).reviewedBy).toBe('opencode');
-    expect(h.asked().at(-1)?.text).toMatch(/passed review and tests\. Merge it\?/);
+    expect(h.asked().at(-1)?.text).toMatch(/passed its checks\. Merge it\?/);
   });
 });
 

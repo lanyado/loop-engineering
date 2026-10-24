@@ -31,17 +31,23 @@ function ProjectHeader({ board }: { board: ProjectBoard }) {
 
 export default async function BoardPage() {
   const backend = await backendForViewer();
-  const [tree, prs, pending] = await Promise.all([
+  const [tree, prs, pending, pipeline] = await Promise.all([
     backend.tree(),
     backend.pullRequests(),
     backend.pendingQuestions(),
+    backend.pipeline(),
   ]);
-  const board = buildBoard(tree, prs, pending);
+  const board = buildBoard(tree, prs, pending, pipeline);
   const now = requestTime();
   const readOnly = backend.demo;
   return (
     <>
       <h1 className="sr-only">Pipelines</h1>
+      {pipeline.pipeline.error && (
+        <p className="offline-banner" data-testid="pipeline-error">
+          The PR loop waits until this is fixed: {pipeline.pipeline.error}.
+        </p>
+      )}
       {board.unplaced.length > 0 && (
         <section className="unplaced" data-testid="unplaced">
           <h2>Waiting on you</h2>
@@ -69,7 +75,6 @@ export default async function BoardPage() {
                   key={row.session.id}
                   row={row}
                   folder={p.project.kind === 'folder'}
-                  autoMerge={p.project.autoMerge}
                   readOnly={readOnly}
                   now={now}
                 />
