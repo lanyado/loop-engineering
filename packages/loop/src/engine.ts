@@ -31,6 +31,7 @@ import type {
   GitHub,
   JobKind,
   LoopRunner,
+  CheckJobKind,
   PrJobKind,
   PushResult,
   RepoRef,
@@ -628,7 +629,9 @@ export class LoopEngine {
       // Which check runs comes from the pipeline, so an edit to it applies on the PR's next step.
       const next = this.nextCheck(c, gh.headRefOid);
       if (next === null) return this.toMerge(c, {}, {});
-      if (next !== checkAt(c.pr.stage, c.s)) return this.save(c, stageFor(next), checkField(next));
+      // Another check now (the pipeline changed, or a skip): it starts with fresh attempts.
+      if (next !== checkAt(c.pr.stage, c.s))
+        return this.save(c, stageFor(next), { ...checkField(next), attempts: 0, lastError: undefined });
       // Fail closed: a check whose stage file is missing or broken holds the PR, never skips.
       const stage = this.stages.stage(next);
       if (!stage || stage.error)
@@ -1070,8 +1073,9 @@ export class LoopEngine {
     usage: MetricsDelta = {},
     stage?: string,
   ): boolean {
-    // Skipped while its job ran: its failures no longer count (its usage still does), and the next
-    // step moves the PR on. Read from the row: the skip came in after this step loaded it.
+    // Skipped while its job ran: nothing goes back to the builder and the PR is not escalated (the
+    // job's usage, failure included, is still recorded); the next step moves the PR on. Read from
+    // the row: the skip came in after this step loaded it.
     const from = { kind, ...(stage ? { stage } : {}) };
     if (skippedFeedback(loopState(this.deps.store.pullRequests.require(c.pr.id)), from))
       return this.save(c, {}, { attempts: 0, lastError: undefined }, usage);
@@ -1082,7 +1086,7 @@ export class LoopEngine {
       c,
       {},
       {
-        feedback: { kind, items, sha: gh.headRefOid, sentAt: null, ...(stage ? { stage } : {}) },
+        feedback: { ...from, items, sha: gh.headRefOid, sentAt: null },
         previous: kind === 'review' ? items : c.s.previous,
         attempts: 0,
         lastError: undefined,
@@ -1613,7 +1617,7 @@ export class LoopEngine {
       }
     } catch (err) {
       if (this.stopped) return { ok: false, progressed: false };
-      return { ok: false, progressed: this.failure(c, `${kind} job`, err, usage) };
+      return this.jobFailure(c, kind, err, usage);
     }
     add(result);
     if (out.verdict === null && result.isError && MODEL_LIMIT.test(result.text)) {
@@ -1622,7 +1626,7 @@ export class LoopEngine {
     if (c.s.retryAfter || c.s.limitWaits) this.save(c, {}, { retryAfter: undefined, limitWaits: undefined });
     if (out.verdict === null) {
       const why = result.isError ? `error: ${clip(result.text, 500)}` : 'no decision block in its answer';
-      return { ok: false, progressed: this.failure(c, `${kind} job`, new Error(why), usage) };
+      return this.jobFailure(c, kind, new Error(why), usage);
     }
     if (c.s.networkWaits) this.save(c, {}, { networkWaits: undefined });
     if (out.pushed?.status === 'rejected') {
@@ -1844,6 +1848,18 @@ export class LoopEngine {
    * infrastructure problem (or, with mayEscalate false, left to the caller's own question).
    * Returns whether it escalated.
    */
+  /**
+   * A job that crashed or gave no decision: a failed attempt, unless the human skipped its check while
+   * it ran (read from the row); then its usage is recorded and the PR moves on, never escalated.
+   */
+  private jobFailure(c: Ctx, kind: PrJobKind, err: unknown, usage: MetricsDelta): JobOutcome<never> {
+    const check = kind.startsWith('check-') ? checkOfJobKind(kind as CheckJobKind) : kind;
+    const { skip } = loopState(this.deps.store.pullRequests.require(c.pr.id));
+    if (kind !== 'conflict' && skip?.includes(check))
+      return { ok: false, progressed: this.save(c, {}, { attempts: 0, lastError: undefined }, usage) };
+    return { ok: false, progressed: this.failure(c, `${kind} job`, err, usage) };
+  }
+
   private failure(
     c: Ctx,
     what: string,

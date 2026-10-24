@@ -471,6 +471,27 @@ describe('the human skips a check for one PR', () => {
     expect(h.store.metrics.get(h.pr().id)).toMatchObject({ failures: 1 });
   });
 
+  it("a check skipped while its job's last allowed attempt fails with no decision does not escalate", async () => {
+    const lib = library({ checks: ['tests', 'review'] });
+    const h = harness(lib);
+    h.launcher
+      .on(
+        'tests',
+        verdictResult({}), // no decision: attempt 1
+        verdictResult({}), // attempt 2
+        () => {
+          skipCheck(h.store, lib, h.pr().id, 'tests', true);
+          return verdictResult({}); // attempt 3, the last: would escalate
+        },
+      )
+      .on('review', clean());
+    await h.builderWithPr();
+    for (let i = 0; i < 3; i++) await h.engine.tick();
+    expect(h.pr()).toMatchObject({ outcome: 'merged' });
+    expect(loopState(h.pr())).toMatchObject({ attempts: 0 });
+    expect(loopState(h.pr()).lastError).toBeUndefined();
+  });
+
   it('the merge question says when the human skipped every check', async () => {
     const lib = library({ checks: ['tests', 'review'] });
     const h = harness(lib, { autoMerge: false });

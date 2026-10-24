@@ -74,6 +74,7 @@ export function pipelineModule({
         if (!parsed.success) return c.json({ error: z.prettifyError(parsed.error) }, 400);
         // An unknown PR is a NotFoundError: 404 (app.ts).
         const id = Number(c.req.param('id'));
+        if (!Number.isInteger(id)) return c.json({ error: 'the PR id must be a number' }, 400);
         const pullRequest = skipCheck(ctx.store, stages, id, parsed.data.check, parsed.data.skip);
         poke();
         return c.json({ pullRequest });

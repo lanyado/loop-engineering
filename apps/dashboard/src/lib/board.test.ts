@@ -359,5 +359,7 @@ describe('the pipeline (stage files) shapes every lane', () => {
     expect(l.nodes.find((n) => n.stage === 'merge')).toMatchObject({ skippable: false });
     const merged = lane(view({}), [pr(2, 1, 'merge', { outcome: 'merged' })]);
     expect(merged.nodes.every((n) => !n.skippable)).toBe(true);
+    const escalated = lane(view({}), [pr(3, 1, 'escalated')]);
+    expect(escalated.nodes.every((n) => !n.skippable)).toBe(true);
   });
 });
