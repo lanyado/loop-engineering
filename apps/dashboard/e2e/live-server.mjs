@@ -166,6 +166,7 @@ function reset(server) {
     sessionModel: 'opus',
     fallbackModel: 'opencode/glm-5.3-flash-free',
     telegramAllowlist: [],
+    dashboardLayout: {},
   });
   seed(server);
 }

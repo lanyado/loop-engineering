@@ -63,7 +63,8 @@ import { REPO_ROOT } from '../env.js';
  *                                              snippet }] }, best match first; every word of q must match
  *   GET    /settings                         { settings }
  *   PATCH  /settings                         any of { sessionModel, fallbackModel, telegramAllowlist,
- *                                              claudeEnabled, opencodeEnabled, opencodeBackupModels };
+ *                                              claudeEnabled, opencodeEnabled, opencodeBackupModels,
+ *                                              dashboardLayout (a JSON object of 4 KB at most) };
  *                                              400 turning both CLIs off
  *
  * Every body is a strict JSON object: unknown keys, wrong types and out-of-range values are 400s.
@@ -167,6 +168,10 @@ const settingsPatch = z
     claudeEnabled: z.boolean(),
     opencodeEnabled: z.boolean(),
     opencodeBackupModels: z.array(text(200)).max(10),
+    // The dashboard owns what is inside; the server only keeps it small.
+    dashboardLayout: z
+      .record(z.string(), z.unknown())
+      .refine((layout) => JSON.stringify(layout).length <= 4096, 'dashboardLayout is over 4 KB'),
   })
   .partial()
   .refine(nonEmpty, 'nothing to update');

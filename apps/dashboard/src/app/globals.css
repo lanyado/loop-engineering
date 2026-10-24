@@ -441,6 +441,13 @@ select {
   width: 18px;
   height: 18px;
 }
+.topbar-items {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2) var(--s-4);
+  min-width: 0;
+}
 .topbar-actions {
   margin-left: auto;
   display: flex;
@@ -1116,19 +1123,11 @@ button.option.recommended:disabled {
   color: #d97757;
 }
 
-.usage {
-  display: flex;
-  align-items: center;
-  gap: var(--s-4);
-  margin-left: var(--s-4);
-}
-.usage-missing {
-  margin: 0 0 0 var(--s-4);
-}
 .meter {
   display: grid;
   gap: 3px;
-  width: 190px;
+  /* Two meters and the actions fit a phone's top bar. */
+  width: min(190px, 30vw);
 }
 .meter-head {
   display: flex;
@@ -1839,5 +1838,216 @@ button.node-plus:hover:not(:disabled) {
   }
   .content {
     padding: var(--s-6) var(--s-6) var(--s-10);
+  }
+}
+
+/* ---------- Layout on the board, and the pencil's editor ---------- */
+
+.warning {
+  color: var(--warn);
+}
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  align-items: center;
+}
+.placement,
+.hidden-projects li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  align-items: center;
+}
+.placement {
+  margin-top: var(--s-4);
+}
+.hidden-projects {
+  margin-top: var(--s-6);
+}
+.hidden-projects ul {
+  list-style: none;
+  margin: var(--s-2) 0 0;
+  padding: 0;
+  display: grid;
+  gap: var(--s-1);
+  max-width: 420px;
+}
+
+.editor .topbar {
+  flex-wrap: wrap;
+}
+.pipeline-editor {
+  display: grid;
+  gap: var(--s-2);
+  padding: var(--s-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.pipeline-editor p {
+  margin: 0;
+}
+.pipeline-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  align-items: center;
+}
+.stage-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  padding: var(--s-1) var(--s-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.stage-chip svg {
+  width: 16px;
+  height: 16px;
+}
+.stage-chip.locked {
+  opacity: 0.7;
+  border-style: dashed;
+}
+
+/* iOS-style edit mode: items wiggle, "−" on the corner removes, the arrows under them move them. */
+.wiggle {
+  position: relative;
+  display: inline-grid;
+  justify-items: center;
+  gap: 2px;
+  animation: wiggle 0.28s ease-in-out infinite alternate;
+  cursor: grab;
+}
+.wiggle:nth-child(even) {
+  animation-delay: -0.14s;
+}
+/* Still under the pointer or the keyboard, so what is aimed at stays put. */
+.wiggle:hover,
+.wiggle:focus-within {
+  animation-play-state: paused;
+}
+@keyframes wiggle {
+  from {
+    transform: rotate(-1.2deg);
+  }
+  to {
+    transform: rotate(1.2deg);
+  }
+}
+.wiggle-body {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--radius);
+  cursor: inherit;
+}
+.wiggle-body:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.wiggle-remove {
+  position: absolute;
+  top: -8px;
+  left: -8px;
+  z-index: 1;
+  width: 20px;
+  height: 20px;
+  min-height: 0;
+  padding: 0;
+  border-radius: 50%;
+  border: none;
+  background: var(--muted);
+  color: var(--bg);
+  font-weight: 800;
+  line-height: 1;
+}
+.wiggle-move {
+  display: flex;
+  gap: 2px;
+}
+.wiggle-move button {
+  min-height: 0;
+  padding: 0 6px;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: var(--s-4);
+  background: color-mix(in srgb, var(--text) 30%, transparent);
+}
+.editor-sheet {
+  width: min(520px, 100%);
+  max-height: 90vh;
+  overflow: auto;
+  padding: var(--s-5);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+.editor-sheet h2,
+.editor-sheet h3 {
+  margin: 0;
+}
+.editor-sheet h3 {
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+.add-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+.icon-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  border: none;
+  margin: 0;
+  padding: 0;
+}
+.icon-picker label {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.icon-picker label.picked {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.icon-picker label:has(:focus-visible) {
+  outline: 2px solid var(--ring);
+}
+.icon-picker svg {
+  width: 20px;
+  height: 20px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .wiggle {
+    animation: none;
+  }
+}
+/* With a mouse the arrows show on hover and focus; on touch they always show. */
+@media (hover: hover) {
+  .wiggle .wiggle-move {
+    opacity: 0;
+  }
+  .wiggle:hover .wiggle-move,
+  .wiggle:focus-within .wiggle-move {
+    opacity: 1;
   }
 }

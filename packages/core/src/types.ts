@@ -101,6 +101,8 @@ export interface Settings {
   /** Agent CLIs the loop may use; at least one is on. Both on: Claude, with OpenCode as the fallback. */
   claudeEnabled: boolean;
   opencodeEnabled: boolean;
+  /** The dashboard's layout (its top bar, row details, project order). The dashboard defines what is in it. */
+  dashboardLayout: Record<string, unknown>;
 }
 
 /**

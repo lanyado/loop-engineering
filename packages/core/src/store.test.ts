@@ -53,6 +53,7 @@ describe('settings', () => {
         'opencode/nemotron-3-ultra-free',
         'opencode/mimo-v2.6-flash-free',
       ],
+      dashboardLayout: {},
     });
     expect(store.settings.update({ telegramAllowlist: [11, 22, 11] })).toEqual({
       sessionModel: 'opus',
@@ -66,9 +67,13 @@ describe('settings', () => {
         'opencode/nemotron-3-ultra-free',
         'opencode/mimo-v2.6-flash-free',
       ],
+      dashboardLayout: {},
     });
     expect(store.settings.update({}).telegramAllowlist).toEqual([11, 22]);
     expect(store.settings.update({ sessionModel: 'fable' }).sessionModel).toBe('fable');
+    expect(store.settings.update({ dashboardLayout: { topbar: ['brand'] } }).dashboardLayout).toEqual({
+      topbar: ['brand'],
+    });
   });
 
   it("stores the router's reserved session id, cleared when that session is deleted", () => {

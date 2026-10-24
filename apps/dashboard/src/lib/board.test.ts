@@ -334,16 +334,16 @@ describe('the pipeline (stage files) shapes every lane', () => {
   });
 
   it('keeps a check whose stage file is gone: the PR waits there', () => {
-    const l = lane(view({ checks: ['tests', 'security'] }, []), [
-      pr(1, 1, 'check', { loopState: { check: 'security' } }),
+    const l = lane(view({ checks: ['tests', 'ghost'] }, []), [
+      pr(1, 1, 'check', { loopState: { check: 'ghost' } }),
     ]);
     expect(l.nodes[1]).toMatchObject({
-      stage: 'security',
-      label: 'security',
+      stage: 'ghost',
+      label: 'ghost',
       state: 'current',
       problem: 'no stage file',
     });
-    const broken = lane(view({ checks: ['tests', 'security'] }, [{ ...security, error: 'bad' }]), []);
+    const broken = lane(view({ checks: ['tests', 'scan'] }, [{ ...security, id: 'scan', error: 'bad' }]), []);
     expect(broken.nodes[1]).toMatchObject({ label: 'Security', problem: 'file broken' });
   });
 });

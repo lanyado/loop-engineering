@@ -1,89 +1,61 @@
-import { FinishedGroup } from '../../components/finished-sessions';
-import { PipelineRow } from '../../components/pipeline';
-import { FolderPath, KindChip } from '../../components/project-kind';
-import { QuestionCard } from '../../components/question-card';
-import { ProjectButtons, ProjectShell } from '../../components/session-controls';
+import { BoardView } from '../../components/board-view';
+import { ServerUnavailable } from '../../components/server-unavailable';
+import { BackendError } from '../../lib/backend';
+import { HiddenProjects, ProjectPlacement } from '../../components/project-placement';
 import { ProjectSettings } from '../../components/settings-controls';
-import { buildBoard, type ProjectBoard } from '../../lib/board';
+import { buildBoard } from '../../lib/board';
+import { arrangeProjects, parseLayout } from '../../lib/layout';
 import { requestTime } from '../../lib/server/clock';
 import { backendForViewer } from '../../lib/server/session';
 
-function ProjectHeader({ board }: { board: ProjectBoard }) {
-  const { project } = board;
-  return (
-    <header className="project-head">
-      <div className="project-title">
-        <h2>{project.name}</h2>
-        <KindChip project={project} />
-        <span className="project-counts small">
-          {board.pending > 0 && (
-            <span className="count ask-count" data-testid="project-pending">
-              {board.pending} waiting on you
-            </span>
-          )}
-        </span>
-      </div>
-      <ProjectButtons projectName={project.name} />
-      <FolderPath project={project} />
-    </header>
-  );
-}
-
 export default async function BoardPage() {
   const backend = await backendForViewer();
-  const [tree, prs, pending, pipeline] = await Promise.all([
+  const loaded = await Promise.all([
     backend.tree(),
     backend.pullRequests(),
     backend.pendingQuestions(),
     backend.pipeline(),
-  ]);
+    // The default layout when the settings cannot be read: the board itself still shows.
+    backend.settings().catch(() => null),
+  ]).catch((error: unknown) => {
+    if (error instanceof BackendError) return error;
+    throw error;
+  });
+  if (loaded instanceof BackendError) return <ServerUnavailable message={loaded.message} />;
+  const [tree, prs, pending, pipeline, settings] = loaded;
   const board = buildBoard(tree, prs, pending, pipeline);
-  const now = requestTime();
+  const layout = parseLayout(settings?.dashboardLayout);
+  const { shown, hidden } = arrangeProjects(board.projects, layout);
   const readOnly = backend.demo;
+  const shownIds = shown.map((p) => p.project.id);
   return (
     <>
-      <h1 className="sr-only">Pipelines</h1>
-      {pipeline.pipeline.error && (
-        <p className="offline-banner" data-testid="pipeline-error">
-          The PR loop waits until this is fixed: {pipeline.pipeline.error}.
-        </p>
-      )}
-      {board.unplaced.length > 0 && (
-        <section className="unplaced" data-testid="unplaced">
-          <h2>Waiting on you</h2>
-          <div className="row-questions">
-            {board.unplaced.map(({ question, asker }) => (
-              <QuestionCard key={question.id} question={question} asker={asker} readOnly={readOnly} />
-            ))}
-          </div>
-        </section>
-      )}
-      {board.projects.length === 0 && <p className="empty">No projects yet.</p>}
-      {board.projects.map((p) => (
-        <ProjectShell
-          key={p.project.id}
-          projectId={p.project.id}
-          projectName={p.project.name}
+      <BoardView
+        board={board}
+        pipelineError={pipeline.pipeline.error}
+        projects={shown}
+        layout={layout}
+        now={requestTime()}
+        readOnly={readOnly}
+        settings={(p) => (
+          <>
+            <ProjectSettings project={p.project} readOnly={readOnly} />
+            <ProjectPlacement
+              projectId={p.project.id}
+              shownIds={shownIds}
+              layout={layout}
+              readOnly={readOnly}
+            />
+          </>
+        )}
+      />
+      {hidden.length > 0 && (
+        <HiddenProjects
+          projects={hidden.map((p) => ({ id: p.project.id, name: p.project.name }))}
+          layout={layout}
           readOnly={readOnly}
-          header={<ProjectHeader board={p} />}
-          settings={<ProjectSettings project={p.project} readOnly={readOnly} />}
-        >
-          {p.rows.length > 0 && (
-            <ul className="rows">
-              {p.rows.map((row) => (
-                <PipelineRow
-                  key={row.session.id}
-                  row={row}
-                  folder={p.project.kind === 'folder'}
-                  readOnly={readOnly}
-                  now={now}
-                />
-              ))}
-            </ul>
-          )}
-          {p.finished.length > 0 && <FinishedGroup sessions={p.finished} now={now} />}
-        </ProjectShell>
-      ))}
+        />
+      )}
     </>
   );
 }

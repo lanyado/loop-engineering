@@ -60,6 +60,9 @@ export class DemoBackend implements Backend {
   updateSettings(): never {
     throw new ReadOnlyError();
   }
+  updatePipeline(): never {
+    throw new ReadOnlyError();
+  }
   createRequest(): never {
     throw new ReadOnlyError();
   }

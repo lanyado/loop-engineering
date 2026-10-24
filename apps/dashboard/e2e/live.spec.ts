@@ -547,3 +547,57 @@ test('ends a session from its details after a confirm step', async ({ page }, in
   await expect(card.getByTestId('session-header-status')).toHaveText('Ended');
   await expect(card.getByTestId('session-plus')).toHaveCount(0);
 });
+
+test('the editor applies the layout and the pipeline on Approve', async ({ page }, info) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await open(page);
+  await page.getByRole('link', { name: 'Edit the dashboard' }).click();
+  const editor = page.getByTestId('editor');
+  await editor.getByRole('button', { name: 'Remove Weekly limit' }).click();
+  await editor.getByRole('button', { name: 'Move Code review left' }).click();
+  await editor.getByTestId('editor-add').click();
+  await editor.getByTestId('new-stage').click();
+  await page.getByLabel('Name').fill('Docs check');
+  await page.getByLabel('Label on the node (10 characters at most)').fill('Docs');
+  await page.getByTestId('stage-prompt').fill('Check the README covers the change.');
+  await page.getByTestId('stage-save').click();
+  await editor.getByTestId('editor-close').click();
+  await page.getByTestId('editor-approve').click();
+  await expect(page).toHaveURL(/\/$/);
+  await snap(page, info, 'after-approve');
+
+  // The real board and the real server have it.
+  await expect(page.locator('[data-testid="usage-meter"][data-window="Weekly"]')).toHaveCount(0);
+  const { pipeline, stages } = await api<{
+    pipeline: { checks: string[] };
+    stages: { id: string; prompt: string }[];
+  }>('/pipeline');
+  expect(pipeline.checks).toEqual(['review', 'tests', 'qa', 'docs-check']);
+  expect(stages.find((s) => s.id === 'docs-check')?.prompt).toBe('Check the README covers the change.');
+  const lane = page.getByTestId('lane').first();
+  await expect(lane.locator('[data-testid="node"]').first()).toHaveAttribute('data-stage', 'review');
+  await expect(lane.locator('[data-stage="docs-check"]')).toContainText('Docs');
+});
+
+test('a project moves up and hides from its settings, and shows again from the list under the board', async ({
+  page,
+}) => {
+  await open(page);
+  const names = () => page.getByTestId('project').evaluateAll((els) => els.map((e) => e.dataset.project));
+  const before = await names();
+  const last = before.at(-1)!;
+  await projectSettings(page, last);
+  // The panel stays open while its project moves.
+  const placement = page
+    .locator(`[data-testid="project"][data-project="${last}"]`)
+    .getByTestId('project-placement');
+  await placement.getByRole('button', { name: 'Move up' }).click();
+  await expect.poll(names).toEqual([...before.slice(0, -2), last, before.at(-2)]);
+
+  await placement.getByTestId('hide-project').click();
+  await expect.poll(names).not.toContain(last);
+  const hidden = page.getByTestId('hidden-projects');
+  await hidden.locator('summary').click();
+  await hidden.getByRole('button', { name: 'Show' }).click();
+  await expect.poll(names).toContain(last);
+});

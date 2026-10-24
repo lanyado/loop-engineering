@@ -647,6 +647,7 @@ describe('settings', () => {
       claudeEnabled: true,
       opencodeEnabled: true,
       opencodeBackupModels: expect.any(Array),
+      dashboardLayout: {},
     });
     const res = await call('PATCH', '/settings', {
       sessionModel: 'claude-opus-5-5',
@@ -661,7 +662,12 @@ describe('settings', () => {
       claudeEnabled: false,
       opencodeEnabled: true,
       opencodeBackupModels: expect.any(Array),
+      dashboardLayout: {},
     });
+    const layout = { topbar: ['brand', 'weekly'], hiddenProjects: [3] };
+    expect(
+      (await call('PATCH', '/settings', { dashboardLayout: layout })).json.settings.dashboardLayout,
+    ).toEqual(layout);
     // The last CLI on cannot be switched off.
     expect((await call('PATCH', '/settings', { opencodeEnabled: false })).status).toBe(400);
   });
@@ -679,6 +685,9 @@ describe('settings', () => {
       { sessionModel: '' },
       { permissionMode: 'auto' },
       { sessionModel: 'x', unknown: 1 },
+      { dashboardLayout: [] },
+      { dashboardLayout: 'x' },
+      { dashboardLayout: { notes: 'x'.repeat(5000) } },
     ]) {
       expect((await call('PATCH', '/settings', body)).status, JSON.stringify(body)).toBe(400);
     }

@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactNode } from 'react';
 import { type Lane, type NodeStage, type NodeState, type Row, type StageNode } from '../lib/board';
 import { formatPrMetrics, humanize, pauseLabel, roundLabel, sessionRuntime } from '../lib/format';
+import type { RowDetail } from '../lib/layout';
 import type { PullRequest, Question, TreeSession } from '../lib/schemas';
 import { EndSessionButton } from './end-session-button';
 import { QuestionCard } from './question-card';
@@ -75,7 +76,7 @@ const ICON_PATHS: Record<string, ReactNode> = {
       <path d="M5 21V4M5 4h11l-2 4 2 4H5" />
     </>
   ),
-  // Custom stages (packages/loop's STAGE_ICONS).
+  // Custom stages (STAGE_ICONS).
   shield: (
     <>
       <path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6l-7-3Z" />
@@ -124,7 +125,22 @@ const ICON_PATHS: Record<string, ReactNode> = {
   ),
 };
 
-function Icon({ kind }: { kind: string }) {
+/** Icons a stage file may pick (the server's list of `icon` values). */
+export const STAGE_ICONS = [
+  'tests',
+  'review',
+  'qa',
+  'shield',
+  'lock',
+  'bug',
+  'book',
+  'gauge',
+  'globe',
+  'sparkle',
+  'check',
+];
+
+export function Icon({ kind }: { kind: string }) {
   return (
     <svg
       viewBox="0 0 24 24"
@@ -349,7 +365,7 @@ function WithTerminal({
   );
 }
 
-function LaneView({ lane, readOnly }: { lane: Lane; readOnly: boolean }) {
+function LaneView({ lane, metrics, readOnly }: { lane: Lane; metrics: boolean; readOnly: boolean }) {
   const pr = lane.pr;
   // The board already left out what this pipeline does not run (Approval in auto-merge projects, …).
   const nodes = lane.nodes;
@@ -369,9 +385,11 @@ function LaneView({ lane, readOnly }: { lane: Lane; readOnly: boolean }) {
               {pr.repo}#{pr.number}
             </a>
             {pr.outcome === null && <span className="muted">{roundLabel(pr.round)}</span>}
-            <span className="muted lane-metrics" data-testid="pr-metrics">
-              {formatPrMetrics(pr.metrics)}
-            </span>
+            {metrics && (
+              <span className="muted lane-metrics" data-testid="pr-metrics">
+                {formatPrMetrics(pr.metrics)}
+              </span>
+            )}
           </>
         )}
       </span>
@@ -467,14 +485,18 @@ function askerLabel(q: Question, row: Row): string {
 export function PipelineRow({
   row,
   folder,
+  hidden = [],
   readOnly,
   now,
 }: {
   row: Row;
   folder: boolean;
+  /** Parts of the row the dashboard's layout hides. */
+  hidden?: readonly RowDetail[];
   readOnly: boolean;
   now: number;
 }) {
+  const show = (detail: RowDetail) => !hidden.includes(detail);
   const { session, builder } = row;
   const pause = pauseLabel(session.pauseReason);
   const open = session.status !== 'ended';
@@ -528,8 +550,8 @@ export function PipelineRow({
               {humanize(session.status)}
               {pause && ` · ${pause}`}
             </span>
-            <span className="muted">{running}</span>
-            {session.subagents.length > 0 && (
+            {show('runtime') && <span className="muted">{running}</span>}
+            {show('subagents') && session.subagents.length > 0 && (
               <span className="muted" data-testid="subagent-count">
                 {session.subagents.length} subagent{session.subagents.length === 1 ? '' : 's'}
               </span>
@@ -578,7 +600,12 @@ export function PipelineRow({
               <Edge state={row.lanes.some((l) => l.pr) ? 'done' : 'todo'} />
               <ul className={`lanes${row.lanes.length > 1 ? ' split' : ''}`}>
                 {row.lanes.map((lane) => (
-                  <LaneView key={lane.pr?.id ?? 'none'} lane={lane} readOnly={readOnly} />
+                  <LaneView
+                    key={lane.pr?.id ?? 'none'}
+                    lane={lane}
+                    metrics={show('prMetrics')}
+                    readOnly={readOnly}
+                  />
                 ))}
               </ul>
             </>
@@ -590,7 +617,7 @@ export function PipelineRow({
           )}
         </div>
       </div>
-      {row.olderPrs.length > 0 && (
+      {show('earlierPrs') && row.olderPrs.length > 0 && (
         <p className="muted small older-prs">
           Earlier PRs:{' '}
           {row.olderPrs.map((pr, i) => (

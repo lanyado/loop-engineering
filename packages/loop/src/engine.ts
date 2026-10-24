@@ -263,6 +263,8 @@ export interface LoopStatus {
     stage: string;
     round: number;
     lastError: string | null;
+    /** Why the loop holds it (a broken pipeline.json or stage file), or null. */
+    heldFor: string | null;
   }[];
 }
 
@@ -497,6 +499,7 @@ export class LoopEngine {
           stage: p.stage,
           round: p.round,
           lastError: loopState(p).lastError ?? null,
+          heldFor: loopState(p).heldFor ?? null,
         })),
     };
   }

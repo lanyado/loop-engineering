@@ -1,5 +1,8 @@
+import Link from 'next/link';
 import { formatAgo, formatDuration, usageTone } from '../lib/format';
+import type { TopbarItem as TopbarItemName } from '../lib/layout';
 import type { ClaudeUsage, UsageWindow } from '../lib/schemas';
+import { Logo } from './logo';
 
 /** A snapshot older than this is shown as stale: no Claude Code session has rendered its status line since. */
 const STALE_MS = 30 * 60_000;
@@ -54,26 +57,60 @@ function Meter({ label, window, now }: { label: string; window: UsageWindow | nu
   );
 }
 
-/** Claude Code's 5-hour and weekly limits in the top bar. */
-export function UsageMeters({ usage, now }: { usage: ClaudeUsage | null; now: number }) {
-  if (!usage || (!usage.fiveHour && !usage.sevenDay)) {
+/** One top bar item (lib/layout.ts); the usage items need Claude's limits, captured or not. */
+export function TopbarItem({
+  item,
+  usage,
+  now,
+}: {
+  item: TopbarItemName;
+  usage: ClaudeUsage | null;
+  now: number;
+}) {
+  if (item === 'brand')
     return (
-      <p
+      <Link href="/" className="brand">
+        <Logo />
+        Loop
+      </Link>
+    );
+  if (item === 'claude') return <ClaudeMark />;
+  const captured = usage && (usage.fiveHour || usage.sevenDay);
+  if (!captured)
+    return (
+      <span
         className="usage-missing muted small"
         data-testid="usage-missing"
         title="Pipe your status line JSON into scripts/capture-claude-usage.sh (see README)."
       >
-        <ClaudeMark /> usage: not captured yet
-      </p>
+        {item === 'fiveHour' ? '5-hour' : 'Weekly'}: not captured yet
+      </span>
     );
-  }
-  const stale = now - Date.parse(usage.capturedAt) > STALE_MS;
+  return item === 'fiveHour' ? (
+    <Meter label="5-hour" window={usage.fiveHour} now={now} />
+  ) : (
+    <Meter label="Weekly" window={usage.sevenDay} now={now} />
+  );
+}
+
+/** The top bar's items in the saved order, then a note when the limits are old. */
+export function TopbarItems({
+  items,
+  usage,
+  now,
+}: {
+  items: TopbarItemName[];
+  usage: ClaudeUsage | null;
+  now: number;
+}) {
+  const stale = usage && now - Date.parse(usage.capturedAt) > STALE_MS;
+  const meters = items.includes('fiveHour') || items.includes('weekly');
   return (
-    <div className="usage" data-testid="usage">
-      <ClaudeMark />
-      <Meter label="5-hour" window={usage.fiveHour} now={now} />
-      <Meter label="Weekly" window={usage.sevenDay} now={now} />
-      {stale && (
+    <div className="topbar-items" data-testid="topbar-items">
+      {items.map((item) => (
+        <TopbarItem key={item} item={item} usage={usage} now={now} />
+      ))}
+      {stale && meters && (
         <span className="usage-stale muted small" data-testid="usage-stale">
           as of {formatAgo(usage.capturedAt, now)}
         </span>

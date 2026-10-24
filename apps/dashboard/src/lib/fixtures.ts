@@ -433,6 +433,7 @@ export function demoData(now: Date): DemoData {
       claudeEnabled: true,
       opencodeEnabled: true,
       opencodeBackupModels: ['opencode/big-pickle'],
+      dashboardLayout: {},
     },
     // Demo stages: the built-in pipeline, with sample prompts (the server serves the real files).
     pipeline: {
@@ -448,6 +449,12 @@ export function demoData(now: Date): DemoData {
           'Review for bugs, gaps and security problems.',
         ),
         stage('qa', 'Manual QA', 'QA', 'browser', 'ui-changes', 'Check the changed pages in a browser.'),
+        // A custom stage file that is not in the pipeline: the editor offers it under "+ Add".
+        {
+          ...stage('security', 'Security review', 'Security', 'read', 'always', 'Look for leaked secrets.'),
+          icon: 'shield',
+          builtin: false,
+        },
       ],
     },
   };

@@ -1,9 +1,9 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { LiveUpdates } from '../../components/live-updates';
-import { Logo } from '../../components/logo';
 import { BackupModels, ModelField, ProviderSwitches, ThemeSwitch } from '../../components/settings-controls';
-import { UsageMeters } from '../../components/usage-meters';
+import { TopbarItems } from '../../components/topbar-items';
+import { parseLayout } from '../../lib/layout';
 import { noLogin } from '../../lib/server/env';
 import { formatClock } from '../../lib/format';
 import { requestTime } from '../../lib/server/clock';
@@ -15,9 +15,10 @@ import { logout } from '../actions';
 export const dynamic = 'force-dynamic';
 
 /**
- * One screen, no tabs: the top bar holds Claude's usage limits and the settings shared by every
- * project; the page under it is the board of pipelines. A new session is started from the
- * "+ Session" button in a project's header, not from the top bar.
+ * One screen, no tabs: the top bar holds Claude's usage limits (in the order the dashboard's layout
+ * says), the pencil that opens the editor, and the settings shared by every project; the page under
+ * it is the board of pipelines. A new session is started from the "+ Session" button in a project's
+ * header, not from the top bar.
  */
 export default async function AppLayout({ children }: { children: ReactNode }) {
   const backend = await backendForViewer();
@@ -32,13 +33,34 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   return (
     <div className="app">
       <header className="topbar">
-        <Link href="/" className="brand">
-          <Logo />
-          Loop
-        </Link>
         <LiveUpdates demo={backend.demo} />
-        <UsageMeters usage={usage} now={requestTime()} />
+        <TopbarItems
+          items={parseLayout(settings?.dashboardLayout).topbar}
+          usage={usage}
+          now={requestTime()}
+        />
         <div className="topbar-actions">
+          <Link
+            href="/edit"
+            className="button ghost small icon-button"
+            aria-label="Edit the dashboard"
+            title="Edit the dashboard"
+          >
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16v4ZM13.5 6.5l4 4" />
+            </svg>
+          </Link>
           <details className="sheet" data-testid="settings-sheet">
             <summary className="button ghost small icon-button" aria-label="Settings for every project">
               <svg

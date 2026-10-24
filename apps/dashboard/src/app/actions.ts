@@ -16,6 +16,7 @@ import { BackendError, ReadOnlyError, type Backend } from '../lib/backend';
 import { clientIp, LoginLimiter } from '../lib/login-limiter';
 import {
   answerInput,
+  editsInput,
   endSessionInput,
   stageTerminalInput,
   newRequestInput,
@@ -89,6 +90,27 @@ export async function updateSettings(patch: unknown): Promise<ActionResult> {
       return 'Saved';
     },
   );
+}
+
+/** Saves the dashboard's layout (project order and hiding on the board). */
+export async function saveLayout(layout: unknown): Promise<ActionResult> {
+  return write(
+    settingsInput.pick({ dashboardLayout: true }).required(),
+    { dashboardLayout: layout },
+    async (d, backend) => {
+      await backend.updateSettings(d);
+      return undefined;
+    },
+  );
+}
+
+/** The editor's Approve: the pipeline first (the server may refuse it), then the layout. */
+export async function applyEdits(edits: unknown): Promise<ActionResult> {
+  return write(editsInput, edits, async (d, backend) => {
+    if (d.pipeline) await backend.updatePipeline(d.pipeline);
+    await backend.updateSettings({ dashboardLayout: d.layout });
+    return 'Applied to your dashboard.';
+  });
 }
 
 export async function createRequest(text: string, projectId: number | null): Promise<ActionResult> {

@@ -8,7 +8,7 @@ test('opens without a login: no cookie, no login page, no Log out', async ({ pag
   await expect(page.getByTestId('project').first()).toBeVisible();
   await page.goto('/login?next=%2Fmetrics');
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByTestId('usage')).toBeVisible();
+  await expect(page.getByTestId('topbar-items')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Log out' })).toHaveCount(0);
   expect(await page.context().cookies()).toHaveLength(0);
   // Tokens never reach the browser.
@@ -409,4 +409,53 @@ test('the theme switch works in read-only demo mode and survives a reload', asyn
   await expect(html).toHaveAttribute('data-theme', 'light');
   await expect.poll(looks).toEqual({ bg: LIGHT, scheme: 'light' });
   await expect.poll(themeCookies).toMatchObject([{ value: 'light' }]);
+});
+
+test('the pencil edits a draft on the demo board; Discard changes nothing, and demo data cannot be approved', async ({
+  page,
+}, info) => {
+  // Still items: the wiggle is off with reduced motion, so clicks land without waiting for it.
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await open(page);
+  await page.getByRole('link', { name: 'Edit the dashboard' }).click();
+  const editor = page.getByTestId('editor');
+  await expect(editor).toBeVisible();
+  // Every demo project, as a preview nothing on it can be clicked.
+  await expect(editor.getByTestId('project')).toHaveCount(await page.getByTestId('project').count());
+
+  // Top bar: the weekly limit goes, and "+ Add" offers it back.
+  await editor.getByRole('button', { name: 'Remove Weekly limit' }).click();
+  await expect(editor.locator('[data-testid="usage-meter"][data-window="Weekly"]')).toHaveCount(0);
+
+  // Pipeline: Code review moves before Tests on the strip and on every lane of the preview.
+  await editor.getByRole('button', { name: 'Move Code review left' }).click();
+  const strip = editor.getByRole('region', { name: 'Pipeline' }).getByTestId('editable-item');
+  await expect(strip.first()).toHaveAttribute('data-item', 'review');
+  const lane = editor.getByTestId('lane').first().locator('[data-testid="node"]');
+  await expect(lane.first()).toHaveAttribute('data-stage', 'review');
+
+  // A new stage: its node shows up in the preview's lanes.
+  await editor.getByTestId('editor-add').click();
+  await editor.getByTestId('new-stage').click();
+  await page.getByLabel('Name').fill('Docs check');
+  await page.getByLabel('Label on the node (10 characters at most)').fill('Docs');
+  await page.getByTestId('stage-prompt').fill('Check the README covers the change.');
+  await page.getByTestId('stage-save').click();
+  await expect(editor.getByTestId('lane').first().locator('[data-stage="docs-check"]')).toContainText('Docs');
+
+  // Removing review warns that every PR will wait for approval.
+  await editor.getByRole('button', { name: 'Remove Code review' }).click();
+  await expect(editor.getByTestId('no-review-warning')).toBeVisible();
+  await snap(page, info, 'editor');
+
+  // ✕: demo data cannot be approved; Discard goes back with nothing changed.
+  await editor.getByTestId('editor-close').click();
+  await expect(page.getByTestId('editor-approve')).toBeDisabled();
+  await page.getByTestId('editor-discard').click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.locator('[data-testid="usage-meter"][data-window="Weekly"]')).toHaveCount(1);
+  await expect(page.getByTestId('lane').first().locator('[data-testid="node"]').first()).toHaveAttribute(
+    'data-stage',
+    'tests',
+  );
 });
