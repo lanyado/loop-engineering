@@ -141,6 +141,8 @@ export const pullRequestSchema = z.object({
         .catch(undefined),
       /** With stage "check": the custom stage (a stage file) the PR is at. */
       check: z.string().optional().catch(undefined),
+      /** Checks the human skipped for this PR. */
+      skip: z.array(z.string()).optional().catch(undefined),
       feedback: z
         .object({
           kind: z.string(),
@@ -235,6 +237,7 @@ export const responses = {
   prs: z.object({ pullRequests: z.array(pullRequestSchema) }),
   settings: z.object({ settings: settingsSchema }),
   pipeline: pipelineViewSchema,
+  skipped: z.object({ pullRequest: z.object({ id: z.number() }) }),
   usage: z.object({ usage: usageSchema.nullable() }),
   loopStatus: loopStatusSchema,
   request: z.object({ request: requestSchema }),
@@ -265,6 +268,11 @@ export const permissionModeInput = z.object({
   permissionMode: z.enum(SELECTABLE_PERMISSION_MODES),
 });
 export const endSessionInput = z.object({ sessionId: z.number().int().positive() });
+export const skipCheckInput = z.object({
+  prId: z.number().int().positive(),
+  check: z.string().min(1).max(32),
+  skip: z.boolean(),
+});
 export const stageTerminalInput = z.object({
   prId: z.number().int().positive(),
   /** review, tests, qa or a custom stage's id; the server checks which. */

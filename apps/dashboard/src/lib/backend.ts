@@ -47,6 +47,8 @@ export interface Backend {
   openTerminal(sessionId: number): Promise<void>;
   /** Opens a terminal following a PR stage's job log (review, tests, QA or a custom stage). */
   openStageTerminal(prId: number, stage: string): Promise<void>;
+  /** Skips one check of the PR loop for one PR, or brings it back. */
+  skipCheck(prId: number, check: string, skip: boolean): Promise<void>;
   /** The PR loop's pipeline and its stages (stage files). */
   pipeline(): Promise<PipelineView>;
   /** Writes the pipeline and changed stage files (null: delete a custom stage, reset a built-in one). */

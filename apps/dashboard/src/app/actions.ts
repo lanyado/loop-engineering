@@ -18,6 +18,7 @@ import {
   answerInput,
   editsInput,
   endSessionInput,
+  skipCheckInput,
   hideProjectInput,
   stageTerminalInput,
   newRequestInput,
@@ -127,7 +128,8 @@ export async function setProjectHidden(projectId: number, hidden: boolean): Prom
 export async function applyEdits(edits: unknown): Promise<ActionResult> {
   return write(editsInput, edits, async (d, backend) => {
     if (d.pipeline) await backend.updatePipeline(d.pipeline);
-    await mergeLayout(backend, () => d.layout);
+    // A pipeline-only Approve leaves the layout alone, so it cannot overwrite another tab's save.
+    if (Object.keys(d.layout).length > 0) await mergeLayout(backend, () => d.layout);
     return undefined;
   });
 }
@@ -157,6 +159,14 @@ export async function openTerminal(sessionId: number): Promise<ActionResult> {
   return write(endSessionInput, { sessionId }, async (d, backend) => {
     await backend.openTerminal(d.sessionId);
     return 'Opened in Terminal.';
+  });
+}
+
+/** Skips one check for one PR (the pop-up on its node confirmed it), or brings it back. */
+export async function skipCheck(prId: number, check: string, skip: boolean): Promise<ActionResult> {
+  return write(skipCheckInput, { prId, check, skip }, async (d, backend) => {
+    await backend.skipCheck(d.prId, d.check, d.skip);
+    return undefined;
   });
 }
 

@@ -1,10 +1,13 @@
 import { FakeTimers } from '@loop-engineering/ask-human';
 import { FakeClock, openStore, type Store } from '@loop-engineering/core';
+import { FileStageLibrary } from '@loop-engineering/loop';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { claudeUsageModule } from '../../../server/src/modules/claude-usage';
 import { dashboardApi } from '../../../server/src/modules/dashboard-api';
+import { pipelineModule } from '../../../server/src/modules/pipeline';
 import { createServer, type LoopServer } from '../../../server/src/server';
 import { BackendError } from './backend';
+import { demoData } from './fixtures';
 import { HttpBackend } from './http-backend';
 
 // Contract test: the dashboard's client and schemas against the real server routes, in-process
@@ -40,6 +43,8 @@ beforeEach(() => {
     timers: new FakeTimers(clock),
     modules: [
       dashboardApi(),
+      // No stage files: the built-ins (nothing writes here).
+      pipelineModule({ stages: new FileStageLibrary('/nonexistent/stages', () => undefined) }),
       // The shape of GET /api/loop/status (apps/server/src/modules/loop.test.ts runs the real route).
       {
         name: 'loop',
@@ -112,6 +117,14 @@ describe('HttpBackend against the real server', () => {
       fiveHour: { usedPercentage: 42, resetsAt: '2026-10-18T12:00:00.000Z' },
       sevenDay: null,
     });
+  });
+
+  it("reads the pipeline, and the demo's reserved stage ids are the server's", async () => {
+    const view = await backend.pipeline();
+    expect(view.pipeline.checks).toEqual(['tests', 'review', 'qa']);
+    expect([...demoData(new Date()).pipeline.choices.reserved].sort()).toEqual(
+      [...view.choices.reserved].sort(),
+    );
   });
 
   it("reads a PR's pending loop question and sends a message to one session", async () => {
