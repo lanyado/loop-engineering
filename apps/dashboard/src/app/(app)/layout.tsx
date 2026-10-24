@@ -2,12 +2,13 @@ import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { LiveUpdates } from '../../components/live-updates';
 import { Logo } from '../../components/logo';
-import { BackupModels, ModelField, ProviderSwitches } from '../../components/settings-controls';
+import { BackupModels, ModelField, ProviderSwitches, ThemeSwitch } from '../../components/settings-controls';
 import { UsageMeters } from '../../components/usage-meters';
 import { noLogin } from '../../lib/server/env';
 import { formatClock } from '../../lib/format';
 import { requestTime } from '../../lib/server/clock';
 import { backendForViewer } from '../../lib/server/session';
+import { savedTheme } from '../../lib/server/theme';
 import { logout } from '../actions';
 
 // Live data on every request; nothing here may be prerendered at build time.
@@ -20,11 +21,12 @@ export const dynamic = 'force-dynamic';
  */
 export default async function AppLayout({ children }: { children: ReactNode }) {
   const backend = await backendForViewer();
-  const [usage, settings, offlineSince] = await Promise.all([
+  const [usage, settings, offlineSince, theme] = await Promise.all([
     backend.usage().catch(() => null),
     backend.settings().catch(() => null),
     // Null also when the loop is off (the server answers 503): no banner then.
     backend.offlineSince().catch(() => null),
+    savedTheme(),
   ]);
   const readOnly = backend.demo;
   return (
@@ -57,6 +59,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
                 </svg>
               </summary>
               <div className="sheet-panel stack">
+                <ThemeSwitch theme={theme} />
                 <h2>Every project</h2>
                 <ProviderSwitches
                   claude={settings.claudeEnabled}

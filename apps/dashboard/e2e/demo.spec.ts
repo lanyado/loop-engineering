@@ -361,3 +361,25 @@ test('settings sit with their project and in the top bar, disabled in demo mode'
   await expectNoHorizontalScroll(page);
   await snap(page, info, 'settings');
 });
+
+test('the theme switch works in read-only demo mode and survives a reload', async ({ page }, info) => {
+  await open(page);
+  const html = page.locator('html');
+  await expect(html).not.toHaveAttribute('data-theme');
+  const sheet = await globalSettings(page);
+  await expect(sheet.getByTestId('theme-system')).toBeChecked();
+
+  await sheet.getByText('Dark', { exact: true }).click();
+  await expect(html).toHaveAttribute('data-theme', 'dark');
+  const [cookie] = (await page.context().cookies()).filter((c) => c.name === 'loop-theme');
+  expect(cookie).toMatchObject({ value: 'dark', httpOnly: true, sameSite: 'Lax', path: '/' });
+  await snap(page, info, 'settings-dark');
+
+  await page.reload();
+  await expect(html).toHaveAttribute('data-theme', 'dark');
+  await expect((await globalSettings(page)).getByTestId('theme-dark')).toBeChecked();
+
+  await page.getByTestId('settings-sheet').getByText('System', { exact: true }).click();
+  await expect(html).not.toHaveAttribute('data-theme');
+  expect((await page.context().cookies()).filter((c) => c.name === 'loop-theme')).toHaveLength(0);
+});

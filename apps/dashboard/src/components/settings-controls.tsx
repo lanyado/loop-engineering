@@ -1,9 +1,16 @@
 'use client';
 
-import { useState, useTransition, type ReactNode } from 'react';
-import { setPermissionMode, setProjectToggle, updateSettings, type ActionResult } from '../app/actions';
+import { useOptimistic, useState, useTransition, type ReactNode } from 'react';
+import {
+  setPermissionMode,
+  setProjectToggle,
+  setTheme,
+  updateSettings,
+  type ActionResult,
+} from '../app/actions';
 import { permissionLabel } from '../lib/format';
 import { SELECTABLE_PERMISSION_MODES } from '../lib/schemas';
+import { THEME_OPTIONS, type Theme, type ThemeOption } from '../lib/theme';
 import { FolderPath, KindChip } from './project-kind';
 
 /** Runs an action, keeps its message; the server re-renders the page with the saved value. */
@@ -54,6 +61,41 @@ export function Switch({
         aria-label={label}
       />
     </label>
+  );
+}
+
+const THEME_LABELS: Record<ThemeOption, string> = { system: 'System', light: 'Light', dark: 'Dark' };
+
+/** System, Light or Dark for this browser. The refreshed page carries the theme on <html>. */
+export function ThemeSwitch({ theme }: { theme: Theme | null }) {
+  const [, start] = useTransition();
+  const [shown, setShown] = useOptimistic<ThemeOption>(theme ?? 'system');
+  return (
+    <fieldset className="theme-field" data-testid="theme-switch">
+      <legend>Appearance</legend>
+      <div className="segmented">
+        {THEME_OPTIONS.map((option) => (
+          <label key={option}>
+            <input
+              type="radio"
+              name="theme"
+              value={option}
+              className="sr-only"
+              checked={shown === option}
+              onChange={() =>
+                start(async () => {
+                  setShown(option);
+                  await setTheme(option);
+                })
+              }
+              data-testid={`theme-${option}`}
+            />
+            {THEME_LABELS[option]}
+          </label>
+        ))}
+      </div>
+      <span className="muted small">Saved in this browser only.</span>
+    </fieldset>
   );
 }
 
