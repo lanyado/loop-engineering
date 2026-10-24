@@ -361,3 +361,52 @@ test('settings sit with their project and in the top bar, disabled in demo mode'
   await expectNoHorizontalScroll(page);
   await snap(page, info, 'settings');
 });
+
+test('the theme switch works in read-only demo mode and survives a reload', async ({ page }, info) => {
+  const LIGHT = 'rgb(245, 246, 248)';
+  const DARK = 'rgb(12, 14, 18)';
+  const html = page.locator('html');
+  const looks = () =>
+    page.evaluate(() => ({
+      bg: getComputedStyle(document.body).backgroundColor,
+      scheme: getComputedStyle(document.documentElement).colorScheme,
+    }));
+  const pick = (label: string) =>
+    page.getByTestId('settings-sheet').getByText(label, { exact: true }).click();
+  const themeCookies = async () => (await page.context().cookies()).filter((c) => c.name === 'loop-theme');
+
+  await page.emulateMedia({ colorScheme: 'light' });
+  await open(page);
+  await expect(html).not.toHaveAttribute('data-theme');
+  await expect(
+    (await globalSettings(page))
+      .getByRole('group', { name: 'Appearance' })
+      .getByRole('radio', { name: 'System' }),
+  ).toBeChecked();
+  expect(await looks()).toEqual({ bg: LIGHT, scheme: 'light dark' });
+
+  // OS light, Dark picked.
+  await pick('Dark');
+  await expect(html).toHaveAttribute('data-theme', 'dark');
+  await expect.poll(looks).toEqual({ bg: DARK, scheme: 'dark' });
+  await expect
+    .poll(themeCookies)
+    .toMatchObject([{ value: 'dark', httpOnly: true, sameSite: 'Lax', path: '/' }]);
+  await snap(page, info, 'settings-dark');
+
+  await page.reload();
+  await expect(html).toHaveAttribute('data-theme', 'dark');
+  expect(await looks()).toEqual({ bg: DARK, scheme: 'dark' });
+  await expect((await globalSettings(page)).getByTestId('theme-dark')).toBeChecked();
+
+  // OS dark: System follows it, Light overrides it.
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await pick('System');
+  await expect(html).not.toHaveAttribute('data-theme');
+  await expect.poll(looks).toEqual({ bg: DARK, scheme: 'light dark' });
+  await expect.poll(themeCookies).toHaveLength(0);
+  await pick('Light');
+  await expect(html).toHaveAttribute('data-theme', 'light');
+  await expect.poll(looks).toEqual({ bg: LIGHT, scheme: 'light' });
+  await expect.poll(themeCookies).toMatchObject([{ value: 'light' }]);
+});

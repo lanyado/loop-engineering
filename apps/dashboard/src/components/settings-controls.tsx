@@ -1,9 +1,16 @@
 'use client';
 
-import { useState, useTransition, type ReactNode } from 'react';
-import { setPermissionMode, setProjectToggle, updateSettings, type ActionResult } from '../app/actions';
+import { useId, useOptimistic, useState, useTransition, type ReactNode } from 'react';
+import {
+  setPermissionMode,
+  setProjectToggle,
+  setTheme,
+  updateSettings,
+  type ActionResult,
+} from '../app/actions';
 import { permissionLabel } from '../lib/format';
 import { SELECTABLE_PERMISSION_MODES } from '../lib/schemas';
+import type { Theme } from '../lib/theme';
 import { FolderPath, KindChip } from './project-kind';
 
 /** Runs an action, keeps its message; the server re-renders the page with the saved value. */
@@ -54,6 +61,59 @@ export function Switch({
         aria-label={label}
       />
     </label>
+  );
+}
+
+const THEMES = [
+  ['system', 'System'],
+  ['light', 'Light'],
+  ['dark', 'Dark'],
+] as const;
+type ThemeOption = (typeof THEMES)[number][0];
+
+/** Sets <html data-theme> now, ahead of the server render that sets the same value. */
+function applyTheme(option: ThemeOption) {
+  const root = document.documentElement;
+  if (option === 'system') delete root.dataset.theme;
+  else root.dataset.theme = option;
+}
+
+/** System, Light or Dark for this browser. */
+export function ThemeSwitch({ theme }: { theme: Theme | null }) {
+  const [, start] = useTransition();
+  const saved = theme ?? 'system';
+  const [shown, setShown] = useOptimistic<ThemeOption>(saved);
+  const hintId = useId();
+  const choose = (option: ThemeOption) =>
+    start(async () => {
+      setShown(option);
+      applyTheme(option);
+      // Not rethrown: a failed theme save should not take the page down; the switch shows the saved one.
+      await setTheme(option).catch(() => applyTheme(saved));
+    });
+  return (
+    <fieldset className="theme-field" aria-describedby={hintId} data-testid="theme-switch">
+      <legend>Appearance</legend>
+      <div className="segmented">
+        {THEMES.map(([option, label]) => (
+          <label key={option}>
+            <input
+              type="radio"
+              name="theme"
+              value={option}
+              className="sr-only"
+              checked={shown === option}
+              onChange={() => choose(option)}
+              data-testid={`theme-${option}`}
+            />
+            {label}
+          </label>
+        ))}
+      </div>
+      <span id={hintId} className="muted small">
+        Saved in this browser only.
+      </span>
+    </fieldset>
   );
 }
 

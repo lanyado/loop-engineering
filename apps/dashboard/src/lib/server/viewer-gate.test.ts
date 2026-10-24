@@ -16,6 +16,7 @@ const m = vi.hoisted(() => {
   return {
     Redirect,
     cookie: undefined as string | undefined,
+    cookiesSet: [] as string[],
     backendCalls: 0,
   };
 });
@@ -25,7 +26,7 @@ vi.mock('next/headers', () => ({
   cookies: () =>
     Promise.resolve({
       get: () => (m.cookie === undefined ? undefined : { value: m.cookie }),
-      set: () => {},
+      set: (name: string, value: string) => m.cookiesSet.push(`${name}=${value}`),
       delete: () => {},
     }),
   headers: () => Promise.resolve(new Headers()),
@@ -68,11 +69,13 @@ const actions = async () => {
     createRequest: () => a.createRequest('do it', 1),
     messageSession: () => a.messageSession(101, 'also this'),
     endSession: () => a.endSession(101),
+    setTheme: () => a.setTheme('dark'),
   };
 };
 
 beforeEach(() => {
   m.cookie = undefined;
+  m.cookiesSet = [];
   m.backendCalls = 0;
 });
 
@@ -95,6 +98,7 @@ describe('without a valid session cookie', () => {
       await expect(call(), name).rejects.toMatchObject({ url: '/login' });
     }
     expect(m.backendCalls).toBe(0);
+    expect(m.cookiesSet).toEqual([]);
   });
 });
 
@@ -105,5 +109,7 @@ describe('with a valid session cookie', () => {
     expect(m.backendCalls).toBe(Object.keys(pages).length);
     // Demo backend: the write is refused as read-only, after the login check passed.
     expect(await (await actions()).answerQuestion()).toMatchObject({ ok: false, error: /read-only/ });
+    await (await actions()).setTheme();
+    expect(m.cookiesSet).toEqual(['loop-theme=dark']);
   });
 });

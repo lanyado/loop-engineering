@@ -2,41 +2,42 @@
  * Loop dashboard design system: CSS custom properties only, no UI library.
  * One screen, no tabs: a top bar (usage limits, new session, settings) over a board of pipelines.
  * Built for a computer screen; on a narrower window a pipeline scrolls sideways in its own box.
- * One neutral palette, one accent (indigo). Light and dark follow prefers-color-scheme.
+ * One neutral palette, one accent (indigo). Each colour is light-dark(light, dark), so color-scheme
+ * picks it: the system's, or the one chosen in settings (<html data-theme>, the loop-theme cookie).
  */
 
 :root {
   color-scheme: light dark;
 
   /* Neutral palette + one accent. Text pairs are WCAG AA on --bg, --surface and their soft chips. */
-  --bg: #f5f6f8;
-  --surface: #ffffff;
-  --surface-2: #eff1f4;
-  --surface-3: #e4e7ec;
-  --text: #14161b;
-  --muted: #5a6070;
-  --border: #e2e5ea;
-  --border-strong: #c9ced7;
+  --bg: light-dark(#f5f6f8, #0c0e12);
+  --surface: light-dark(#ffffff, #15181e);
+  --surface-2: light-dark(#eff1f4, #1d2128);
+  --surface-3: light-dark(#e4e7ec, #262b34);
+  --text: light-dark(#14161b, #eceef2);
+  --muted: light-dark(#5a6070, #9ea5b3);
+  --border: light-dark(#e2e5ea, #262b34);
+  --border-strong: light-dark(#c9ced7, #3a414d);
   /* Input and switch outlines: 3:1 against the surface (WCAG 1.4.11). */
-  --input-border: #868c99;
-  --accent: #4f46e5;
-  --accent-hover: #4338ca;
-  --accent-text: #ffffff;
-  --accent-soft: #eef0ff;
-  --accent-soft-text: #3730a3;
-  --good: #166534;
-  --good-soft: #e3f6e9;
+  --input-border: light-dark(#868c99, #666e7c);
+  --accent: light-dark(#4f46e5, #8b93ff);
+  --accent-hover: light-dark(#4338ca, #a3a9ff);
+  --accent-text: light-dark(#ffffff, #0c0e12);
+  --accent-soft: light-dark(#eef0ff, #1e2142);
+  --accent-soft-text: light-dark(#3730a3, #c3c7ff);
+  --good: light-dark(#166534, #5bd48a);
+  --good-soft: light-dark(#e3f6e9, #13281b);
   /* The colour of a node that is running: purple, distinct from the indigo accent. */
-  --progress: #7c3aed;
-  --progress-soft: #f4effe;
-  --progress-soft-text: #6d28d9;
-  --progress-ring: rgb(124 58 237 / 0.28);
-  --warn: #92400e;
-  --warn-soft: #fdf1d8;
-  --bad: #b91c1c;
-  --bad-soft: #fde8e8;
-  --bad-hover: #991b1b;
-  --ring: rgb(79 70 229 / 0.28);
+  --progress: light-dark(#7c3aed, #b294f9);
+  --progress-soft: light-dark(#f4effe, #251c3d);
+  --progress-soft-text: light-dark(#6d28d9, #c9b4ff);
+  --progress-ring: light-dark(rgb(124 58 237 / 0.28), rgb(178 148 249 / 0.3));
+  --warn: light-dark(#92400e, #f3bd55);
+  --warn-soft: light-dark(#fdf1d8, #2c2310);
+  --bad: light-dark(#b91c1c, #ff8a80);
+  --bad-soft: light-dark(#fde8e8, #341a19);
+  --bad-hover: light-dark(#991b1b, #ffaaa2);
+  --ring: light-dark(rgb(79 70 229 / 0.28), rgb(139 147 255 / 0.35));
 
   /* Type scale (1.2 ratio around a 16px body). */
   --font: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
@@ -64,9 +65,14 @@
   --radius-lg: 18px;
   --radius-pill: 999px;
 
-  --shadow-sm: 0 1px 2px rgb(16 18 27 / 0.05);
-  --shadow: 0 1px 2px rgb(16 18 27 / 0.04), 0 4px 14px rgb(16 18 27 / 0.06);
-  --shadow-lg: 0 2px 6px rgb(16 18 27 / 0.06), 0 16px 40px rgb(16 18 27 / 0.1);
+  /* One geometry for both schemes; only the colour changes. */
+  --shadow-sm: 0 1px 2px light-dark(rgb(16 18 27 / 0.05), rgb(0 0 0 / 0.4));
+  --shadow:
+    0 1px 2px light-dark(rgb(16 18 27 / 0.04), rgb(0 0 0 / 0.35)),
+    0 4px 14px light-dark(rgb(16 18 27 / 0.06), rgb(0 0 0 / 0.25));
+  --shadow-lg:
+    0 2px 6px light-dark(rgb(16 18 27 / 0.06), rgb(0 0 0 / 0.4)),
+    0 16px 40px light-dark(rgb(16 18 27 / 0.1), rgb(0 0 0 / 0.4));
 
   /* Tap targets: 48px on phones, 44px with a pointer (desktop). */
   --tap: 48px;
@@ -77,38 +83,11 @@
   --topbar-h: 60px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0c0e12;
-    --surface: #15181e;
-    --surface-2: #1d2128;
-    --surface-3: #262b34;
-    --text: #eceef2;
-    --muted: #9ea5b3;
-    --border: #262b34;
-    --border-strong: #3a414d;
-    --input-border: #666e7c;
-    --accent: #8b93ff;
-    --accent-hover: #a3a9ff;
-    --accent-text: #0c0e12;
-    --accent-soft: #1e2142;
-    --accent-soft-text: #c3c7ff;
-    --good: #5bd48a;
-    --good-soft: #13281b;
-    --progress: #b294f9;
-    --progress-soft: #251c3d;
-    --progress-soft-text: #c9b4ff;
-    --progress-ring: rgb(178 148 249 / 0.3);
-    --warn: #f3bd55;
-    --warn-soft: #2c2310;
-    --bad: #ff8a80;
-    --bad-soft: #341a19;
-    --bad-hover: #ffaaa2;
-    --ring: rgb(139 147 255 / 0.35);
-    --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
-    --shadow: 0 1px 2px rgb(0 0 0 / 0.35), 0 6px 18px rgb(0 0 0 / 0.25);
-    --shadow-lg: 0 2px 6px rgb(0 0 0 / 0.4), 0 18px 44px rgb(0 0 0 / 0.4);
-  }
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+:root[data-theme='dark'] {
+  color-scheme: dark;
 }
 
 @media (pointer: fine) and (min-width: 900px) {
@@ -216,7 +195,8 @@ a:hover {
 }
 
 /* Focus: one ring everywhere, only for keyboard focus. */
-:focus-visible {
+:focus-visible,
+.segmented label:has(input:focus-visible) {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
   box-shadow: 0 0 0 6px var(--ring);
@@ -991,6 +971,57 @@ button.option.recommended:disabled {
 }
 .switch-row:has(.switch:disabled) {
   cursor: not-allowed;
+}
+/* Appearance: a radio group drawn as one pill, the chosen option filled with the accent. */
+.theme-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+.theme-field legend {
+  padding: 0;
+  margin-bottom: var(--s-2);
+  font-weight: 600;
+}
+.segmented {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  background: var(--surface-2);
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-pill);
+}
+.segmented label {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* The pill's padding and border make up the rest of the tap target. */
+  min-height: calc(var(--tap) - 8px);
+  border-radius: var(--radius-pill);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color var(--dur) var(--ease),
+    color var(--dur) var(--ease);
+}
+.segmented label:hover {
+  color: var(--text);
+}
+.segmented label:has(input:checked) {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+@media (forced-colors: active) {
+  .segmented label:has(input:checked) {
+    outline: 2px solid CanvasText;
+  }
 }
 .chip {
   display: inline-flex;

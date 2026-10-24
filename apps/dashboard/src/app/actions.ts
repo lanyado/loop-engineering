@@ -25,7 +25,8 @@ import {
   settingsInput,
 } from '../lib/schemas';
 import { getAuthConfig, noLogin } from '../lib/server/env';
-import { backendForViewer } from '../lib/server/session';
+import { backendForViewer, requireLogin } from '../lib/server/session';
+import { parseTheme, THEME_COOKIE } from '../lib/theme';
 
 export type ActionResult = { ok: true; message?: string } | { ok: false; error: string };
 
@@ -123,6 +124,26 @@ export async function openStageTerminal(prId: number, stage: string): Promise<Ac
     await backend.openStageTerminal(d.prId, d.stage);
     return 'Opened in Terminal.';
   });
+}
+
+/** A per-browser preference, not a server setting, so read-only demo mode allows it. */
+export async function setTheme(theme: string): Promise<void> {
+  await requireLogin();
+  const jar = await cookies();
+  const value = parseTheme(theme);
+  if (value) {
+    const requestHeaders = await headers();
+    jar.set(THEME_COOKIE, value, {
+      httpOnly: true,
+      secure: cookieIsSecure((name) => requestHeaders.get(name)),
+      sameSite: 'lax',
+      path: '/',
+      maxAge: 365 * 24 * 60 * 60, // a year
+    });
+  } else {
+    jar.delete(THEME_COOKIE);
+  }
+  refresh();
 }
 
 export type LoginState = { error: string | null };
