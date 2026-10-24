@@ -65,16 +65,14 @@
   --radius-lg: 18px;
   --radius-pill: 999px;
 
-  /* light-dark() takes colours only: a transparent layer keeps each scheme's own blur. */
+  /* One geometry for both schemes; only the colour changes. */
   --shadow-sm: 0 1px 2px light-dark(rgb(16 18 27 / 0.05), rgb(0 0 0 / 0.4));
   --shadow:
     0 1px 2px light-dark(rgb(16 18 27 / 0.04), rgb(0 0 0 / 0.35)),
-    0 4px 14px light-dark(rgb(16 18 27 / 0.06), transparent),
-    0 6px 18px light-dark(transparent, rgb(0 0 0 / 0.25));
+    0 4px 14px light-dark(rgb(16 18 27 / 0.06), rgb(0 0 0 / 0.25));
   --shadow-lg:
     0 2px 6px light-dark(rgb(16 18 27 / 0.06), rgb(0 0 0 / 0.4)),
-    0 16px 40px light-dark(rgb(16 18 27 / 0.1), transparent),
-    0 18px 44px light-dark(transparent, rgb(0 0 0 / 0.4));
+    0 16px 40px light-dark(rgb(16 18 27 / 0.1), rgb(0 0 0 / 0.4));
 
   /* Tap targets: 48px on phones, 44px with a pointer (desktop). */
   --tap: 48px;
