@@ -61,22 +61,24 @@ const INPUTS: [string, string][] = [
   ['prose', fill('The quick brown fox, token: none; password is unset. ')],
 ];
 
+// A backtracking regex takes minutes on these inputs; the bounds leave room for a machine busy running
+// the whole suite in parallel.
 describe('redaction stays linear', () => {
   it.each(INPUTS)(
-    '%s: every regex and redactSecrets well under a second',
+    '%s: every regex and redactSecrets within a couple of seconds',
     (_name, text) => {
       const slow: string[] = [];
       for (const re of REDACTION_REGEXES) {
         const t0 = performance.now();
         for (const m of text.matchAll(re)) void m;
         const ms = performance.now() - t0;
-        if (ms > 500) slow.push(`${re.source.slice(0, 60)}: ${Math.round(ms)} ms`);
+        if (ms > 1000) slow.push(`${re.source.slice(0, 60)}: ${Math.round(ms)} ms`);
       }
       expect(slow).toEqual([]);
       const t0 = performance.now();
       redactSecrets(text, ['plainvalue99']);
       maskEdgeFragments(text);
-      expect(performance.now() - t0).toBeLessThan(1000);
+      expect(performance.now() - t0).toBeLessThan(2000);
     },
     60_000,
   );

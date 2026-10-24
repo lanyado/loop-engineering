@@ -1628,7 +1628,10 @@ export class LoopEngine {
     }
     add(result);
     if (out.verdict === null && result.isError && MODEL_LIMIT.test(result.text)) {
-      return this.skippedJob(c, kind, usage) ?? this.waitForLimit(c, kind, clip(result.text, 500), usage);
+      return (
+        this.skippedJob(c, kind, usage, this.limitBackoff(c)) ??
+        this.waitForLimit(c, kind, clip(result.text, 500), usage)
+      );
     }
     if (c.s.retryAfter || c.s.limitWaits) this.save(c, {}, { retryAfter: undefined, limitWaits: undefined });
     if (out.verdict === null) {
@@ -1779,21 +1782,18 @@ export class LoopEngine {
       );
       return { ok: false, progressed: escalated };
     }
-    const minutes = LIMIT_WAITS_MIN[waits]!;
     this.log(
-      `PR ${c.pr.repo}#${c.pr.number}: every model hit a limit in the ${kind} job; retrying in ${minutes} min`,
+      `PR ${c.pr.repo}#${c.pr.number}: every model hit a limit in the ${kind} job; retrying in ${LIMIT_WAITS_MIN[waits]} min`,
     );
-    this.save(
-      c,
-      {},
-      {
-        retryAfter: new Date(this.now() + minutes * MINUTE).toISOString(),
-        limitWaits: waits + 1,
-        lastError: message,
-      },
-      usage,
-    );
+    this.save(c, {}, { ...this.limitBackoff(c), lastError: message }, usage);
     return { ok: false, progressed: false };
+  }
+
+  /** The next model-limit wait (growing, capped at the longest); the count is what escalates. */
+  private limitBackoff(c: Ctx): Partial<LoopState> {
+    const waits = c.s.limitWaits ?? 0;
+    const minutes = LIMIT_WAITS_MIN[Math.min(waits, LIMIT_WAITS_MIN.length - 1)]!;
+    return { retryAfter: new Date(this.now() + minutes * MINUTE).toISOString(), limitWaits: waits + 1 };
   }
 
   /**
@@ -1853,11 +1853,17 @@ export class LoopEngine {
   /**
    * A job that ended without a result (crashed, no decision, every model at its limit) whose check
    * the human skipped while it ran (read from the row): its usage is recorded and the PR moves on,
-   * never retried, waited for or escalated. Null when the check was not skipped.
+   * never retried or escalated. A model limit is still recorded (`backoff`): the next check runs on
+   * the same models. Null when the check was not skipped.
    */
-  private skippedJob(c: Ctx, kind: PrJobKind, usage: MetricsDelta): JobOutcome<never> | null {
+  private skippedJob(
+    c: Ctx,
+    kind: PrJobKind,
+    usage: MetricsDelta,
+    backoff: Partial<LoopState> = {},
+  ): JobOutcome<never> | null {
     if (!isSkipped(loopState(this.deps.store.pullRequests.require(c.pr.id)), jobCheck(kind))) return null;
-    return { ok: false, progressed: this.save(c, {}, FRESH_ATTEMPTS, usage) };
+    return { ok: false, progressed: this.save(c, {}, { ...FRESH_ATTEMPTS, ...backoff }, usage) };
   }
 
   /**
