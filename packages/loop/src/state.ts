@@ -7,13 +7,13 @@ export type FeedbackKind = 'review' | 'tests' | 'qa' | 'check' | 'ci' | 'conflic
 const feedbackCheck = (f: Pick<Feedback, 'kind' | 'stage'>): string | undefined =>
   f.kind === 'check' ? f.stage : f.kind === 'ci' || f.kind === 'conflict' ? undefined : f.kind;
 
-/** The human skipped the check this send-back comes from (never true for CI or a conflict). */
-export const skippedFeedback = (s: LoopState, f: Pick<Feedback, 'kind' | 'stage'>): boolean =>
-  isSkipped(s, feedbackCheck(f));
-
 /** The human skipped `check` for this PR (no check: never skipped). */
 export const isSkipped = (s: LoopState, check: string | undefined): boolean =>
   check !== undefined && (s.skip?.includes(check) ?? false);
+
+/** The human skipped the check this send-back comes from (never true for CI or a conflict). */
+export const skippedFeedback = (s: LoopState, f: Pick<Feedback, 'kind' | 'stage'>): boolean =>
+  isSkipped(s, feedbackCheck(f));
 
 export interface Feedback {
   kind: FeedbackKind;

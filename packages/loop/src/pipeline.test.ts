@@ -491,7 +491,7 @@ describe('the human skips a check for one PR', () => {
     expect(h.logs.some((l) => l.includes('sent to the human'))).toBe(false);
   });
 
-  it('a check skipped while every model is at its limit moves on instead of waiting', async () => {
+  it('a check skipped while every model is at its limit moves on, and the next check waits out the limit', async () => {
     const lib = library({ checks: ['tests', 'review'] });
     const h = harness(lib);
     h.launcher
@@ -502,7 +502,14 @@ describe('the human skips a check for one PR', () => {
       .on('review', clean());
     await h.builderWithPr();
     await h.engine.tick();
-    expect(h.pr()).toMatchObject({ outcome: 'merged' }); // no limit wait (retryAfter) in between
+    expect(h.pr().stage).toBe('review');
+    expect(loopState(h.pr())).toMatchObject({ attempts: 0, limitWaits: 1 });
+    await h.engine.tick();
+    expect(h.launcher.kinds()).toEqual(['tests']); // review runs on the same models: it waits
+    h.clock.advance(6 * 60_000);
+    await h.engine.tick();
+    expect(h.pr()).toMatchObject({ outcome: 'merged' });
+    expect(h.logs.some((l) => l.includes('sent to the human'))).toBe(false);
   });
 
   it("a model-limit wait holds when a pipeline edit moves the PR to another check (the limit is the provider's)", async () => {
