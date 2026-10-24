@@ -31,7 +31,6 @@ import type {
   GitHub,
   JobKind,
   LoopRunner,
-  CheckJobKind,
   PrJobKind,
   PushResult,
   RepoRef,
@@ -65,7 +64,7 @@ import {
 import {
   builtinStageLibrary,
   checkJobKind,
-  checkOfJobKind,
+  jobCheck,
   isBuiltinCheck,
   type Pipeline,
   type StageLibrary,
@@ -631,7 +630,7 @@ export class LoopEngine {
       if (next === null) return this.toMerge(c, {}, {});
       // Another check now (the pipeline changed, or a skip): it starts with fresh attempts.
       if (next !== checkAt(c.pr.stage, c.s))
-        return this.save(c, stageFor(next), { ...checkField(next), attempts: 0, lastError: undefined });
+        return this.save(c, stageFor(next), { ...checkField(next), ...FRESH_ATTEMPTS });
       // Fail closed: a check whose stage file is missing or broken holds the PR, never skips.
       const stage = this.stages.stage(next);
       if (!stage || stage.error)
@@ -1617,16 +1616,26 @@ export class LoopEngine {
       }
     } catch (err) {
       if (this.stopped) return { ok: false, progressed: false };
-      return this.jobFailure(c, kind, err, usage);
+      return (
+        this.skippedJob(c, kind, usage) ?? {
+          ok: false,
+          progressed: this.failure(c, `${kind} job`, err, usage),
+        }
+      );
     }
     add(result);
     if (out.verdict === null && result.isError && MODEL_LIMIT.test(result.text)) {
-      return this.waitForLimit(c, kind, clip(result.text, 500), usage);
+      return this.skippedJob(c, kind, usage) ?? this.waitForLimit(c, kind, clip(result.text, 500), usage);
     }
     if (c.s.retryAfter || c.s.limitWaits) this.save(c, {}, { retryAfter: undefined, limitWaits: undefined });
     if (out.verdict === null) {
       const why = result.isError ? `error: ${clip(result.text, 500)}` : 'no decision block in its answer';
-      return this.jobFailure(c, kind, new Error(why), usage);
+      return (
+        this.skippedJob(c, kind, usage) ?? {
+          ok: false,
+          progressed: this.failure(c, `${kind} job`, new Error(why), usage),
+        }
+      );
     }
     if (c.s.networkWaits) this.save(c, {}, { networkWaits: undefined });
     if (out.pushed?.status === 'rejected') {
@@ -1732,7 +1741,7 @@ export class LoopEngine {
           rights: CONFLICT_RIGHTS,
         };
       default: {
-        const stage = usable(checkOfJobKind(kind));
+        const stage = usable(jobCheck(kind)!); // a check- job here: it has a check
         return {
           prompt: checkPrompt({ ...context, stageTitle: stage.title }, limit, stage.prompt),
           systemPrompt: checkSystem(stage.title, stage.access),
@@ -1844,22 +1853,25 @@ export class LoopEngine {
   }
 
   /**
+   * A job that ended without a result (crashed, no decision, every model at its limit) whose check
+   * the human skipped while it ran (read from the row): its usage is recorded and the PR moves on,
+   * never retried, waited for or escalated. Null when the check was not skipped.
+   */
+  private skippedJob(c: Ctx, kind: PrJobKind, usage: MetricsDelta): JobOutcome<never> | null {
+    const check = jobCheck(kind);
+    if (
+      check === undefined ||
+      !loopState(this.deps.store.pullRequests.require(c.pr.id)).skip?.includes(check)
+    )
+      return null;
+    return { ok: false, progressed: this.save(c, {}, FRESH_ATTEMPTS, usage) };
+  }
+
+  /**
    * A failed attempt: retried on the next tick. After maxAttempts it is escalated as an
    * infrastructure problem (or, with mayEscalate false, left to the caller's own question).
    * Returns whether it escalated.
    */
-  /**
-   * A job that crashed or gave no decision: a failed attempt, unless the human skipped its check while
-   * it ran (read from the row); then its usage is recorded and the PR moves on, never escalated.
-   */
-  private jobFailure(c: Ctx, kind: PrJobKind, err: unknown, usage: MetricsDelta): JobOutcome<never> {
-    const check = kind.startsWith('check-') ? checkOfJobKind(kind as CheckJobKind) : kind;
-    const { skip } = loopState(this.deps.store.pullRequests.require(c.pr.id));
-    if (kind !== 'conflict' && skip?.includes(check))
-      return { ok: false, progressed: this.save(c, {}, { attempts: 0, lastError: undefined }, usage) };
-    return { ok: false, progressed: this.failure(c, `${kind} job`, err, usage) };
-  }
-
   private failure(
     c: Ctx,
     what: string,
@@ -1990,6 +2002,15 @@ const FEEDBACK_LABEL: Record<Exclude<FeedbackKind, 'check'>, string> = {
   qa: 'QA failure feedback',
   ci: 'CI failure feedback',
   conflict: 'merge conflict feedback',
+};
+
+/** A check starting over: no failed attempts, no error, no backoff carried from another job. */
+const FRESH_ATTEMPTS: Partial<LoopState> = {
+  attempts: 0,
+  lastError: undefined,
+  retryAfter: undefined,
+  networkWaits: undefined,
+  limitWaits: undefined,
 };
 
 /** The PR stages a check runs in; advanceOpen picks which check from the pipeline. */

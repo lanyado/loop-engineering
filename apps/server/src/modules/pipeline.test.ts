@@ -145,7 +145,10 @@ describe('the pipeline API', () => {
     expect((await skip(pr.id, { check: 'tests' })).status).toBe(400);
     expect((await skip(pr.id, { check: 'merge', skip: true })).status).toBe(400);
     expect((await skip(999, { check: 'tests', skip: true })).status).toBe(404);
-    expect((await call('POST', { check: 'tests', skip: true }, TOKEN, '/api/prs/abc/skip')).status).toBe(400);
+    for (const bad of ['abc', '0', '-1', '1.5'])
+      expect((await call('POST', { check: 'tests', skip: true }, TOKEN, `/api/prs/${bad}/skip`)).status).toBe(
+        400,
+      );
     expect((await skip(pr.id, { check: 'tests', skip: false })).status).toBe(200);
     expect(loopState(store.pullRequests.require(pr.id)).skip).toBeUndefined();
   });
