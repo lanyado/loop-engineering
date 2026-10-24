@@ -608,3 +608,24 @@ test('a project moves up and hides from its settings, and shows again from the l
   await hidden.getByRole('button', { name: 'Show' }).click();
   await expect.poll(names).toContain(last);
 });
+
+test('a check is skipped for one PR from a pop-up on its node, and brought back the same way', async ({
+  page,
+}) => {
+  await open(page);
+  const lane = page.locator('[data-testid="lane"][data-pr-number="212"]');
+  const qa = lane.locator('[data-testid="node"][data-stage="qa"]');
+  await qa.getByTestId('skip-check').click();
+  const dialog = page.getByTestId('skip-dialog');
+  await expect(dialog).toContainText('Skip QA for web#212?');
+  await dialog.getByTestId('skip-confirm').click();
+  await expect(dialog).toHaveCount(0);
+  await expect(qa).toContainText('skipped');
+  await expect(qa.getByTestId('skip-check')).toHaveText('Run again');
+
+  await qa.getByTestId('skip-check').click();
+  await expect(page.getByTestId('skip-dialog')).toContainText('Run QA again for web#212?');
+  await page.getByTestId('skip-confirm').click();
+  await expect(qa.getByTestId('skip-check')).toHaveText('Skip');
+  await expect(qa).not.toContainText('skipped');
+});

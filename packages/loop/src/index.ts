@@ -67,4 +67,5 @@ export {
   type StageLibrary,
 } from './stages.js';
 export { loopState, type Feedback, type FeedbackKind, type LoopState, type QuestionKind } from './state.js';
+export { skipCheck } from './skip.js';
 export { GitWorkspace } from './workspace.js';

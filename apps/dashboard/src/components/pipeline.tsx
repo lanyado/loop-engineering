@@ -5,6 +5,7 @@ import { shows, type RowDetail } from '../lib/layout';
 import type { PullRequest, Question, TreeSession } from '../lib/schemas';
 import { EndSessionButton } from './end-session-button';
 import { QuestionCard } from './question-card';
+import { SkipCheck } from './skip-check';
 import {
   DetailsButton,
   DoubleClickTerminal,
@@ -297,7 +298,11 @@ const edgeInto = (state: NodeState): NodeState =>
 
 /** What a lane node shows in its detail: who it waits on, else the plain state word. */
 const nodeDetail = (node: StageNode): string =>
-  node.questions.length > 0 ? 'waiting on you' : (node.problem ?? STATE_WORDS[node.state]);
+  node.questions.length > 0
+    ? 'waiting on you'
+    : node.skipped
+      ? 'skipped'
+      : (node.problem ?? STATE_WORDS[node.state]);
 
 /** The deploy node also carries where the lane ended: shipped, merged, or how it stopped. */
 function deployDetail(node: StageNode, lane: Lane): string {
@@ -401,6 +406,18 @@ function LaneView({ lane, metrics, readOnly }: { lane: Lane; metrics: boolean; r
                   }
                   questions={
                     node.stage === 'deploying' ? [...node.questions, ...lane.end.questions] : node.questions
+                  }
+                  chip={
+                    pr && node.skippable ? (
+                      <SkipCheck
+                        prId={pr.id}
+                        pr={`${pr.repo}#${pr.number}`}
+                        check={node.stage}
+                        label={node.label}
+                        skipped={node.skipped}
+                        readOnly={readOnly}
+                      />
+                    ) : undefined
                   }
                 >
                   {button}

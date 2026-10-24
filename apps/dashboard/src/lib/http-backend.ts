@@ -52,6 +52,10 @@ export class HttpBackend implements Backend {
     return this.send('PUT', '/pipeline', update, responses.pipeline);
   }
 
+  async skipCheck(prId: number, check: string, skip: boolean) {
+    await this.send('POST', `/prs/${prId}/skip`, { check, skip }, responses.skipped);
+  }
+
   async openStageTerminal(prId: number, stage: string) {
     await this.send('POST', `/prs/${prId}/terminal`, { stage }, responses.terminal);
   }

@@ -2054,3 +2054,24 @@ button.node-plus:hover:not(:disabled) {
     opacity: 1;
   }
 }
+
+/* "Skip" / "Run again" under a check's node: quiet, so a lane of them does not shout. */
+.node-skip {
+  justify-self: start;
+  min-height: 22px;
+  margin-top: 2px;
+  padding: 0 0.5rem;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.node-skip:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.contents {
+  display: contents;
+}

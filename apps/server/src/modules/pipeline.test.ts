@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FakeClock, openStore } from '@loop-engineering/core';
-import { FileStageLibrary } from '@loop-engineering/loop';
+import { FileStageLibrary, loopState } from '@loop-engineering/loop';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ServerConfig } from '../config.js';
 import { createServer } from '../server.js';
@@ -28,18 +28,17 @@ const security = {
   prompt: 'Look for leaked secrets.',
 };
 
-describe('GET and PUT /api/pipeline', () => {
+describe('the pipeline API', () => {
   let dir: string;
+  let pokes: number;
   let server: ReturnType<typeof createServer>;
   let store: ReturnType<typeof openStore>;
   beforeEach(async () => {
     dir = mkdtempSync(join(tmpdir(), 'pipeline-'));
     store = openStore({ clock: new FakeClock('2026-10-24T09:00:00.000Z') });
-    server = createServer({
-      config,
-      store,
-      modules: [pipelineModule({ stages: new FileStageLibrary(join(dir, 'stages'), () => undefined) })],
-    });
+    pokes = 0;
+    const stages = new FileStageLibrary(join(dir, 'stages'), () => undefined);
+    server = createServer({ config, store, modules: [pipelineModule({ stages, poke: () => void pokes++ })] });
     await server.start();
   });
   afterEach(async () => {
@@ -48,8 +47,8 @@ describe('GET and PUT /api/pipeline', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const call = (method: string, body?: unknown, token = TOKEN) =>
-    server.app.request('/api/pipeline', {
+  const call = (method: string, body?: unknown, token = TOKEN, path = '/api/pipeline') =>
+    server.app.request(path, {
       method,
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -129,6 +128,25 @@ describe('GET and PUT /api/pipeline', () => {
     } finally {
       chmodSync(join(dir, 'stages'), 0o700);
     }
+  });
+
+  it('POST /prs/:id/skip skips a check for one PR and pokes the loop; refuses bad requests', async () => {
+    const shop = store.projects.create({
+      name: 'shop',
+      repos: [
+        { name: 'web', path: '/Users/me/web', remote: 'git@github.com:me/web.git', defaultBranch: 'main' },
+      ],
+    });
+    const pr = store.pullRequests.create({ projectId: shop.id, repo: 'web', number: 7, url: 'https://x/7' });
+    const skip = (id: number, body: unknown) => call('POST', body, TOKEN, `/api/prs/${id}/skip`);
+    expect((await skip(pr.id, { check: 'tests', skip: true })).status).toBe(200);
+    expect(loopState(store.pullRequests.require(pr.id)).skip).toEqual(['tests']);
+    expect(pokes).toBe(1);
+    expect((await skip(pr.id, { check: 'tests' })).status).toBe(400);
+    expect((await skip(pr.id, { check: 'merge', skip: true })).status).toBe(400);
+    expect((await skip(999, { check: 'tests', skip: true })).status).toBe(404);
+    expect((await skip(pr.id, { check: 'tests', skip: false })).status).toBe(200);
+    expect(loopState(store.pullRequests.require(pr.id)).skip).toBeUndefined();
   });
 
   it('needs the dashboard token', async () => {

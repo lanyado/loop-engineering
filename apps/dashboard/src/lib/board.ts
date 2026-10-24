@@ -35,6 +35,12 @@ export interface StageNode {
   custom: boolean;
   /** A check whose stage file is missing or broken: the loop holds PRs here until it is fixed. */
   problem?: string;
+  /** One of the pipeline's checks (not Approval, Merge, Deploy or Guardian). */
+  check: boolean;
+  /** The human skipped this check for the lane's PR. */
+  skipped: boolean;
+  /** A check of a PR still in its checks: the human may skip it, or bring it back. */
+  skippable: boolean;
   state: NodeState;
   questions: Question[];
 }
@@ -128,7 +134,8 @@ export function laneOrder(
 ): string[] {
   // A check with no stage file stays in: the loop holds PRs there until the file is back.
   const { checks } = view.pipeline;
-  const approval = !(project.autoMerge && checks.includes('review')) || pr?.stage === 'awaiting_approval';
+  const reviewed = checks.includes('review') && !pr?.loopState.skip?.includes('review');
+  const approval = !(project.autoMerge && reviewed) || pr?.stage === 'awaiting_approval';
   const deployed = pr !== null && ['deploying', 'deployed', 'reverted'].includes(pr.stage);
   return [
     ...checks,
@@ -185,13 +192,19 @@ function lane(
   const node = (stage: string, state: NodeState): StageNode => {
     const file = view.stages.find((s) => s.id === stage);
     const check = !(stage in FIXED_LABELS);
-    const problem = !check ? undefined : !file ? 'no stage file' : file.error ? 'file broken' : undefined;
+    // A skipped check is not waited for, so its file's state does not matter to the PR.
+    const skipped = check && (pr?.loopState.skip?.includes(stage) ?? false);
+    const problem =
+      !check || skipped ? undefined : !file ? 'no stage file' : file.error ? 'file broken' : undefined;
     return {
       stage,
       label: file?.label ?? FIXED_LABELS[stage] ?? stage,
       icon: file?.icon ?? stage,
       custom: file !== undefined && !file.builtin,
       ...(problem ? { problem } : {}),
+      check,
+      skipped,
+      skippable: check && pr !== null && pr.outcome === null && pr.stage !== 'escalated',
       state,
       questions: [],
     };

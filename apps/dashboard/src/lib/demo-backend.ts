@@ -75,6 +75,9 @@ export class DemoBackend implements Backend {
   openTerminal(): never {
     throw new ReadOnlyError();
   }
+  skipCheck(): never {
+    throw new ReadOnlyError();
+  }
   openStageTerminal(): never {
     throw new ReadOnlyError();
   }
