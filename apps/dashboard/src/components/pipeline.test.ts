@@ -19,9 +19,7 @@ const board = (prs = demoData(new Date()).pullRequests, pending: Parameters<type
 const renderRow = (sessionId: number, board_ = board()) => {
   const row = board_.projects.flatMap((p) => p.rows).find((r) => r.session.id === sessionId);
   if (!row) throw new Error(`no row for session ${sessionId}`);
-  return renderToStaticMarkup(
-    createElement(PipelineRow, { row, folder: false, autoMerge: false, readOnly: false, now: 0 }),
-  );
+  return renderToStaticMarkup(createElement(PipelineRow, { row, folder: false, readOnly: false, now: 0 }));
 };
 
 describe('the lane draws the way back to the builder', () => {
@@ -48,8 +46,9 @@ describe('the lane draws the way back to the builder', () => {
     };
     const html = renderRow(pr.sessionId!, board([pr]));
     expect(html).toContain('lane has-return');
-    // Merge is the fifth tile, and an empty feedback list still says "1 back".
-    expect(html).toContain('--ret-x:460px');
+    // Its project auto-merges with a review in the pipeline, so there is no Approval tile: Merge is the
+    // fourth tile. An empty feedback list still says "1 back".
+    expect(html).toContain('--ret-x:356px');
     expect(html).toContain('CI · 1 back');
   });
 
@@ -60,5 +59,45 @@ describe('the lane draws the way back to the builder', () => {
     const html = renderRow(101, board(noFeedback));
     expect(html).not.toContain('lane has-return');
     expect(html).not.toContain('lane-return');
+  });
+});
+
+describe('a custom stage (stage file)', () => {
+  it('draws its node with its label and names it on the way back', () => {
+    const data = demoData(new Date());
+    const atMerge = data.pullRequests.find((p) => p.stage === 'merge' && p.outcome === null)!;
+    const pr = {
+      ...atMerge,
+      stage: 'check',
+      loopState: {
+        ...atMerge.loopState,
+        check: 'security',
+        feedback: { kind: 'check', stage: 'security', items: ['a key is committed'], sentAt: null },
+      },
+    };
+    const view = {
+      pipeline: { checks: ['tests', 'security', 'review'], deploy: true, guardian: true },
+      stages: [
+        ...data.pipeline.stages,
+        {
+          id: 'security',
+          title: 'Security review',
+          label: 'Security',
+          icon: 'shield',
+          access: 'read',
+          runs: 'always',
+          prompt: 'x',
+          builtin: false,
+          overridden: false,
+        },
+      ],
+    };
+    const html = renderRow(pr.sessionId!, buildBoard(data.tree, [pr], [], view));
+    expect(html).toContain('data-stage="security"');
+    expect(html).toContain('title="Security">Security<');
+    // Its tile is the second: the line comes back from its centre, and the pill names it.
+    expect(html).toContain('--ret-x:148px');
+    expect(html).toContain('Security · 1 back');
+    expect(html).toContain('1 feedback · Security');
   });
 });

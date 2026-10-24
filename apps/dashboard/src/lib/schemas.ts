@@ -138,9 +138,13 @@ export const pullRequestSchema = z.object({
         })
         .optional()
         .catch(undefined),
+      /** With stage "check": the custom stage (a stage file) the PR is at. */
+      check: z.string().optional().catch(undefined),
       feedback: z
         .object({
           kind: z.string(),
+          /** kind "check": the custom stage that sent it. */
+          stage: z.string().optional().catch(undefined),
           items: z.array(z.string()).catch([]),
           sentAt: z.string().nullable().catch(null),
         })
@@ -179,6 +183,29 @@ export const settingsSchema = z.object({
 });
 export type Settings = z.infer<typeof settingsSchema>;
 
+/** A stage of the PR loop (GET /api/pipeline): a stage file's settings and prompt. */
+export const stageSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  label: z.string(),
+  icon: z.string(),
+  access: z.string(),
+  runs: z.string(),
+  prompt: z.string(),
+  builtin: z.boolean(),
+  overridden: z.boolean(),
+});
+export type Stage = z.infer<typeof stageSchema>;
+/** The checks before merge in the order the loop runs them, and whether it watches deploys and runs the Guardian. */
+export const pipelineSchema = z.object({
+  checks: z.array(z.string()),
+  deploy: z.boolean(),
+  guardian: z.boolean(),
+});
+export type Pipeline = z.infer<typeof pipelineSchema>;
+export const pipelineViewSchema = z.object({ pipeline: pipelineSchema, stages: z.array(stageSchema) });
+export type PipelineView = z.infer<typeof pipelineViewSchema>;
+
 /** Response envelopes, keyed by the route that returns them. */
 export const responses = {
   questions: z.object({ questions: z.array(questionSchema) }),
@@ -188,6 +215,7 @@ export const responses = {
   project: z.object({ project: projectSchema }),
   prs: z.object({ pullRequests: z.array(pullRequestSchema) }),
   settings: z.object({ settings: settingsSchema }),
+  pipeline: pipelineViewSchema,
   usage: z.object({ usage: usageSchema.nullable() }),
   loopStatus: loopStatusSchema,
   request: z.object({ request: requestSchema }),
@@ -220,7 +248,8 @@ export const permissionModeInput = z.object({
 export const endSessionInput = z.object({ sessionId: z.number().int().positive() });
 export const stageTerminalInput = z.object({
   prId: z.number().int().positive(),
-  stage: z.enum(['review', 'tests', 'qa']),
+  /** review, tests, qa or a custom stage's id (the server checks it is one). */
+  stage: z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/),
 });
 export const newRequestInput = z.object({
   text: z.string().trim().min(1, 'Describe the task').max(LIMITS.request),

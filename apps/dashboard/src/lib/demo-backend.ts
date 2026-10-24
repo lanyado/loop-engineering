@@ -43,6 +43,10 @@ export class DemoBackend implements Backend {
     return Promise.resolve(this.data.usage);
   }
 
+  pipeline() {
+    return Promise.resolve(this.data.pipeline);
+  }
+
   offlineSince() {
     return Promise.resolve(null);
   }

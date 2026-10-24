@@ -465,6 +465,45 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX guardian_runs_by_repo ON guardian_runs(project_id, repo, id);
     `,
   },
+  {
+    version: 18,
+    name: "PR loop: a 'check' stage for custom stages from stage files",
+    // SQLite cannot alter a CHECK, so the table is rebuilt as in migration 16, with 'check' allowed.
+    rebuildsTables: true,
+    sql: `
+      CREATE TABLE pull_requests_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+        request_id INTEGER REFERENCES requests(id) ON DELETE SET NULL,
+        repo TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        url TEXT NOT NULL,
+        stage TEXT NOT NULL DEFAULT 'tests'
+          CHECK (stage IN ('review', 'tests', 'qa', 'check', 'awaiting_approval', 'merge', 'deploying',
+                           'deployed', 'reverted', 'escalated')),
+        round INTEGER NOT NULL DEFAULT 0 CHECK (round >= 0),
+        outcome TEXT CHECK (outcome IN ('merged', 'reverted', 'escalated', 'closed')),
+        merge_commit_sha TEXT,
+        reverted_by_pr_id INTEGER REFERENCES pull_requests(id) ON DELETE SET NULL,
+        fixes_pr_id INTEGER REFERENCES pull_requests(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        loop_state TEXT NOT NULL DEFAULT '{}',
+        UNIQUE (project_id, repo, number)
+      );
+      INSERT INTO pull_requests_new
+        (id, project_id, session_id, request_id, repo, number, url, stage, round, outcome,
+         merge_commit_sha, reverted_by_pr_id, fixes_pr_id, created_at, updated_at, loop_state)
+      SELECT id, project_id, session_id, request_id, repo, number, url, stage, round, outcome,
+             merge_commit_sha, reverted_by_pr_id, fixes_pr_id, created_at, updated_at, loop_state
+      FROM pull_requests;
+      DELETE FROM sqlite_sequence WHERE name = 'pull_requests_new';
+      INSERT INTO sqlite_sequence (name, seq) SELECT 'pull_requests_new', seq FROM sqlite_sequence WHERE name = 'pull_requests';
+      DROP TABLE pull_requests;
+      ALTER TABLE pull_requests_new RENAME TO pull_requests;
+    `,
+  },
 ];
 
 /** Applies every migration newer than the database's user_version, each in its own transaction. */

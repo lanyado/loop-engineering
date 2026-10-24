@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProductionGuardian, type GuardianConfig } from './guardian.js';
 import { verdictResult } from './fakes.js';
 import type { AgentJob, AgentJobResult } from './ports.js';
+import { builtinStageLibrary } from './stages.js';
 import { loopState } from './state.js';
 import { Harness, SLUG } from './test-support/harness.js';
 
@@ -96,6 +97,27 @@ describe('ProductionGuardian', () => {
   afterEach(() => {
     h.close();
     rmSync(evidence, { recursive: true, force: true });
+  });
+
+  it('runs nothing on schedule when the pipeline has no Guardian', async () => {
+    guardian = new ProductionGuardian(
+      {
+        store: h.store,
+        github: h.github,
+        launcher: h.launcher,
+        workspace: h.workspace,
+        questions: h.questions,
+        timers: h.timers,
+        stages: builtinStageLibrary({ guardian: false }),
+        log: (m) => h.logs.push(m),
+      },
+      { evidenceDir: evidence },
+    );
+    deployedPr();
+    on();
+    await guardian.tick();
+    expect(h.store.guardianRuns.list()).toEqual([]);
+    expect(h.launcher.jobs).toEqual([]);
   });
 
   describe('after a deploy', () => {

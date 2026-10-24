@@ -84,9 +84,15 @@ export interface Deployments {
   status(repo: RepoRef, sha: string, vercelProject: string): Promise<DeployStatus>;
 }
 
-export type JobKind = 'review' | 'tests' | 'qa' | 'conflict' | 'guardian';
+/** A custom stage's job (a stage file): "check-" plus the stage's id. */
+export type CheckJobKind = `check-${string}`;
+export type JobKind = 'review' | 'tests' | 'qa' | 'conflict' | 'guardian' | CheckJobKind;
 /** The jobs of a PR's own stages; the Production Guardian's jobs belong to no PR. */
 export type PrJobKind = Exclude<JobKind, 'guardian'>;
+/** What chooses a job's CLI (LoopConfig.stageProviders): every custom stage shares "check". */
+export type StageJobKind = 'review' | 'tests' | 'qa' | 'conflict' | 'check';
+export const stageJobKind = (kind: PrJobKind): StageJobKind =>
+  kind.startsWith('check-') ? 'check' : (kind as StageJobKind);
 
 /** What a headless agent job may do. Mapped to Claude's tool flags and to OpenCode permissions alike. */
 export interface JobRights {

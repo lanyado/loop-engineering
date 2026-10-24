@@ -5,6 +5,7 @@ import { QuestionCard } from '../../components/question-card';
 import { ProjectButtons, ProjectShell } from '../../components/session-controls';
 import { ProjectSettings } from '../../components/settings-controls';
 import { buildBoard, type ProjectBoard } from '../../lib/board';
+import { DEFAULT_PIPELINE } from '../../lib/default-pipeline';
 import { requestTime } from '../../lib/server/clock';
 import { backendForViewer } from '../../lib/server/session';
 
@@ -31,12 +32,14 @@ function ProjectHeader({ board }: { board: ProjectBoard }) {
 
 export default async function BoardPage() {
   const backend = await backendForViewer();
-  const [tree, prs, pending] = await Promise.all([
+  const [tree, prs, pending, pipeline] = await Promise.all([
     backend.tree(),
     backend.pullRequests(),
     backend.pendingQuestions(),
+    // A server from before stage files: the built-in pipeline.
+    backend.pipeline().catch(() => DEFAULT_PIPELINE),
   ]);
-  const board = buildBoard(tree, prs, pending);
+  const board = buildBoard(tree, prs, pending, pipeline);
   const now = requestTime();
   const readOnly = backend.demo;
   return (
@@ -69,7 +72,6 @@ export default async function BoardPage() {
                   key={row.session.id}
                   row={row}
                   folder={p.project.kind === 'folder'}
-                  autoMerge={p.project.autoMerge}
                   readOnly={readOnly}
                   now={now}
                 />

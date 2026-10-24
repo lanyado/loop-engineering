@@ -1,6 +1,8 @@
+import { DEFAULT_PIPELINE } from './default-pipeline';
 import type {
   ClaudeUsage,
   Metrics,
+  PipelineView,
   Project,
   PullRequest,
   Question,
@@ -22,6 +24,7 @@ export interface DemoData {
   transcripts: Record<number, Transcript>;
   settings: Settings;
   usage: ClaudeUsage;
+  pipeline: PipelineView;
 }
 
 const MIN = 60_000;
@@ -431,6 +434,7 @@ export function demoData(now: Date): DemoData {
       opencodeEnabled: true,
       opencodeBackupModels: ['opencode/big-pickle'],
     },
+    pipeline: DEFAULT_PIPELINE,
   };
 }
 

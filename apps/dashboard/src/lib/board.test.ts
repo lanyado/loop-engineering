@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { buildBoard, LANE_STAGES, stageStates } from './board';
+import { buildBoard, LANE_STAGES, laneOrder, stageStates } from './board';
+import { DEFAULT_PIPELINE } from './default-pipeline';
 import { demoData } from './fixtures';
-import type { PullRequest, Question, TreeProject, TreeSession } from './schemas';
+import type { PipelineView, PullRequest, Question, TreeProject, TreeSession } from './schemas';
 
 const NOW = new Date('2026-10-18T12:00:00.000Z');
 
@@ -254,5 +255,73 @@ describe('buildBoard', () => {
     const shop = projects.find((p) => p.project.name === 'shop')!;
     const search = shop.rows.find((r) => r.session.title === 'Search relevance')!;
     expect(search.lanes[0]!.nodes.find((n) => n.stage === 'awaiting_approval')!.questions).toHaveLength(1);
+  });
+});
+
+describe('the pipeline (stage files) shapes every lane', () => {
+  const security = {
+    id: 'security',
+    title: 'Security review',
+    label: 'Security',
+    icon: 'shield',
+    access: 'read',
+    runs: 'always',
+    prompt: 'x',
+    builtin: false,
+    overridden: false,
+  };
+  const view = (pipeline: Partial<PipelineView['pipeline']>, extra = [security]): PipelineView => ({
+    pipeline: { ...DEFAULT_PIPELINE.pipeline, ...pipeline },
+    stages: [...DEFAULT_PIPELINE.stages, ...extra],
+  });
+  const lane = (v: PipelineView, prs: PullRequest[], autoMerge = false) => {
+    const tree = [{ ...project(1, [session(1, 1)]), autoMerge }];
+    return buildBoard(tree, prs, [], v).projects[0]!.rows[0]!.lanes[0]!;
+  };
+
+  it('draws the checks in the pipeline order, with a custom stage under its label and icon', () => {
+    const l = lane(view({ checks: ['security', 'review', 'tests'] }), [
+      pr(1, 1, 'check', { loopState: { check: 'security' } }),
+    ]);
+    expect(l.nodes.map((n) => n.stage)).toEqual([
+      'security',
+      'review',
+      'tests',
+      'awaiting_approval',
+      'merge',
+      'deploying',
+      'guardian',
+    ]);
+    expect(l.nodes[0]).toMatchObject({ label: 'Security', icon: 'shield', custom: true, state: 'current' });
+    expect(l.nodes[1]).toMatchObject({ label: 'CR', custom: false, state: 'todo' });
+  });
+
+  it('marks the checks before the current one done, in the pipeline order', () => {
+    const l = lane(view({ checks: ['review', 'tests'] }), [pr(1, 1, 'tests')]);
+    expect(l.nodes.slice(0, 3).map((n) => [n.stage, n.state])).toEqual([
+      ['review', 'done'],
+      ['tests', 'current'],
+      ['awaiting_approval', 'todo'],
+    ]);
+  });
+
+  it('leaves out Deploy and Guardian when the pipeline turns them off', () => {
+    const l = lane(view({ deploy: false, guardian: false }), [pr(1, 1, 'tests')]);
+    expect(l.nodes.map((n) => n.stage)).toEqual(['tests', 'review', 'qa', 'awaiting_approval', 'merge']);
+  });
+
+  it('shows Approval in an auto-merge project only when the pipeline has no review, or a PR waits there', () => {
+    const p = { autoMerge: true };
+    expect(laneOrder(p, DEFAULT_PIPELINE, null)).not.toContain('awaiting_approval');
+    expect(laneOrder(p, view({ checks: ['tests'] }), null)).toContain('awaiting_approval');
+    expect(laneOrder(p, DEFAULT_PIPELINE, pr(1, 1, 'awaiting_approval'))).toContain('awaiting_approval');
+  });
+
+  it('skips a check whose stage file is gone, and halts a PR still at it', () => {
+    const l = lane(view({ checks: ['tests', 'security'] }, []), [
+      pr(1, 1, 'check', { loopState: { check: 'security' } }),
+    ]);
+    expect(l.nodes.map((n) => n.stage)).not.toContain('security');
+    expect(l.nodes.every((n) => n.state === 'halted' || n.stage === 'guardian')).toBe(true);
   });
 });

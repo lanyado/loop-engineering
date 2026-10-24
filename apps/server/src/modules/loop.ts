@@ -7,12 +7,14 @@ import {
   GhCli,
   GhDeployments,
   GitWorkspace,
+  isStageId,
   jobLogFile,
   LoopEngine,
   ProductionGuardian,
   type GuardianConfig,
   type LoopConfig,
   type LoopDeps,
+  type PrJobKind,
   type StageProvider,
 } from '@loop-engineering/loop';
 import { shellQuote } from '@loop-engineering/runner';
@@ -22,7 +24,9 @@ import { macCommandOpener, type CommandOpener } from './terminal.js';
 
 /** Prints a job log readably as it grows (apps/server/scripts, next to src/ and dist/). */
 const FOLLOW_SCRIPT = fileURLToPath(new URL('../../scripts/follow-job.mjs', import.meta.url));
-const STAGES = new Set(['review', 'tests', 'qa']);
+/** A stage whose job keeps a log: review, tests, QA or a custom stage (its stage file's id). */
+const jobKindOf = (stage: string): PrJobKind =>
+  stage === 'review' || stage === 'tests' || stage === 'qa' ? stage : `check-${stage}`;
 
 export interface LoopModuleOptions {
   /** Builds the engine once the server context (store, questions, requests, runner) exists. */
@@ -72,11 +76,11 @@ export function loopModule(options: LoopModuleOptions): LoopModule {
         if (!logsDir) return c.json({ error: 'the PR loop keeps no job logs here' }, 503);
         const id = Number(c.req.param('id'));
         const body = (await c.req.json().catch(() => ({}))) as { stage?: unknown };
-        const stage = typeof body.stage === 'string' && STAGES.has(body.stage) ? body.stage : null;
-        if (!stage) return c.json({ error: 'stage must be review, tests or qa' }, 400);
+        const stage = typeof body.stage === 'string' && isStageId(body.stage) ? body.stage : null;
+        if (!stage) return c.json({ error: 'stage must be review, tests, qa or a custom stage id' }, 400);
         if (!Number.isInteger(id) || !ctx.store.pullRequests.get(id))
           return c.json({ error: 'no such PR' }, 404);
-        const file = jobLogFile(logsDir, id, stage as 'review' | 'tests' | 'qa');
+        const file = jobLogFile(logsDir, id, jobKindOf(stage));
         if (!existsSync(file)) return c.json({ error: 'this stage has not run yet' }, 409);
         try {
           await openCommand(
@@ -152,6 +156,8 @@ export function loopConfigFromEnv(env: NodeJS.ProcessEnv): Partial<LoopConfig> {
       tests: stageProvider(env, 'LOOP_TESTS_PROVIDER', 'opencode', problems),
       qa: stageProvider(env, 'LOOP_QA_PROVIDER', 'claude', problems),
       conflict: stageProvider(env, 'LOOP_CONFLICT_PROVIDER', 'claude', problems),
+      // Custom stages (stage files) gate the merge like review does.
+      check: stageProvider(env, 'LOOP_CHECK_PROVIDER', 'claude', problems),
     },
   };
   if (problems.length > 0) throw new ConfigError(`Invalid PR loop config:\n- ${problems.join('\n- ')}`);
@@ -201,6 +207,7 @@ export function loopModuleFromEnv(env: NodeJS.ProcessEnv, deps: Partial<LoopDeps
           timers: ctx.timers,
           createRequest: (input) => ctx.requests.create({ ...input, source: 'dashboard' }),
           connectivity: sharedConnectivity(ctx),
+          ...(deps.stages ? { stages: deps.stages } : {}),
           ...(deps.github ? { github: deps.github } : {}),
           ...(deps.launcher ? { launcher: deps.launcher } : {}),
           ...(deps.workspace ? { workspace: deps.workspace } : {}),

@@ -58,14 +58,16 @@ export const REQUEST_SOURCES = ['telegram', 'dashboard'] as const;
 export type RequestSource = (typeof REQUEST_SOURCES)[number];
 
 /**
- * Where a PR is in the loop. awaiting_approval: tests/QA passed, auto-merge is off, waiting for the
- * human. merge: merging now. deploying: merged, watching the Vercel deploy. reverted/escalated mirror
- * the terminal outcomes so the pipeline view can show them in place.
+ * Where a PR is in the loop. check: a custom stage from a stage file (loopState.check names it).
+ * awaiting_approval: every check passed, auto-merge is off, waiting for the human. merge: merging now.
+ * deploying: merged, watching the Vercel deploy. reverted/escalated mirror the terminal outcomes so
+ * the pipeline view can show them in place.
  */
 export const PR_STAGES = [
   'review',
   'tests',
   'qa',
+  'check',
   'awaiting_approval',
   'merge',
   'deploying',

@@ -14,8 +14,8 @@ import {
   type TerminalTarget,
 } from './session-controls';
 
-/* Inline 24px stroke icons (no icon library), one per node kind. */
-const ICON_PATHS: Record<NodeStage | 'session' | 'builder' | 'end', ReactNode> = {
+/* Inline 24px stroke icons (no icon library): one per fixed node, and the set a stage file picks from. */
+const ICON_PATHS: Record<string, ReactNode> = {
   session: (
     <>
       <rect x="3" y="4" width="18" height="16" rx="3" />
@@ -75,9 +75,56 @@ const ICON_PATHS: Record<NodeStage | 'session' | 'builder' | 'end', ReactNode> =
       <path d="M5 21V4M5 4h11l-2 4 2 4H5" />
     </>
   ),
+  // Custom stages (packages/loop's STAGE_ICONS).
+  shield: (
+    <>
+      <path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6l-7-3Z" />
+    </>
+  ),
+  lock: (
+    <>
+      <rect x="5" y="11" width="14" height="10" rx="2" />
+      <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+    </>
+  ),
+  bug: (
+    <>
+      <rect x="7" y="8" width="10" height="12" rx="5" />
+      <path d="M12 12v8M3 13h4M17 13h4M4 7l3 2M20 7l-3 2M4 19l3-2M20 19l-3-2M9 5l1.5 2M15 5l-1.5 2" />
+    </>
+  ),
+  book: (
+    <>
+      <path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2V5Z" />
+      <path d="M4 19a2 2 0 0 1 2-2h13" />
+    </>
+  ),
+  gauge: (
+    <>
+      <path d="M3.5 17a9 9 0 1 1 17 0" />
+      <path d="m12 14 4-5" />
+    </>
+  ),
+  globe: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3 12h18M12 3c2.5 2.5 3.5 5.5 3.5 9s-1 6.5-3.5 9c-2.5-2.5-3.5-5.5-3.5-9s1-6.5 3.5-9Z" />
+    </>
+  ),
+  sparkle: (
+    <>
+      <path d="M12 3c.6 4.2 2.8 6.4 7 7-4.2.6-6.4 2.8-7 7-.6-4.2-2.8-6.4-7-7 4.2-.6 6.4-2.8 7-7ZM19 17l.5 2 2 .5-2 .5-.5 2-.5-2-2-.5 2-.5.5-2Z" />
+    </>
+  ),
+  check: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="m8 12 3 3 5-6" />
+    </>
+  ),
 };
 
-function Icon({ kind }: { kind: keyof typeof ICON_PATHS }) {
+function Icon({ kind }: { kind: string }) {
   return (
     <svg
       viewBox="0 0 24 24"
@@ -89,20 +136,10 @@ function Icon({ kind }: { kind: keyof typeof ICON_PATHS }) {
       aria-hidden="true"
       focusable="false"
     >
-      {ICON_PATHS[kind]}
+      {ICON_PATHS[kind] ?? ICON_PATHS.check}
     </svg>
   );
 }
-
-const NODE_TITLES: Record<NodeStage, string> = {
-  review: 'CR',
-  tests: 'Tests',
-  qa: 'QA',
-  awaiting_approval: 'Approval',
-  merge: 'Merge',
-  deploying: 'Deploy',
-  guardian: 'Guardian',
-};
 
 // Completed stages show no word at all: the green tile already says it.
 const STATE_WORDS: Record<NodeState, string> = {
@@ -136,16 +173,12 @@ const FEEDBACK_SHORT: Record<string, string> = {
 interface LaneFeedback {
   pr: PullRequest;
   kind: string;
+  /** What sent it, for the panel and the chip: a custom stage's label, else the kind's name. */
+  label: string;
+  short: string;
   items: string[];
   sentAt: string | null;
 }
-
-/** The comments/bugs each drawn lane's stage sent back to the builder (and no fix pushed yet). */
-const laneFeedbacks = (lanes: Lane[]): LaneFeedback[] =>
-  lanes.flatMap((lane): LaneFeedback[] => {
-    const f = lane.pr?.loopState.feedback;
-    return lane.pr && f ? [{ pr: lane.pr, kind: f.kind, items: f.items, sentAt: f.sentAt }] : [];
-  });
 
 /** The lane node each kind of send-back comes from (a CI failure or a conflict surfaces at Merge). */
 const FEEDBACK_ORIGIN: Record<string, NodeStage> = {
@@ -155,6 +188,26 @@ const FEEDBACK_ORIGIN: Record<string, NodeStage> = {
   ci: 'merge',
   conflict: 'merge',
 };
+const feedbackOrigin = (f: { kind: string; stage?: string | undefined }) =>
+  f.kind === 'check' ? (f.stage ?? '') : FEEDBACK_ORIGIN[f.kind];
+
+/** The comments/bugs each drawn lane's stage sent back to the builder (and no fix pushed yet). */
+const laneFeedbacks = (lanes: Lane[]): LaneFeedback[] =>
+  lanes.flatMap((lane): LaneFeedback[] => {
+    const f = lane.pr?.loopState.feedback;
+    if (!lane.pr || !f) return [];
+    const custom = f.kind === 'check' ? lane.nodes.find((n) => n.stage === f.stage)?.label : undefined;
+    return [
+      {
+        pr: lane.pr,
+        kind: f.kind,
+        label: custom ? `${custom} failures` : (FEEDBACK_LABELS[f.kind] ?? f.kind),
+        short: custom ?? FEEDBACK_SHORT[f.kind] ?? f.kind,
+        items: f.items,
+        sentAt: f.sentAt,
+      },
+    ];
+  });
 
 /** Lane tiles are 88px wide with 16px edges between them (see .lane .node and .lane .edge in globals.css). */
 const TILE_W = 88;
@@ -164,8 +217,8 @@ const TILE_PITCH = TILE_W + 16;
  * The way back: a dashed amber line under the lane, from the stage that sent work back to the
  * Builder, ending in an arrow at the lane's start. Its pill (how many items) opens the details.
  */
-function ReturnPath({ kind, count, from }: { kind: string; count: number; from: number }) {
-  const label = `${FEEDBACK_SHORT[kind] ?? kind} · ${count} back`;
+function ReturnPath({ short, count, from }: { short: string; count: number; from: number }) {
+  const label = `${short} · ${count} back`;
   return (
     <span
       className="lane-return"
@@ -267,11 +320,11 @@ function guardianDetail(node: StageNode, lane: Lane): string {
   return nodeDetail(node);
 }
 
-/** Stages whose agent job has a terminal (its log): review, tests and QA, once they have run. */
+/** Stages whose agent job has a terminal (its log): review, tests, QA and custom stages, once they have run. */
 const JOB_STAGES = new Set<NodeStage>(['review', 'tests', 'qa']);
 function stageTerminal(lane: Lane, node: StageNode): TerminalTarget | null {
-  if (!lane.pr || !JOB_STAGES.has(node.stage) || node.state === 'todo') return null;
-  return { kind: 'stage', prId: lane.pr.id, stage: node.stage as 'review' | 'tests' | 'qa' };
+  if (!lane.pr || !(node.custom || JOB_STAGES.has(node.stage)) || node.state === 'todo') return null;
+  return { kind: 'stage', prId: lane.pr.id, stage: node.stage };
 }
 
 /** A node that opens its terminal on double-click, with a ">_" button for it. */
@@ -296,12 +349,13 @@ function WithTerminal({
   );
 }
 
-function LaneView({ lane, autoMerge, readOnly }: { lane: Lane; autoMerge: boolean; readOnly: boolean }) {
+function LaneView({ lane, readOnly }: { lane: Lane; readOnly: boolean }) {
   const pr = lane.pr;
-  // Auto-merge projects approve on their own: their pipeline has no Approval node.
-  const nodes = autoMerge ? lane.nodes.filter((n) => n.stage !== 'awaiting_approval') : lane.nodes;
+  // The board already left out what this pipeline does not run (Approval in auto-merge projects, …).
+  const nodes = lane.nodes;
   const feedback = pr?.loopState.feedback;
-  const origin = feedback ? nodes.findIndex((n) => n.stage === FEEDBACK_ORIGIN[feedback.kind]) : -1;
+  const origin = feedback ? nodes.findIndex((n) => n.stage === feedbackOrigin(feedback)) : -1;
+  const back = laneFeedbacks([lane])[0];
   return (
     <li
       className={`lane${origin >= 0 ? ' has-return' : ''}`}
@@ -322,8 +376,8 @@ function LaneView({ lane, autoMerge, readOnly }: { lane: Lane; autoMerge: boolea
         )}
       </span>
       <span className="lane-flow">
-        {feedback && origin >= 0 && (
-          <ReturnPath kind={feedback.kind} count={Math.max(feedback.items.length, 1)} from={origin} />
+        {feedback && back && origin >= 0 && (
+          <ReturnPath short={back.short} count={Math.max(feedback.items.length, 1)} from={origin} />
         )}
         {nodes.map((node, i) => (
           <span key={node.stage} className="lane-step">
@@ -331,10 +385,10 @@ function LaneView({ lane, autoMerge, readOnly }: { lane: Lane; autoMerge: boolea
             <WithTerminal target={stageTerminal(lane, node)} readOnly={readOnly}>
               {(button) => (
                 <Node
-                  kind={node.stage}
+                  kind={node.icon}
                   stage={node.stage}
                   state={node.state}
-                  title={NODE_TITLES[node.stage]}
+                  title={node.label}
                   detail={
                     node.stage === 'deploying'
                       ? deployDetail(node, lane)
@@ -404,7 +458,7 @@ function askerLabel(q: Question, row: Row): string {
   for (const lane of row.lanes) {
     const pr = lane.pr ? `${lane.pr.repo}#${lane.pr.number}` : '';
     const node = lane.nodes.find((n) => n.questions.includes(q));
-    if (node) return `${NODE_TITLES[node.stage]} · ${pr}`;
+    if (node) return `${node.label} · ${pr}`;
     if (lane.end.questions.includes(q)) return `${lane.end.label} · ${pr}`;
   }
   return row.session.title;
@@ -413,13 +467,11 @@ function askerLabel(q: Question, row: Row): string {
 export function PipelineRow({
   row,
   folder,
-  autoMerge,
   readOnly,
   now,
 }: {
   row: Row;
   folder: boolean;
-  autoMerge: boolean;
   readOnly: boolean;
   now: number;
 }) {
@@ -427,7 +479,7 @@ export function PipelineRow({
   const pause = pauseLabel(session.pauseReason);
   const open = session.status !== 'ended';
   const feedbacks = laneFeedbacks(row.lanes);
-  const froms = [...new Set(feedbacks.map((f) => FEEDBACK_SHORT[f.kind] ?? f.kind))];
+  const froms = [...new Set(feedbacks.map((f) => f.short))];
   const feedbackChip = `${feedbacks.length} feedback · ${froms.join(', ')}`;
   const questions = [
     ...builder.questions,
@@ -450,7 +502,7 @@ export function PipelineRow({
                   <a className="mono" href={f.pr.url} target="_blank" rel="noreferrer">
                     {f.pr.repo}#{f.pr.number}
                   </a>{' '}
-                  · {FEEDBACK_LABELS[f.kind] ?? f.kind} ({roundLabel(f.pr.round)}) ·{' '}
+                  · {f.label} ({roundLabel(f.pr.round)}) ·{' '}
                   {f.sentAt ? 'the builder is fixing it, nothing to do' : 'being sent to the builder'}
                 </p>
                 {f.items.length > 0 && (
@@ -526,12 +578,7 @@ export function PipelineRow({
               <Edge state={row.lanes.some((l) => l.pr) ? 'done' : 'todo'} />
               <ul className={`lanes${row.lanes.length > 1 ? ' split' : ''}`}>
                 {row.lanes.map((lane) => (
-                  <LaneView
-                    key={lane.pr?.id ?? 'none'}
-                    lane={lane}
-                    autoMerge={autoMerge}
-                    readOnly={readOnly}
-                  />
+                  <LaneView key={lane.pr?.id ?? 'none'} lane={lane} readOnly={readOnly} />
                 ))}
               </ul>
             </>

@@ -40,6 +40,7 @@ import {
   parseGuardian,
   type GuardianContext,
 } from './prompts.js';
+import type { StageLibrary } from './stages.js';
 import { loopState, patchState } from './state.js';
 
 const MINUTE = 60_000;
@@ -100,6 +101,8 @@ export interface GuardianDeps {
   createRequest?: CreateRequest;
   /** Shared with the PR loop engine. Default: its own, probing through `github`. */
   connectivity?: Connectivity;
+  /** Its pipeline.json can switch the scheduled runs off. Default: the built-in pipeline (on). */
+  stages?: StageLibrary;
   timers?: Timers;
   log?: (message: string) => void;
 }
@@ -221,6 +224,8 @@ export class ProductionGuardian {
     const now = store.clock.now().getTime();
     const age = (iso: string) => now - Date.parse(iso);
     const found: ReturnType<ProductionGuardian['due']> = [];
+    // The pipeline without the Guardian: no scheduled runs (an explicit runNow still runs).
+    if (this.deps.stages && !this.deps.stages.pipeline().guardian) return found;
     for (const project of store.projects.list()) {
       if (project.kind !== 'git') continue;
       for (const repo of project.repos) {

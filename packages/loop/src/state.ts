@@ -1,10 +1,12 @@
 import type { PullRequest } from '@loop-engineering/core';
 
-/** Why the builder got feedback: review comments, failing tests/QA/CI, or a merge conflict. */
-export type FeedbackKind = 'review' | 'tests' | 'qa' | 'ci' | 'conflict';
+/** Why the builder got feedback: review comments, failing tests/QA/CI, a custom check, or a merge conflict. */
+export type FeedbackKind = 'review' | 'tests' | 'qa' | 'check' | 'ci' | 'conflict';
 
 export interface Feedback {
   kind: FeedbackKind;
+  /** kind "check": the custom stage that failed. */
+  stage?: string;
   items: string[];
   /** PR head the feedback is about; a push past it means the builder answered. */
   sha: string;
@@ -30,9 +32,13 @@ export type LoopState = {
   /** The CLI whose review approved reviewedSha; an OpenCode approval needs the human to merge. */
   reviewedBy?: 'claude' | 'opencode';
   testedSha?: string;
-  /** Set by the tester; when true, qaSha must match too. */
+  /** Set by the tester; when true (and the tests ran before QA), qaSha must match too. */
   qaNeeded?: boolean;
   qaSha?: string;
+  /** Custom stages (stage files): the head each one passed at. */
+  passed?: Record<string, string>;
+  /** With stage "check": the custom stage the PR is at. */
+  check?: string;
   /** The head the human answered Merge for. */
   approvedSha?: string;
   /** PR head at merge time; cleanup deletes branches only while they still point at (or under) it. */
@@ -101,7 +107,30 @@ export function patchState(state: LoopState, patch: Partial<LoopState>): LoopSta
   return next;
 }
 
-/** Whether `head` passed review, tests and (when needed) QA. */
-export function verifiedAt(s: LoopState, head: string): boolean {
-  return s.reviewedSha === head && s.testedSha === head && (!s.qaNeeded || s.qaSha === head);
+/** The head a check last passed at: the built-ins have their own fields, custom stages share `passed`. */
+export function passedAt(s: LoopState, check: string): string | undefined {
+  if (check === 'tests') return s.testedSha;
+  if (check === 'review') return s.reviewedSha;
+  if (check === 'qa') return s.qaSha;
+  return s.passed?.[check];
+}
+
+/** Heads some check passed at; one that is not the PR's head means new commits arrived since. */
+export const passedHeads = (s: LoopState): string[] =>
+  [s.testedSha, s.reviewedSha, s.qaSha, ...Object.values(s.passed ?? {})].filter(
+    (sha): sha is string => sha !== undefined,
+  );
+
+/**
+ * The first check of `checks` (in order) that `head` has not passed, or null when all have. QA counts
+ * as passed without running when the tests ran before it at this head and the tester saw no need.
+ */
+export function nextCheck(s: LoopState, head: string, checks: readonly string[]): string | null {
+  for (const [i, check] of checks.entries()) {
+    if (passedAt(s, check) === head) continue;
+    if (check === 'qa' && checks.slice(0, i).includes('tests') && s.testedSha === head && !s.qaNeeded)
+      continue;
+    return check;
+  }
+  return null;
 }
