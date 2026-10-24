@@ -8,10 +8,12 @@ const feedbackCheck = (f: Pick<Feedback, 'kind' | 'stage'>): string | undefined 
   f.kind === 'check' ? f.stage : f.kind === 'ci' || f.kind === 'conflict' ? undefined : f.kind;
 
 /** The human skipped the check this send-back comes from (never true for CI or a conflict). */
-export function skippedFeedback(s: LoopState, f: Pick<Feedback, 'kind' | 'stage'>): boolean {
-  const check = feedbackCheck(f);
-  return check !== undefined && (s.skip?.includes(check) ?? false);
-}
+export const skippedFeedback = (s: LoopState, f: Pick<Feedback, 'kind' | 'stage'>): boolean =>
+  isSkipped(s, feedbackCheck(f));
+
+/** The human skipped `check` for this PR (no check: never skipped). */
+export const isSkipped = (s: LoopState, check: string | undefined): boolean =>
+  check !== undefined && (s.skip?.includes(check) ?? false);
 
 export interface Feedback {
   kind: FeedbackKind;

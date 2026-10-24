@@ -64,6 +64,7 @@ import {
 import {
   builtinStageLibrary,
   checkJobKind,
+  checkOfJobKind,
   jobCheck,
   isBuiltinCheck,
   type Pipeline,
@@ -72,6 +73,7 @@ import {
 import {
   loopState,
   nextCheck,
+  isSkipped,
   newCommitsSince,
   patchState,
   skippedFeedback,
@@ -1077,7 +1079,7 @@ export class LoopEngine {
     // the row: the skip came in after this step loaded it.
     const from = { kind, ...(stage ? { stage } : {}) };
     if (skippedFeedback(loopState(this.deps.store.pullRequests.require(c.pr.id)), from))
-      return this.save(c, {}, { attempts: 0, lastError: undefined }, usage);
+      return this.save(c, {}, FRESH_ATTEMPTS, usage);
     if (c.pr.round >= this.maxRounds(c)) {
       return this.escalate(c, `PR #${c.pr.number} hit ${c.pr.round} rounds`, items, false, usage, from);
     }
@@ -1563,6 +1565,12 @@ export class LoopEngine {
       wanted === 'builder' ? (session?.provider ?? 'claude') : wanted,
     );
     const usage = { costUsd: 0, tokensIn: 0, tokensOut: 0 };
+    // No result: a failed attempt, unless the human skipped the check meanwhile (skippedJob).
+    const failed = (err: unknown): JobOutcome<T> =>
+      this.skippedJob(c, kind, usage) ?? {
+        ok: false,
+        progressed: this.failure(c, `${kind} job`, err, usage),
+      };
     const add = (r: AgentJobResult) => {
       usage.costUsd += r.costUsd;
       usage.tokensIn += r.tokensIn;
@@ -1616,12 +1624,7 @@ export class LoopEngine {
       }
     } catch (err) {
       if (this.stopped) return { ok: false, progressed: false };
-      return (
-        this.skippedJob(c, kind, usage) ?? {
-          ok: false,
-          progressed: this.failure(c, `${kind} job`, err, usage),
-        }
-      );
+      return failed(err);
     }
     add(result);
     if (out.verdict === null && result.isError && MODEL_LIMIT.test(result.text)) {
@@ -1630,12 +1633,7 @@ export class LoopEngine {
     if (c.s.retryAfter || c.s.limitWaits) this.save(c, {}, { retryAfter: undefined, limitWaits: undefined });
     if (out.verdict === null) {
       const why = result.isError ? `error: ${clip(result.text, 500)}` : 'no decision block in its answer';
-      return (
-        this.skippedJob(c, kind, usage) ?? {
-          ok: false,
-          progressed: this.failure(c, `${kind} job`, new Error(why), usage),
-        }
-      );
+      return failed(new Error(why));
     }
     if (c.s.networkWaits) this.save(c, {}, { networkWaits: undefined });
     if (out.pushed?.status === 'rejected') {
@@ -1741,7 +1739,7 @@ export class LoopEngine {
           rights: CONFLICT_RIGHTS,
         };
       default: {
-        const stage = usable(jobCheck(kind)!); // a check- job here: it has a check
+        const stage = usable(checkOfJobKind(kind));
         return {
           prompt: checkPrompt({ ...context, stageTitle: stage.title }, limit, stage.prompt),
           systemPrompt: checkSystem(stage.title, stage.access),
@@ -1858,12 +1856,7 @@ export class LoopEngine {
    * never retried, waited for or escalated. Null when the check was not skipped.
    */
   private skippedJob(c: Ctx, kind: PrJobKind, usage: MetricsDelta): JobOutcome<never> | null {
-    const check = jobCheck(kind);
-    if (
-      check === undefined ||
-      !loopState(this.deps.store.pullRequests.require(c.pr.id)).skip?.includes(check)
-    )
-      return null;
+    if (!isSkipped(loopState(this.deps.store.pullRequests.require(c.pr.id)), jobCheck(kind))) return null;
     return { ok: false, progressed: this.save(c, {}, FRESH_ATTEMPTS, usage) };
   }
 
@@ -2004,14 +1997,11 @@ const FEEDBACK_LABEL: Record<Exclude<FeedbackKind, 'check'>, string> = {
   conflict: 'merge conflict feedback',
 };
 
-/** A check starting over: no failed attempts, no error, no backoff carried from another job. */
-const FRESH_ATTEMPTS: Partial<LoopState> = {
-  attempts: 0,
-  lastError: undefined,
-  retryAfter: undefined,
-  networkWaits: undefined,
-  limitWaits: undefined,
-};
+/**
+ * A check starting over: no failed attempts and no error from another job. Model-limit and network
+ * backoffs stay: they belong to the provider and the network, not to the check.
+ */
+const FRESH_ATTEMPTS: Partial<LoopState> = { attempts: 0, lastError: undefined };
 
 /** The PR stages a check runs in; advanceOpen picks which check from the pipeline. */
 const atCheck = (stage: string) => isBuiltinCheck(stage) || stage === 'check';
