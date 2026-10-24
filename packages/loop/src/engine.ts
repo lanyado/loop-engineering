@@ -37,7 +37,7 @@ import type {
   StageJobKind,
   Workspace,
 } from './ports.js';
-import { stageJobKind } from './ports.js';
+import { checkJobKind, stageJobKind } from './ports.js';
 import {
   checkPrompt,
   checkSystem,
@@ -66,8 +66,9 @@ import { builtinStageLibrary, isBuiltinCheck, type Pipeline, type StageLibrary }
 import {
   loopState,
   nextCheck,
+  newCommitsSince,
   passedAt,
-  passedHeads,
+  testsBeforeQa,
   patchState,
   type Feedback,
   type FeedbackKind,
@@ -605,7 +606,7 @@ export class LoopEngine {
     if (c.s.branch !== gh.headRefName) return this.save(c, {}, { branch: gh.headRefName });
     if (CHECK_STAGES.has(c.pr.stage) && !c.s.feedback) {
       // Commits after a check passed: every check runs again on the new head.
-      if (passedHeads(c.s).some((sha) => sha !== gh.headRefOid))
+      if (newCommitsSince(c.s, gh.headRefOid))
         return this.restartReview(c, `new commits (${short(gh.headRefOid)})`);
       // Which check runs comes from the pipeline, so an edit to it applies on the PR's next step.
       const next = this.nextCheck(c, gh.headRefOid);
@@ -689,7 +690,7 @@ export class LoopEngine {
     if (!job.ok) return job.progressed;
     const v = job.verdict;
     // QA is slow: it runs only when the tester asks for it AND the diff touches UI files.
-    if (v.qaNeeded && !touchesUi(await this.deps.github.diff(c.ref, c.pr.number))) {
+    if (v.qaNeeded && !(await this.changesUi(c))) {
       this.log(
         `PR ${c.pr.repo}#${c.pr.number}: the tester asked for QA, but the diff changes no UI files; skipping QA`,
       );
@@ -734,9 +735,8 @@ export class LoopEngine {
   private async qaStep(c: Ctx, gh: GhPr): Promise<boolean> {
     if (c.s.feedback) return this.awaitFix(c, gh);
     // No tester ran before QA to judge whether it is needed: QA runs when the diff touches UI files.
-    const checks = this.pipeline().checks;
-    if (!checks.slice(0, checks.indexOf('qa')).includes('tests')) {
-      if (!touchesUi(await this.deps.github.diff(c.ref, c.pr.number))) {
+    if (!testsBeforeQa(this.pipeline().checks)) {
+      if (!(await this.changesUi(c))) {
         this.log(`PR ${c.pr.repo}#${c.pr.number}: the diff changes no UI files; skipping QA`);
         return this.afterCheck(c, gh, { qaSha: gh.headRefOid }, {});
       }
@@ -765,11 +765,11 @@ export class LoopEngine {
     const stage = this.stages.stage(id)!;
     const passed = (usage: MetricsDelta) =>
       this.afterCheck(c, gh, { passed: { ...c.s.passed, [id]: gh.headRefOid } }, usage);
-    if (stage.runs === 'ui-changes' && !touchesUi(await this.deps.github.diff(c.ref, c.pr.number))) {
+    if (stage.runs === 'ui-changes' && !(await this.changesUi(c))) {
       this.log(`PR ${c.pr.repo}#${c.pr.number}: the diff changes no UI files; skipping ${stage.title}`);
       return passed({});
     }
-    const job = await this.runJob(c, gh, `check-${id}`, parseCheck);
+    const job = await this.runJob(c, gh, checkJobKind(id), parseCheck);
     if (!job.ok) return job.progressed;
     const after = await this.deps.github.getPr(c.ref, c.pr.number);
     if (after.headRefOid !== gh.headRefOid)
@@ -797,6 +797,15 @@ export class LoopEngine {
     return this.stages.pipeline();
   }
 
+  /** The pipeline has the code review. */
+  private reviews(): boolean {
+    return this.pipeline().checks.includes('review');
+  }
+
+  private async changesUi(c: Ctx): Promise<boolean> {
+    return touchesUi(await this.deps.github.diff(c.ref, c.pr.number));
+  }
+
   /** The pipeline's next check at `head`; a check whose stage file is gone is not waited for. */
   private nextCheck(c: Ctx, head: string): string | null {
     const checks = this.pipeline().checks.filter((id) => this.stages.stage(id));
@@ -808,7 +817,7 @@ export class LoopEngine {
    * while a check added to the pipeline since just runs, in the same round.
    */
   private recheck(c: Ctx, head: string, why: string): boolean {
-    if (passedHeads(c.s).some((sha) => sha !== head)) return this.restartReview(c, why);
+    if (newCommitsSince(c.s, head)) return this.restartReview(c, why);
     const next = this.nextCheck(c, head)!;
     this.log(`PR ${c.pr.repo}#${c.pr.number}: the pipeline gained ${next}; running it before merge`);
     return this.save(c, stageFor(next), { ...checkField(next), question: undefined, approvedSha: undefined });
@@ -819,9 +828,7 @@ export class LoopEngine {
    * pipeline has no code review at all.
    */
   private needsHuman(c: Ctx): boolean {
-    return (
-      !c.project.autoMerge || c.s.reviewedBy === 'opencode' || !this.pipeline().checks.includes('review')
-    );
+    return !c.project.autoMerge || c.s.reviewedBy === 'opencode' || !this.reviews();
   }
 
   private toMerge(c: Ctx, state: Partial<LoopState>, usage: MetricsDelta): boolean {
@@ -850,7 +857,7 @@ export class LoopEngine {
         context: `${gh.title}\n${gh.url}\nHead ${head}. ${
           !c.project.autoMerge
             ? `Auto-merge is off for ${c.project.name}.`
-            : !this.pipeline().checks.includes('review')
+            : !this.reviews()
               ? 'The pipeline has no code review, so nothing is merged automatically.'
               : 'Only a free OpenCode model reviewed it (Claude was out of usage), so it is not merged automatically.'
         }`,
@@ -1066,11 +1073,11 @@ export class LoopEngine {
     return `${this.stages.stage(f.stage ?? '')?.title ?? f.stage ?? 'check'} feedback`;
   }
 
-  /** The checks that passed at `head`, in pipeline order ("tests and review"): what the merge question names. */
+  /** The checks that passed at `head`, in pipeline order ("Tests and Code review"): what the merge question names. */
   private passedText(c: Ctx, head: string): string {
     const titles = this.pipeline()
       .checks.filter((id) => passedAt(c.s, id) === head)
-      .map((id) => (isBuiltinCheck(id) ? BUILTIN_NAMES[id] : (this.stages.stage(id)?.title ?? id)));
+      .map((id) => this.stages.stage(id)?.title ?? id);
     if (titles.length === 0) return 'CI';
     return titles.length === 1 ? titles[0]! : `${titles.slice(0, -1).join(', ')} and ${titles.at(-1)}`;
   }
@@ -1913,8 +1920,6 @@ const FEEDBACK_LABEL: Record<Exclude<FeedbackKind, 'check'>, string> = {
   ci: 'CI failure feedback',
   conflict: 'merge conflict feedback',
 };
-
-const BUILTIN_NAMES = { tests: 'tests', review: 'review', qa: 'QA' } as const;
 
 /** The PR stages a check runs in; advanceOpen picks which check from the pipeline. */
 const CHECK_STAGES = new Set<string>(['tests', 'review', 'qa', 'check']);

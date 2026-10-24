@@ -12,22 +12,24 @@ import type { ServerModule } from '../context.js';
  *                   -> the same as GET. Writes STAGES_DIR/<id>.md and pipeline.json; null deletes a
  *                   custom stage or resets a built-in one. Everything is validated before anything is
  *                   written; a stage still in the pipeline cannot be deleted (400).
+ *
+ * This schema checks the shape; the stage library checks ids, sizes and the pipeline (its
+ * ValidationError is a 400, see app.ts).
  */
 const stageFields = z.strictObject({
-  title: z.string().max(60),
-  label: z.string().max(10),
+  title: z.string(),
+  label: z.string(),
   icon: z.enum(STAGE_ICONS),
   access: z.enum(STAGE_ACCESS),
   runs: z.enum(STAGE_RUNS),
-  prompt: z.string().max(18_000),
+  prompt: z.string(),
 });
 const pipelineUpdate = z.strictObject({
-  pipeline: z.strictObject({
-    checks: z.array(z.string().max(32)).max(12),
-    deploy: z.boolean(),
-    guardian: z.boolean(),
-  }),
-  stages: z.record(z.string().max(32), stageFields.nullable()).optional(),
+  pipeline: z.strictObject({ checks: z.array(z.string()), deploy: z.boolean(), guardian: z.boolean() }),
+  stages: z
+    .record(z.string(), stageFields.nullable())
+    .refine((s) => Object.keys(s).length <= 30, 'at most 30 stages per change')
+    .optional(),
 });
 
 export function pipelineModule({ stages }: { stages: EditableStageLibrary }): ServerModule {
@@ -37,12 +39,9 @@ export function pipelineModule({ stages }: { stages: EditableStageLibrary }): Se
     api(api) {
       api.get('/pipeline', (c) => c.json(view()));
       api.put('/pipeline', async (c) => {
-        const raw: unknown = await c.req.json().catch(() => null);
-        const parsed = pipelineUpdate.safeParse(raw);
+        const parsed = pipelineUpdate.safeParse(await c.req.json().catch(() => null));
         if (!parsed.success) return c.json({ error: z.prettifyError(parsed.error) }, 400);
-        if (Object.keys(parsed.data.stages ?? {}).length > 30)
-          return c.json({ error: 'at most 30 stages per change' }, 400);
-        stages.update(parsed.data); // a ValidationError becomes a 400 (app.ts)
+        stages.update(parsed.data);
         return c.json(view());
       });
     },

@@ -248,8 +248,8 @@ export const permissionModeInput = z.object({
 export const endSessionInput = z.object({ sessionId: z.number().int().positive() });
 export const stageTerminalInput = z.object({
   prId: z.number().int().positive(),
-  /** review, tests, qa or a custom stage's id (the server checks it is one). */
-  stage: z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/),
+  /** review, tests, qa or a custom stage's id; the server checks which. */
+  stage: z.string().min(1).max(32),
 });
 export const newRequestInput = z.object({
   text: z.string().trim().min(1, 'Describe the task').max(LIMITS.request),

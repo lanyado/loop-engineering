@@ -13,7 +13,7 @@ import { PipelineRow } from './pipeline';
  */
 
 const board = (prs = demoData(new Date()).pullRequests, pending: Parameters<typeof buildBoard>[2] = []) =>
-  buildBoard(demoData(new Date()).tree, prs, pending);
+  buildBoard(demoData(new Date()).tree, prs, pending, demoData(new Date()).pipeline);
 
 // The lane tiles are 88px wide with 16px edges: tile i centre = i * 104 + 44 (see pipeline.tsx).
 const renderRow = (sessionId: number, board_ = board()) => {

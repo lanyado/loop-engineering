@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { buildBoard, LANE_STAGES, laneOrder, stageStates } from './board';
-import { DEFAULT_PIPELINE } from './default-pipeline';
+import { buildBoard as buildWith, LANE_STAGES, laneOrder, stageStates } from './board';
 import { demoData } from './fixtures';
 import type { PipelineView, PullRequest, Question, TreeProject, TreeSession } from './schemas';
 
 const NOW = new Date('2026-10-18T12:00:00.000Z');
+// The demo's pipeline is the built-in one: tests, review, QA.
+const PIPELINE = demoData(NOW).pipeline;
+const buildBoard = (tree: TreeProject[], prs: PullRequest[], pending: Question[], view = PIPELINE) =>
+  buildWith(tree, prs, pending, view);
 
 const session = (id: number, projectId: number, extra: Partial<TreeSession> = {}): TreeSession => ({
   id,
@@ -271,8 +274,8 @@ describe('the pipeline (stage files) shapes every lane', () => {
     overridden: false,
   };
   const view = (pipeline: Partial<PipelineView['pipeline']>, extra = [security]): PipelineView => ({
-    pipeline: { ...DEFAULT_PIPELINE.pipeline, ...pipeline },
-    stages: [...DEFAULT_PIPELINE.stages, ...extra],
+    pipeline: { ...PIPELINE.pipeline, ...pipeline },
+    stages: [...PIPELINE.stages, ...extra],
   });
   const lane = (v: PipelineView, prs: PullRequest[], autoMerge = false) => {
     const tree = [{ ...project(1, [session(1, 1)]), autoMerge }];
@@ -312,9 +315,9 @@ describe('the pipeline (stage files) shapes every lane', () => {
 
   it('shows Approval in an auto-merge project only when the pipeline has no review, or a PR waits there', () => {
     const p = { autoMerge: true };
-    expect(laneOrder(p, DEFAULT_PIPELINE, null)).not.toContain('awaiting_approval');
+    expect(laneOrder(p, PIPELINE, null)).not.toContain('awaiting_approval');
     expect(laneOrder(p, view({ checks: ['tests'] }), null)).toContain('awaiting_approval');
-    expect(laneOrder(p, DEFAULT_PIPELINE, pr(1, 1, 'awaiting_approval'))).toContain('awaiting_approval');
+    expect(laneOrder(p, PIPELINE, pr(1, 1, 'awaiting_approval'))).toContain('awaiting_approval');
   });
 
   it('skips a check whose stage file is gone, and halts a PR still at it', () => {

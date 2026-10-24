@@ -654,7 +654,7 @@ describe('merge approval (B2)', () => {
     const [q] = h.asked();
     expect(q).toMatchObject({
       sessionId: session.id,
-      text: `PR web#1 at ${head(h).slice(0, 7)} (round 1) passed tests and review. Merge it?`,
+      text: `PR web#1 at ${head(h).slice(0, 7)} (round 1) passed Tests and Code review. Merge it?`,
       options: ['Merge', 'Hold', 'Close'],
       recommendedOption: 'Hold',
     });
@@ -1184,7 +1184,7 @@ describe('per-stage providers', () => {
     ]);
     expect(h.pr()).toMatchObject({ stage: 'awaiting_approval', outcome: null });
     expect(loopState(h.pr()).reviewedBy).toBe('opencode');
-    expect(h.asked().at(-1)?.text).toMatch(/passed tests and review\. Merge it\?/);
+    expect(h.asked().at(-1)?.text).toMatch(/passed Tests and Code review\. Merge it\?/);
   });
 });
 

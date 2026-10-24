@@ -53,10 +53,10 @@ const badId = (id: string) =>
   new ValidationError(
     `stage id "${id}": use a-z, 0-9 and dashes (32 at most), and not a pipeline node's name`,
   );
-const MAX_FILE = 20_000;
+/** Sizes a stage may have; the API's schema uses them too. */
+export const STAGE_LIMITS = { title: 60, label: 10, prompt: 18_000 } as const;
+const MAX_FILE = STAGE_LIMITS.prompt + 2_000;
 const MAX_CHECKS = 12;
-const MAX_LABEL = 10;
-const MAX_TITLE = 60;
 
 /** What a stage file holds. For a built-in check, access and runs are fixed by the code. */
 export interface StageFields {
@@ -120,11 +120,13 @@ export function validateStage(id: string, fields: StageFields): StageFields {
   const title = fields.title.trim();
   const label = fields.label.trim();
   const prompt = fields.prompt.trim();
-  if (!title || title.length > MAX_TITLE)
-    throw new ValidationError(`stage ${id}: title must be 1-${MAX_TITLE} characters`);
-  if (!label || label.length > MAX_LABEL)
-    throw new ValidationError(`stage ${id}: label must be 1-${MAX_LABEL} characters`);
-  if (!prompt) throw new ValidationError(`stage ${id}: the prompt is empty`);
+  const max = STAGE_LIMITS;
+  if (!title || title.length > max.title)
+    throw new ValidationError(`stage ${id}: title must be 1-${max.title} characters`);
+  if (!label || label.length > max.label)
+    throw new ValidationError(`stage ${id}: label must be 1-${max.label} characters`);
+  if (!prompt || prompt.length > max.prompt)
+    throw new ValidationError(`stage ${id}: the prompt must be 1-${max.prompt} characters`);
   if (/[\r\n]/.test(title + label))
     throw new ValidationError(`stage ${id}: title and label are one line each`);
   return {
@@ -155,11 +157,7 @@ export function parseStageFile(id: string, text: string): StageFields {
     const key = kv[1]!;
     if (!['title', 'label', 'icon', 'access', 'runs'].includes(key))
       throw new ValidationError(`stage ${id}: unknown setting "${key}"`);
-    // " # ..." starts a comment, as in the README's example; a "#" inside a word (C#) stays.
-    meta[key] = kv[2]!
-      .replace(/\s#.*$/, '')
-      .trim()
-      .replace(/^"(.*)"$/, '$1');
+    meta[key] = kv[2]!.trim();
   }
   return validateStage(id, {
     title: meta.title ?? '',

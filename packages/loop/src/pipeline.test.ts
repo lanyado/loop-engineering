@@ -102,7 +102,7 @@ describe('removed checks', () => {
     await h.engine.tick();
     expect(h.pr()).toMatchObject({ stage: 'awaiting_approval', outcome: null });
     const [q] = h.asked();
-    expect(q?.text).toMatch(/passed tests\. Merge it\?/);
+    expect(q?.text).toMatch(/passed Tests\. Merge it\?/);
     expect(q?.context).toContain('no code review');
   });
 

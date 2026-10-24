@@ -1,4 +1,3 @@
-import { DEFAULT_PIPELINE } from './default-pipeline';
 import { newestFinishedFirst } from './format';
 import type { PipelineView, PullRequest, Question, TreeProject, TreeSession } from './schemas';
 
@@ -222,7 +221,7 @@ export function buildBoard(
   tree: TreeProject[],
   prs: PullRequest[],
   pending: Question[],
-  view: PipelineView = DEFAULT_PIPELINE,
+  view: PipelineView,
 ): Board {
   const pendingById = new Map(pending.map((q) => [q.id, q]));
   // A loop question names its PR (loopState.question); it goes on that PR's lane, not the builder.

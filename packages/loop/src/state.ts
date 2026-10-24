@@ -115,21 +115,24 @@ export function passedAt(s: LoopState, check: string): string | undefined {
   return s.passed?.[check];
 }
 
-/** Heads some check passed at; one that is not the PR's head means new commits arrived since. */
-export const passedHeads = (s: LoopState): string[] =>
-  [s.testedSha, s.reviewedSha, s.qaSha, ...Object.values(s.passed ?? {})].filter(
-    (sha): sha is string => sha !== undefined,
+/** A check passed at another head than `head`: new commits arrived since. */
+export const newCommitsSince = (s: LoopState, head: string): boolean =>
+  [s.testedSha, s.reviewedSha, s.qaSha, ...Object.values(s.passed ?? {})].some(
+    (sha) => sha !== undefined && sha !== head,
   );
+
+/** The tester runs before QA in `checks`: then its qaNeeded decides whether QA runs. */
+export const testsBeforeQa = (checks: readonly string[]): boolean =>
+  checks.includes('tests') && checks.indexOf('tests') < checks.indexOf('qa');
 
 /**
  * The first check of `checks` (in order) that `head` has not passed, or null when all have. QA counts
  * as passed without running when the tests ran before it at this head and the tester saw no need.
  */
 export function nextCheck(s: LoopState, head: string, checks: readonly string[]): string | null {
-  for (const [i, check] of checks.entries()) {
+  for (const check of checks) {
     if (passedAt(s, check) === head) continue;
-    if (check === 'qa' && checks.slice(0, i).includes('tests') && s.testedSha === head && !s.qaNeeded)
-      continue;
+    if (check === 'qa' && testsBeforeQa(checks) && s.testedSha === head && !s.qaNeeded) continue;
     return check;
   }
   return null;

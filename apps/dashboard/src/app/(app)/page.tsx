@@ -5,7 +5,6 @@ import { QuestionCard } from '../../components/question-card';
 import { ProjectButtons, ProjectShell } from '../../components/session-controls';
 import { ProjectSettings } from '../../components/settings-controls';
 import { buildBoard, type ProjectBoard } from '../../lib/board';
-import { DEFAULT_PIPELINE } from '../../lib/default-pipeline';
 import { requestTime } from '../../lib/server/clock';
 import { backendForViewer } from '../../lib/server/session';
 
@@ -36,8 +35,7 @@ export default async function BoardPage() {
     backend.tree(),
     backend.pullRequests(),
     backend.pendingQuestions(),
-    // A server from before stage files: the built-in pipeline.
-    backend.pipeline().catch(() => DEFAULT_PIPELINE),
+    backend.pipeline(),
   ]);
   const board = buildBoard(tree, prs, pending, pipeline);
   const now = requestTime();

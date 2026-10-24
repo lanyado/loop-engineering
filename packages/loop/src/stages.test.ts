@@ -12,7 +12,7 @@ import {
 } from './stages.js';
 
 const SECURITY = `---
-title: Security review   # its full name
+title: Security review
 label: Security
 icon: shield
 access: read
@@ -31,7 +31,7 @@ const fields: StageFields = {
 };
 
 describe('stage files', () => {
-  it('parses settings and the prompt; a " #" starts a comment, a "#" in a word does not', () => {
+  it('parses settings and the prompt', () => {
     expect(parseStageFile('security', SECURITY)).toEqual({
       title: 'Security review',
       label: 'Security',

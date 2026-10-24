@@ -4,7 +4,6 @@ label: QA
 icon: qa
 ---
 
-Steps:
 Be quick: you have 15 minutes. Check only what the diff changes; do not explore the rest of the app.
 
 1. Start the app locally the way the README or package.json says (dev server in the background); wait until it answers.

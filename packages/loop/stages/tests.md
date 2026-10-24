@@ -4,7 +4,6 @@ label: Tests
 icon: tests
 ---
 
-Steps:
 Be quick: aim to finish within about 10 minutes. Every step you take is a slow model call, so plan the few
 commands you need first and batch them; do not explore code the diff does not touch.
 

@@ -1,8 +1,8 @@
-import { DEFAULT_PIPELINE } from './default-pipeline';
 import type {
   ClaudeUsage,
   Metrics,
   PipelineView,
+  Stage,
   Project,
   PullRequest,
   Question,
@@ -434,8 +434,34 @@ export function demoData(now: Date): DemoData {
       opencodeEnabled: true,
       opencodeBackupModels: ['opencode/big-pickle'],
     },
-    pipeline: DEFAULT_PIPELINE,
+    // Demo stages: the built-in pipeline, with sample prompts (the server serves the real files).
+    pipeline: {
+      pipeline: { checks: ['tests', 'review', 'qa'], deploy: true, guardian: true },
+      stages: [
+        stage('tests', 'Tests', 'Tests', 'shell', 'always', 'Run the tests that cover the changed files.'),
+        stage(
+          'review',
+          'Code review',
+          'CR',
+          'read',
+          'always',
+          'Review for bugs, gaps and security problems.',
+        ),
+        stage('qa', 'Manual QA', 'QA', 'browser', 'ui-changes', 'Check the changed pages in a browser.'),
+      ],
+    },
   };
+}
+
+function stage(
+  id: string,
+  title: string,
+  label: string,
+  access: string,
+  runs: string,
+  prompt: string,
+): Stage {
+  return { id, title, label, icon: id, access, runs, prompt, builtin: true, overridden: false };
 }
 
 function project(
