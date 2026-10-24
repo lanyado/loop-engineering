@@ -1,3 +1,5 @@
+import type { ReactElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DemoBackend } from '../demo-backend';
 
@@ -28,6 +30,7 @@ vi.mock('next/navigation', () => ({
   redirect: (url: string) => {
     throw new m.Redirect(url);
   },
+  useRouter: () => ({ refresh: () => {} }),
 }));
 vi.mock('next/cache', () => ({ refresh: () => {} }));
 vi.mock('./env', async (importOriginal) => ({
@@ -109,6 +112,17 @@ describe('Server Actions', () => {
     }
     expect(m.backendCalls).toBe(0);
     expect(m.cookiesSet).toEqual([]);
+  });
+});
+
+describe('the settings sheet', () => {
+  it('keeps the theme switch when the server settings fail to load', async () => {
+    vi.spyOn(DemoBackend.prototype, 'settings').mockRejectedValueOnce(new Error('down'));
+    const { default: Layout } = await import('../../app/(app)/layout');
+    const html = renderToStaticMarkup((await Layout({ children: null })) as ReactElement);
+    expect(html).toContain('Server settings are unavailable right now.');
+    expect(html).toContain('data-testid="theme-switch"');
+    expect(html).not.toContain('data-testid="provider-switches"');
   });
 });
 

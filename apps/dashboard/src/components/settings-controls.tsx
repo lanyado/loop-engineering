@@ -10,7 +10,7 @@ import {
 } from '../app/actions';
 import { permissionLabel } from '../lib/format';
 import { SELECTABLE_PERMISSION_MODES } from '../lib/schemas';
-import { THEME_OPTIONS, type Theme, type ThemeOption } from '../lib/theme';
+import type { Theme } from '../lib/theme';
 import { FolderPath, KindChip } from './project-kind';
 
 /** Runs an action, keeps its message; the server re-renders the page with the saved value. */
@@ -64,18 +64,38 @@ export function Switch({
   );
 }
 
-const THEME_LABELS: Record<ThemeOption, string> = { system: 'System', light: 'Light', dark: 'Dark' };
+const THEMES = [
+  ['system', 'System'],
+  ['light', 'Light'],
+  ['dark', 'Dark'],
+] as const;
+type ThemeOption = (typeof THEMES)[number][0];
 
-/** System, Light or Dark for this browser. The refreshed page carries the theme on <html>. */
+/** Sets <html data-theme> now, ahead of the server render that sets the same value. */
+function applyTheme(option: ThemeOption) {
+  const root = document.documentElement;
+  if (option === 'system') delete root.dataset.theme;
+  else root.dataset.theme = option;
+}
+
+/** System, Light or Dark for this browser. */
 export function ThemeSwitch({ theme }: { theme: Theme | null }) {
   const [, start] = useTransition();
-  const [shown, setShown] = useOptimistic<ThemeOption>(theme ?? 'system');
+  const saved = theme ?? 'system';
+  const [shown, setShown] = useOptimistic<ThemeOption>(saved);
   const hintId = useId();
+  const choose = (option: ThemeOption) =>
+    start(async () => {
+      setShown(option);
+      applyTheme(option);
+      // Not rethrown: a failed theme save should not take the page down; the switch shows the saved one.
+      await setTheme(option).catch(() => applyTheme(saved));
+    });
   return (
     <fieldset className="theme-field" aria-describedby={hintId} data-testid="theme-switch">
       <legend>Appearance</legend>
       <div className="segmented">
-        {THEME_OPTIONS.map((option) => (
+        {THEMES.map(([option, label]) => (
           <label key={option}>
             <input
               type="radio"
@@ -83,19 +103,10 @@ export function ThemeSwitch({ theme }: { theme: Theme | null }) {
               value={option}
               className="sr-only"
               checked={shown === option}
-              onChange={() =>
-                start(async () => {
-                  setShown(option);
-                  // Applied now rather than after the round trip; the server render sets the same value.
-                  const root = document.documentElement;
-                  if (option === 'system') delete root.dataset.theme;
-                  else root.dataset.theme = option;
-                  await setTheme(option);
-                })
-              }
+              onChange={() => choose(option)}
               data-testid={`theme-${option}`}
             />
-            {THEME_LABELS[option]}
+            {label}
           </label>
         ))}
       </div>

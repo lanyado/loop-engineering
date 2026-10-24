@@ -109,7 +109,6 @@ describe('with a valid session cookie', () => {
     expect(m.backendCalls).toBe(Object.keys(pages).length);
     // Demo backend: the write is refused as read-only, after the login check passed.
     expect(await (await actions()).answerQuestion()).toMatchObject({ ok: false, error: /read-only/ });
-    // The theme is per browser, not a backend write, so read-only demo mode allows it.
     await (await actions()).setTheme();
     expect(m.cookiesSet).toEqual(['loop-theme=dark']);
   });

@@ -389,7 +389,9 @@ test('the theme switch works in read-only demo mode and survives a reload', asyn
   await pick('Dark');
   await expect(html).toHaveAttribute('data-theme', 'dark');
   await expect.poll(looks).toEqual({ bg: DARK, scheme: 'dark' });
-  expect(await themeCookies()).toMatchObject([{ value: 'dark', httpOnly: true, sameSite: 'Lax', path: '/' }]);
+  await expect
+    .poll(themeCookies)
+    .toMatchObject([{ value: 'dark', httpOnly: true, sameSite: 'Lax', path: '/' }]);
   await snap(page, info, 'settings-dark');
 
   await page.reload();

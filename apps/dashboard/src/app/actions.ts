@@ -26,7 +26,7 @@ import {
 } from '../lib/schemas';
 import { getAuthConfig, noLogin } from '../lib/server/env';
 import { backendForViewer, requireLogin } from '../lib/server/session';
-import { parseTheme, THEME_COOKIE, THEME_MAX_AGE_S } from '../lib/theme';
+import { parseTheme, THEME_COOKIE } from '../lib/theme';
 
 export type ActionResult = { ok: true; message?: string } | { ok: false; error: string };
 
@@ -138,7 +138,7 @@ export async function setTheme(theme: string): Promise<void> {
       secure: cookieIsSecure((name) => requestHeaders.get(name)),
       sameSite: 'lax',
       path: '/',
-      maxAge: THEME_MAX_AGE_S,
+      maxAge: 365 * 24 * 60 * 60, // a year
     });
   } else {
     jar.delete(THEME_COOKIE);

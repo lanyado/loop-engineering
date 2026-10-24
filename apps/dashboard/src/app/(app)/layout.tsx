@@ -88,15 +88,13 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
                     models={settings.opencodeBackupModels}
                     readOnly={readOnly}
                   />
+                  <p className="muted small">
+                    Each project&apos;s own settings are behind the slider icon in its header.
+                  </p>
                 </>
               ) : (
-                <p className="muted small" data-testid="settings-unavailable">
-                  Server settings are unavailable right now.
-                </p>
+                <p className="muted small">Server settings are unavailable right now.</p>
               )}
-              <p className="muted small">
-                Each project&apos;s own settings are behind the slider icon in its header.
-              </p>
               {!noLogin() && (
                 <form action={logout}>
                   <button type="submit" className="ghost small">
