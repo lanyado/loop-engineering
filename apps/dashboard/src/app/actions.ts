@@ -16,7 +16,9 @@ import { BackendError, ReadOnlyError, type Backend } from '../lib/backend';
 import { clientIp, LoginLimiter } from '../lib/login-limiter';
 import {
   answerInput,
+  editsInput,
   endSessionInput,
+  hideProjectInput,
   stageTerminalInput,
   newRequestInput,
   permissionModeInput,
@@ -24,6 +26,7 @@ import {
   sessionMessageInput,
   settingsInput,
 } from '../lib/schemas';
+import { layoutPatch, parseLayout, type Layout, type LayoutPatch } from '../lib/layout';
 import { getAuthConfig, noLogin } from '../lib/server/env';
 import { backendForViewer, requireLogin } from '../lib/server/session';
 import { parseTheme, THEME_COOKIE } from '../lib/theme';
@@ -89,6 +92,44 @@ export async function updateSettings(patch: unknown): Promise<ActionResult> {
       return 'Saved';
     },
   );
+}
+
+/**
+ * Changes only `patch`'s part of the layout as the server has it now, so a save never writes back a
+ * stale copy of the rest (two tabs saving at the same instant can still race); refused when the
+ * current layout cannot be read.
+ */
+async function mergeLayout(backend: Backend, patch: (current: Layout) => LayoutPatch): Promise<void> {
+  const current = parseLayout((await backend.settings()).dashboardLayout);
+  await backend.updateSettings({ dashboardLayout: { ...current, ...patch(current) } });
+}
+
+/** A new project order on the board (the whole order of what it shows). */
+export async function saveProjectOrder(projectOrder: unknown): Promise<ActionResult> {
+  return write(layoutPatch.required({ projectOrder: true }), { projectOrder }, async (d, backend) => {
+    await mergeLayout(backend, () => d);
+    return undefined;
+  });
+}
+
+/** Hides a project from the board, or shows it again. */
+export async function setProjectHidden(projectId: number, hidden: boolean): Promise<ActionResult> {
+  return write(hideProjectInput, { projectId, hidden }, async (d, backend) => {
+    await mergeLayout(backend, ({ hiddenProjects }) => {
+      const others = hiddenProjects.filter((id) => id !== d.projectId);
+      return { hiddenProjects: d.hidden ? [...others, d.projectId] : others };
+    });
+    return undefined;
+  });
+}
+
+/** The editor's Approve: the pipeline first (the server may refuse it), then the layout. */
+export async function applyEdits(edits: unknown): Promise<ActionResult> {
+  return write(editsInput, edits, async (d, backend) => {
+    if (d.pipeline) await backend.updatePipeline(d.pipeline);
+    await mergeLayout(backend, () => d.layout);
+    return undefined;
+  });
 }
 
 export async function createRequest(text: string, projectId: number | null): Promise<ActionResult> {

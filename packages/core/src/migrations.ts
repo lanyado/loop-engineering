@@ -504,6 +504,11 @@ export const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE pull_requests_new RENAME TO pull_requests;
     `,
   },
+  {
+    version: 19,
+    name: "settings: the dashboard's layout",
+    sql: `ALTER TABLE settings ADD COLUMN dashboard_layout TEXT NOT NULL DEFAULT '{}';`,
+  },
 ];
 
 /** Applies every migration newer than the database's user_version, each in its own transaction. */

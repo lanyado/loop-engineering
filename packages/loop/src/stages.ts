@@ -40,6 +40,8 @@ const RESERVED_IDS = new Set<string>([
   ...['session', 'builder', 'approval', 'deploy', 'guardian', 'end', 'conflict', 'ci', 'pipeline'],
 ]);
 export const isStageId = (id: string) => STAGE_ID.test(id) && !RESERVED_IDS.has(id);
+/** The names no stage file may take, for the dashboard's editor. */
+export const RESERVED_STAGE_IDS: readonly string[] = [...RESERVED_IDS];
 const badId = (id: string) =>
   new ValidationError(
     `stage id "${id}": use a-z, 0-9 and dashes (32 at most), and not a pipeline node's name`,

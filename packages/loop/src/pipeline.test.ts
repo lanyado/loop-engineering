@@ -293,6 +293,9 @@ describe('fail closed: a broken stage file or pipeline.json never lets a PR skip
       heldFor: 'stage security is broken: no front matter',
     });
     expect(h.logs.filter((l) => l.includes('waits: stage security'))).toHaveLength(1);
+    expect(h.engine.status().active[0]).toMatchObject({
+      heldFor: 'stage security is broken: no front matter',
+    });
     // Held, the row is not written again on later ticks.
     const updated = h.pr().updatedAt;
     h.clock.advance(60_000);

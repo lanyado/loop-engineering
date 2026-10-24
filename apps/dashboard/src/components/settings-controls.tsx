@@ -14,7 +14,7 @@ import type { Theme } from '../lib/theme';
 import { FolderPath, KindChip } from './project-kind';
 
 /** Runs an action, keeps its message; the server re-renders the page with the saved value. */
-function useAction() {
+export function useAction() {
   const [pending, start] = useTransition();
   const [result, setResult] = useState<ActionResult | null>(null);
   const run = (fn: () => Promise<ActionResult>) =>

@@ -2,7 +2,7 @@
 
 Each `.md` file here is one check of the PR loop: a prompt plus a few settings. These are the
 built-in ones. To change one or add your own, put a file in `data/stages/` (gitignored): one with a
-built-in's name replaces it, any other is a new check.
+built-in's name replaces it, any other is a new check. The dashboard's pencil writes the same files.
 
 ```md
 ---

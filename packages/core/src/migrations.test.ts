@@ -278,7 +278,12 @@ describe('migrations', () => {
     const check = `INSERT INTO pull_requests (project_id, repo, number, url, stage, created_at, updated_at)
                    VALUES (1, 'web', 9, 'u9', 'check', 't', 't')`;
     expect(() => db.exec(check)).toThrow(/CHECK/);
-    expect(migrate(db)).toEqual([18]);
+    expect(
+      migrate(
+        db,
+        MIGRATIONS.filter((m) => m.version <= 18),
+      ),
+    ).toEqual([18]);
     db.exec(check);
     expect(
       db.prepare('SELECT id, stage, reverted_by_pr_id, loop_state FROM pull_requests ORDER BY id').all(),

@@ -1,6 +1,9 @@
 import { newestFinishedFirst } from './format';
 import type { PipelineView, PullRequest, Question, TreeProject, TreeSession } from './schemas';
 
+/** What the board draws lanes from: the pipeline and its stages. */
+export type BoardPipeline = Pick<PipelineView, 'pipeline' | 'stages'>;
+
 /*
  * The one-screen board: every project, and in it every live session as a pipeline read left to right
  * (n8n style): Session → Builder → one lane per PR: the pipeline's checks in order (built-in: Tests →
@@ -120,7 +123,7 @@ const nodeOf = (pr: PullRequest) => (pr.stage === 'check' ? (pr.loopState.check 
  */
 export function laneOrder(
   project: { autoMerge: boolean },
-  view: PipelineView,
+  view: BoardPipeline,
   pr: PullRequest | null,
 ): string[] {
   // A check with no stage file stays in: the loop holds PRs there until the file is back.
@@ -173,7 +176,7 @@ function loopQuestionNode(kind: string, pr: PullRequest): string {
 
 function lane(
   project: TreeProject,
-  view: PipelineView,
+  view: BoardPipeline,
   pr: PullRequest | null,
   loopQuestion?: Question,
 ): Lane {
@@ -225,7 +228,7 @@ export function buildBoard(
   tree: TreeProject[],
   prs: PullRequest[],
   pending: Question[],
-  view: PipelineView,
+  view: BoardPipeline,
 ): Board {
   const pendingById = new Map(pending.map((q) => [q.id, q]));
   // A loop question names its PR (loopState.question); it goes on that PR's lane, not the builder.

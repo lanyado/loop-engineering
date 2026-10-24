@@ -1,6 +1,6 @@
 import type * as z from 'zod';
 import { BackendError, type Backend } from './backend';
-import { responses } from './schemas';
+import { responses, type PipelineUpdate } from './schemas';
 
 export interface HttpBackendOptions {
   /** e.g. https://loop.example.com (no trailing /api). */
@@ -46,6 +46,10 @@ export class HttpBackend implements Backend {
 
   async pipeline() {
     return this.get('/pipeline', responses.pipeline);
+  }
+
+  async updatePipeline(update: PipelineUpdate) {
+    return this.send('PUT', '/pipeline', update, responses.pipeline);
   }
 
   async openStageTerminal(prId: number, stage: string) {

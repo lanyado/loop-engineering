@@ -2,6 +2,7 @@ import type {
   AnswerResult,
   ClaudeUsage,
   Project,
+  PipelineUpdate,
   PipelineView,
   PullRequest,
   Question,
@@ -48,6 +49,8 @@ export interface Backend {
   openStageTerminal(prId: number, stage: string): Promise<void>;
   /** The PR loop's pipeline and its stages (stage files). */
   pipeline(): Promise<PipelineView>;
+  /** Writes the pipeline and changed stage files (null: delete a custom stage, reset a built-in one). */
+  updatePipeline(update: PipelineUpdate): Promise<PipelineView>;
   /**
    * A finished session's stored transcript (its past conversation, redacted), or null when nothing
    * is stored yet.

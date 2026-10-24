@@ -9,6 +9,7 @@ interface SettingsRow {
   claude_enabled: number;
   opencode_enabled: number;
   opencode_backup_models: string;
+  dashboard_layout: string;
 }
 
 export class SettingsRepo {
@@ -24,6 +25,7 @@ export class SettingsRepo {
       claudeEnabled: toBool(row.claude_enabled),
       opencodeEnabled: toBool(row.opencode_enabled),
       opencodeBackupModels: parseJson<string[]>(row.opencode_backup_models),
+      dashboardLayout: parseJson<Record<string, unknown>>(row.dashboard_layout),
     };
   }
 
@@ -68,6 +70,7 @@ export class SettingsRepo {
       telegram_allowlist: toJson(allowlist),
       claude_enabled: fromBool(patch.claudeEnabled),
       opencode_enabled: fromBool(patch.opencodeEnabled),
+      dashboard_layout: toJson(patch.dashboardLayout),
       opencode_backup_models: toJson(
         patch.opencodeBackupModels && [...new Set(patch.opencodeBackupModels.map((m) => m.trim()))],
       ),

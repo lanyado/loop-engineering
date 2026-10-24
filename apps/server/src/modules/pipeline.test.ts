@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FakeClock, openStore } from '@loop-engineering/core';
@@ -58,8 +58,16 @@ describe('GET and PUT /api/pipeline', () => {
   it('serves the built-in pipeline and stages', async () => {
     const res = await call('GET');
     expect(res.status).toBe(200);
-    const json = (await res.json()) as { pipeline: unknown; stages: { id: string; builtin: boolean }[] };
+    const json = (await res.json()) as {
+      pipeline: unknown;
+      stages: { id: string; builtin: boolean }[];
+      choices: { reserved: string[]; icons: string[] };
+    };
     expect(json.pipeline).toEqual({ checks: ['tests', 'review', 'qa'], deploy: true, guardian: true });
+    expect(json.choices).toMatchObject({
+      icons: expect.arrayContaining(['shield']) as unknown,
+      reserved: expect.arrayContaining(['merge', 'deploy']) as unknown,
+    });
     expect(json.stages.map((s) => [s.id, s.builtin])).toEqual([
       ['tests', true],
       ['review', true],
@@ -107,6 +115,20 @@ describe('GET and PUT /api/pipeline', () => {
       stages,
     });
     expect(res.status).toBe(200);
+  });
+
+  it('says why when the stages folder cannot be written', async () => {
+    mkdirSync(join(dir, 'stages'));
+    chmodSync(join(dir, 'stages'), 0o500);
+    try {
+      const res = await call('PUT', { pipeline: { checks: ['tests'], deploy: true, guardian: true } });
+      expect(res.status).toBe(500);
+      expect(((await res.json()) as { error: string }).error).toMatch(
+        /^could not write the stage files: EACCES/,
+      );
+    } finally {
+      chmodSync(join(dir, 'stages'), 0o700);
+    }
   });
 
   it('needs the dashboard token', async () => {

@@ -40,11 +40,12 @@ Then press **+ Session** on the project, type what you want done, and watch the 
 
 ## Settings
 
-| What                                                              | Where                                             |
-| ----------------------------------------------------------------- | ------------------------------------------------- |
-| Session model, fallback model, Claude Code / OpenCode on or off   | Dashboard, top bar                                |
-| Auto-merge, direct input, permission mode (per project)           | Dashboard, the slider icon on a project           |
-| PR loop, Telegram, ports, worktrees folder, job limits, providers | `.env` in the repo root, then restart `npm start` |
+| What                                                                   | Where                                             |
+| ---------------------------------------------------------------------- | ------------------------------------------------- |
+| Top bar items, pipeline stages and their prompts, row details          | Dashboard, the pencil in the top bar              |
+| Session model, fallback model, Claude Code / OpenCode on or off        | Dashboard, the gear in the top bar                |
+| Auto-merge, direct input, permission mode, order, hiding (per project) | Dashboard, the slider icon on a project           |
+| PR loop, Telegram, ports, worktrees folder, job limits, providers      | `.env` in the repo root, then restart `npm start` |
 
 These are the `.env` values you're most likely to change. Everything else has a sensible default and is documented in [`.env.example`](.env.example).
 
@@ -64,7 +65,7 @@ These are the `.env` values you're most likely to change. Everything else has a 
 
 **The PR loop.** Run `gh auth login`, set `LOOP_ENGINE=on`, and restart. Every PR a session opens then gets tests, a code review by a separate agent (up to 5 rounds), QA when the change needs it, and a merge when auto-merge is on for that project, or your approval when it's off. After the merge, the loop watches the deploy and reverts it if it fails (for repos with a `vercelProject` set; see [the reference](docs/reference.md#the-pr-loop)).
 
-**Your own stages.** Each stage is a prompt file. To add a check (say, a security review) or change what a stage looks for, drop a `.md` file in `data/stages/`, and list the order in `data/stages/pipeline.json`. The format is in [packages/loop/stages/README.md](packages/loop/stages/README.md).
+**Your own stages.** Each stage is a prompt file. The pencil in the top bar opens an editor on demo projects: reorder, remove or add stages, edit their prompts, and Approve to apply. Or edit the files directly: a `.md` file in `data/stages/` per stage, and the order in `data/stages/pipeline.json` (format in [packages/loop/stages/README.md](packages/loop/stages/README.md)).
 
 **Usage meters.** To show Claude's 5-hour and weekly limits in the dashboard, add this line to your Claude Code status line script:
 
