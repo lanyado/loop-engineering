@@ -1,5 +1,5 @@
 import * as z from 'zod';
-import { layoutPatch } from './layout';
+import { layoutInput, layoutPatch } from './layout';
 
 /*
  * Wire types for the always-on server's /api (apps/server). The dashboard is deployed on its own
@@ -293,7 +293,7 @@ export const settingsInput = z
     opencodeBackupModels: z
       .array(z.string().trim().min(1).max(LIMITS.model).regex(/^\S+$/, 'One model name per line'))
       .max(10),
-    dashboardLayout: z.record(z.string(), z.unknown()),
+    dashboardLayout: layoutInput,
   })
   .partial();
 export type SettingsPatch = z.infer<typeof settingsInput>;

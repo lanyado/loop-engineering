@@ -83,8 +83,13 @@ export function Editor({
     setDraft((d) => ({ ...d, layout: { ...d.layout, ...patch } }));
   const setPipeline = (patch: Partial<Draft['pipeline']>) =>
     setDraft((d) => ({ ...d, pipeline: { ...d.pipeline, ...patch } }));
+  /** A stage file to write or delete; a stage made and dropped in this draft leaves no trace. */
   const setEdit = (id: string, edit: StageFields | null) =>
-    setDraft((d) => ({ ...d, edits: { ...d.edits, [id]: edit } }));
+    setDraft((d) => {
+      const rest = Object.fromEntries(Object.entries(d.edits).filter(([key]) => key !== id));
+      const onServer = view.stages.some((s) => s.id === id);
+      return { ...d, edits: edit === null && !onServer ? rest : { ...rest, [id]: edit } };
+    });
   const { checks } = draft.pipeline;
   const stage = (id: string) => stages.find((s) => s.id === id);
 
@@ -150,7 +155,14 @@ export function Editor({
       const pipeline: PipelineUpdate | undefined = pipelineChanged
         ? { pipeline: draft.pipeline, stages: draft.edits }
         : undefined;
-      const result = await applyEdits({ layout: draft.layout, ...(pipeline ? { pipeline } : {}) });
+      // Only what changed: settings that failed to load must not be written back as the defaults.
+      const layoutChanges = Object.fromEntries(
+        Object.entries(draft.layout).filter(
+          ([key, value]) =>
+            JSON.stringify(value) !== JSON.stringify(initial.layout[key as keyof Draft['layout']]),
+        ),
+      );
+      const result = await applyEdits({ layout: layoutChanges, ...(pipeline ? { pipeline } : {}) });
       if (result.ok) router.push('/');
       else setError(result.error);
     });
@@ -196,7 +208,10 @@ export function Editor({
             render={(id) => <Chip icon={stage(id)?.icon ?? 'check'} label={stage(id)?.label ?? id} />}
             onChange={(next) => setPipeline({ checks: next })}
             onOpen={(id) =>
-              setSheet({ stage: stage(id) ?? { ...BLANK_STAGE, id, title: id, label: id }, isNew: false })
+              setSheet({
+                stage: stage(id) ?? { ...BLANK_STAGE, id, title: id, label: id.slice(0, 10) },
+                isNew: false,
+              })
             }
           />
           <Chip icon="awaiting_approval" label="Approval" locked />

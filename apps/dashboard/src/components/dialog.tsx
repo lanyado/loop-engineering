@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, type ReactNode } from 'react';
 
 /**
  * A modal sheet on the native <dialog>: it takes focus, keeps Tab inside, closes on Escape and gives
@@ -18,7 +18,9 @@ export function Dialog({
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
+  // A layout effect: its cleanup closes the dialog while it is still in the page, so the browser
+  // gives focus back to the button that opened it.
+  useLayoutEffect(() => {
     const dialog = ref.current;
     dialog?.showModal();
     return () => dialog?.close();

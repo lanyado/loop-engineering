@@ -451,6 +451,7 @@ test('the pencil edits a draft on the demo board; Discard changes nothing, and d
   await expect(page.getByRole('button', { name: 'Edit Security review' })).toHaveCount(0);
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('add-sheet')).toHaveCount(0);
+  await expect(editor.getByTestId('editor-add')).toBeFocused(); // focus back where it was
 
   // Removing review warns that every PR will wait for approval.
   await editor.getByRole('button', { name: 'Remove Code review' }).click();

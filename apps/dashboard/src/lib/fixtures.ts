@@ -473,7 +473,11 @@ export function demoData(now: Date): DemoData {
         ],
         access: ['read', 'shell', 'browser'],
         runs: ['always', 'ui-changes'],
-        reserved: ['merge', 'deploy', 'guardian', 'approval', 'session', 'builder'],
+        reserved: [
+          ...['check', 'awaiting_approval', 'merge', 'deploying', 'deployed', 'reverted', 'escalated'],
+          ...['merged', 'closed', 'session', 'builder', 'approval', 'deploy', 'guardian', 'end'],
+          ...['conflict', 'ci', 'pipeline'],
+        ],
       },
     },
   };

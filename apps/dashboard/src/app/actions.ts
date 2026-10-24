@@ -26,7 +26,7 @@ import {
   sessionMessageInput,
   settingsInput,
 } from '../lib/schemas';
-import { layoutPatch, parseLayout, type LayoutPatch } from '../lib/layout';
+import { layoutPatch, parseLayout, type Layout, type LayoutPatch } from '../lib/layout';
 import { getAuthConfig, noLogin } from '../lib/server/env';
 import { backendForViewer, requireLogin } from '../lib/server/session';
 import { parseTheme, THEME_COOKIE } from '../lib/theme';
@@ -95,18 +95,19 @@ export async function updateSettings(patch: unknown): Promise<ActionResult> {
 }
 
 /**
- * Merges `patch` into the layout as the server has it now, so saves from two tabs or two quick clicks
- * keep each other's changes; refused when the current layout cannot be read.
+ * Changes only `patch`'s part of the layout as the server has it now, so a save never writes back a
+ * stale copy of the rest (two tabs saving at the same instant can still race); refused when the
+ * current layout cannot be read.
  */
-async function mergeLayout(backend: Backend, patch: LayoutPatch): Promise<void> {
+async function mergeLayout(backend: Backend, patch: (current: Layout) => LayoutPatch): Promise<void> {
   const current = parseLayout((await backend.settings()).dashboardLayout);
-  await backend.updateSettings({ dashboardLayout: { ...current, ...patch } });
+  await backend.updateSettings({ dashboardLayout: { ...current, ...patch(current) } });
 }
 
 /** A new project order on the board (the whole order of what it shows). */
 export async function saveProjectOrder(projectOrder: unknown): Promise<ActionResult> {
   return write(layoutPatch.required({ projectOrder: true }), { projectOrder }, async (d, backend) => {
-    await mergeLayout(backend, d);
+    await mergeLayout(backend, () => d);
     return undefined;
   });
 }
@@ -114,9 +115,10 @@ export async function saveProjectOrder(projectOrder: unknown): Promise<ActionRes
 /** Hides a project from the board, or shows it again. */
 export async function setProjectHidden(projectId: number, hidden: boolean): Promise<ActionResult> {
   return write(hideProjectInput, { projectId, hidden }, async (d, backend) => {
-    const current = parseLayout((await backend.settings()).dashboardLayout).hiddenProjects;
-    const others = current.filter((id) => id !== d.projectId);
-    await mergeLayout(backend, { hiddenProjects: d.hidden ? [...others, d.projectId] : others });
+    await mergeLayout(backend, ({ hiddenProjects }) => {
+      const others = hiddenProjects.filter((id) => id !== d.projectId);
+      return { hiddenProjects: d.hidden ? [...others, d.projectId] : others };
+    });
     return undefined;
   });
 }
@@ -125,7 +127,7 @@ export async function setProjectHidden(projectId: number, hidden: boolean): Prom
 export async function applyEdits(edits: unknown): Promise<ActionResult> {
   return write(editsInput, edits, async (d, backend) => {
     if (d.pipeline) await backend.updatePipeline(d.pipeline);
-    await mergeLayout(backend, d.layout);
+    await mergeLayout(backend, () => d.layout);
     return undefined;
   });
 }

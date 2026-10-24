@@ -76,7 +76,7 @@ const ICON_PATHS: Record<string, ReactNode> = {
       <path d="M5 21V4M5 4h11l-2 4 2 4H5" />
     </>
   ),
-  // Custom stages (STAGE_ICONS).
+  // The icons a custom stage may pick (the server's list).
   shield: (
     <>
       <path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6l-7-3Z" />
@@ -124,21 +124,6 @@ const ICON_PATHS: Record<string, ReactNode> = {
     </>
   ),
 };
-
-/** Icons a stage file may pick (the server's list of `icon` values). */
-export const STAGE_ICONS = [
-  'tests',
-  'review',
-  'qa',
-  'shield',
-  'lock',
-  'bug',
-  'book',
-  'gauge',
-  'globe',
-  'sparkle',
-  'check',
-];
 
 export function Icon({ kind }: { kind: string }) {
   return (

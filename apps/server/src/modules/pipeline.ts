@@ -63,8 +63,9 @@ export function pipelineModule({ stages }: { stages: EditableStageLibrary }): Se
         try {
           stages.update(parsed.data);
         } catch (error) {
-          if (error instanceof ValidationError) throw error; // a 400 (app.ts)
           // The folder cannot be written (permissions, disk full): say so, not "internal error".
+          const code = (error as NodeJS.ErrnoException).code;
+          if (error instanceof ValidationError || typeof code !== 'string') throw error;
           return c.json({ error: `could not write the stage files: ${(error as Error).message}` }, 500);
         }
         return c.json(view());
