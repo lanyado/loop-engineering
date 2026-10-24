@@ -9,6 +9,7 @@ import { cors } from 'hono/cors';
 import { HTTPException } from 'hono/http-exception';
 import type { ServerContext, ServerModule } from './context.js';
 import { eventRoutes } from './routes/events.js';
+import { PIPELINE_PATH } from './modules/pipeline.js';
 import { questionRoutes } from './routes/questions.js';
 
 export interface AppOptions {
@@ -48,7 +49,7 @@ export function createApp(ctx: ServerContext, options: AppOptions): Hono {
   }
   api.use('*', bearerAuth({ token: ctx.config.dashboardToken }));
   // Stage prompts are the one large body: PUT /pipeline has its own limit (modules/pipeline.ts).
-  const pipelinePut = (c: Context) => c.req.method === 'PUT' && c.req.path === '/api/pipeline';
+  const pipelinePut = (c: Context) => c.req.method === 'PUT' && c.req.path === `/api${PIPELINE_PATH}`;
   api.use('*', except(pipelinePut, bodyLimit({ maxSize: 64 * 1024 })));
   api.route('/', questionRoutes(ctx));
   api.route('/', eventRoutes(ctx, options.sseKeepAliveMs));

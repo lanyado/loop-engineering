@@ -594,7 +594,8 @@ export class LoopEngine {
     // revert or cleanup), since it cannot know what the user wants.
     const broken = this.pipeline().error;
     if (broken) return this.hold(c, broken);
-    if (s.held) this.save(c, {}, { held: undefined, lastError: undefined });
+    // A hold at a check is lifted where that check runs (advanceOpen); every other hold here.
+    if (!(pr.outcome === null && atCheck(pr.stage))) this.unhold(c);
     if (s.revertOf !== undefined && pr.outcome === null) return false; // the reverted PR drives its revert
     if (pr.outcome === null) return this.advanceOpen(c);
     if (pr.outcome === 'escalated') return this.watchTakenOver(c);
@@ -614,7 +615,6 @@ export class LoopEngine {
       return this.save(c, { outcome: 'closed' }, { question: undefined, feedback: undefined });
     }
     if (c.s.branch !== gh.headRefName) return this.save(c, {}, { branch: gh.headRefName });
-    // Fail closed: an unreadable pipeline.json merges nothing.
     if (atCheck(c.pr.stage) && !c.s.feedback) {
       // Commits after a check passed: every check runs again on the new head.
       if (newCommitsSince(c.s, gh.headRefOid))
@@ -630,6 +630,7 @@ export class LoopEngine {
       // A fresh PR starts at round 1 with its first check: the comments of that check are round 1.
       if (c.pr.round === 0) return this.save(c, { round: 1 }, {});
     }
+    this.unhold(c);
     switch (c.pr.stage) {
       case 'review':
         return this.reviewStep(c, gh);
@@ -826,11 +827,15 @@ export class LoopEngine {
     return nextCheck(c.s, head, this.pipeline().checks);
   }
 
-  /** The loop cannot move this PR on until `why` is fixed: say so once, and show it on the PR. */
+  /** The loop cannot move this PR on until `why` is fixed: say so once, and record it on the PR. */
   private hold(c: Ctx, why: string): boolean {
     this.warnOnce(`hold-${c.pr.id}-${why}`, `PR ${c.pr.repo}#${c.pr.number} waits: ${why}`);
-    if (c.s.lastError !== why) this.save(c, {}, { lastError: why, held: true });
+    if (c.s.heldFor !== why) this.save(c, {}, { heldFor: why });
     return false;
+  }
+
+  private unhold(c: Ctx): void {
+    if (c.s.heldFor) this.save(c, {}, { heldFor: undefined });
   }
 
   /** The PR stage and loopState of the pipeline's first check (tests when it has none: advanceOpen moves on). */

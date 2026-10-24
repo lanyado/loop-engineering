@@ -17,7 +17,8 @@ import {
   MemoryFs,
   SessionRunner,
 } from '@loop-engineering/runner';
-import { claudeUsageModule, createServer, dashboardApi } from '@loop-engineering/server';
+import { FileStageLibrary } from '@loop-engineering/loop';
+import { claudeUsageModule, createServer, dashboardApi, pipelineModule } from '@loop-engineering/server';
 
 const port = Number(process.env.LIVE_PORT ?? 3102);
 const dashboardToken = process.env.DASHBOARD_TOKEN;
@@ -176,6 +177,7 @@ const testRoutes = {
     app.post('/test/reset', (c) => {
       if (!guard(c)) return c.json({ error: 'unauthorized' }, 401);
       reset(server);
+      rmSync(join(dir, 'stages'), { recursive: true, force: true }); // back to the built-in pipeline
       return c.json({ ok: true, ids });
     });
     app.post('/test/ask', async (c) => {
@@ -279,7 +281,12 @@ const server = createServer({
   },
   usageMonitor: false,
   // Folder projects must sit inside the home folder; the live e2e makes its folders in the OS temp dir.
-  modules: [dashboardApi({ home: tmpdir() }), claudeUsageModule({ file: usageFile }), testRoutes],
+  modules: [
+    dashboardApi({ home: tmpdir() }),
+    claudeUsageModule({ file: usageFile }),
+    pipelineModule({ stages: new FileStageLibrary(join(dir, 'stages'), () => undefined) }),
+    testRoutes,
+  ],
   sseKeepAliveMs: 5_000,
 });
 seed(server);

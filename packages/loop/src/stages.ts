@@ -251,6 +251,9 @@ const brokenStage = (id: string): Omit<Stage, 'builtin' | 'overridden'> => ({
   prompt: '',
 });
 
+/** One version of a file in the stages folder: a change to it gives another. */
+const version = (f: { name: string; size: number; mtimeMs: number }) => `${f.name}:${f.size}:${f.mtimeMs}`;
+
 const writeAtomic = (path: string, text: string) => {
   const tmp = `${path}.tmp-${process.pid}`;
   writeFileSync(tmp, text, { mode: 0o644 });
@@ -318,7 +321,7 @@ export class FileStageLibrary implements EditableStageLibrary {
 
   private load(): { stages: Map<string, Stage>; pipeline: Pipeline } {
     const files = this.listFiles();
-    const signature = files.map((f) => `${f.name}:${f.size}:${f.mtimeMs}`).join('|');
+    const signature = files.map(version).join('|');
     if (this.cached && signature === this.signature) return this.cached;
     const base = builtinStages();
     const stages = new Map(base.stages);
@@ -331,21 +334,18 @@ export class FileStageLibrary implements EditableStageLibrary {
         stages.set(id, { id, builtin, overridden: builtin, ...fields });
       } catch (err) {
         const error = (err as Error).message;
-        this.warnOnce(`${f.name}:${f.size}:${f.mtimeMs}`, `${f.name} is broken: ${error}`);
+        this.warnOnce(version(f), `${f.name} is broken: ${error}`);
         stages.set(id, { ...brokenStage(id), builtin, overridden: builtin, error });
       }
     }
     let pipeline = base.pipeline;
-    if (files.some((f) => f.name === 'pipeline.json')) {
+    const file = files.find((f) => f.name === 'pipeline.json');
+    if (file) {
       try {
-        pipeline = readPipeline(readFileSync(join(this.dir, 'pipeline.json'), 'utf8'));
+        pipeline = readPipeline(readFileSync(join(this.dir, file.name), 'utf8'));
       } catch (err) {
         const error = `pipeline.json: ${(err as Error).message}`;
-        const file = files.find((f) => f.name === 'pipeline.json')!;
-        this.warnOnce(
-          `pipeline:${file.size}:${file.mtimeMs}`,
-          `${error}; the PR loop waits until it is fixed`,
-        );
+        this.warnOnce(version(file), `${error}; the PR loop waits until it is fixed`);
         pipeline = { ...base.pipeline, error };
       }
     }

@@ -45,7 +45,7 @@ export default async function BoardPage() {
       <h1 className="sr-only">Pipelines</h1>
       {pipeline.pipeline.error && (
         <p className="offline-banner" data-testid="pipeline-error">
-          The PR loop waits: {pipeline.pipeline.error}. Fix data/stages/pipeline.json and it carries on.
+          The PR loop waits until this is fixed: {pipeline.pipeline.error}.
         </p>
       )}
       {board.unplaced.length > 0 && (

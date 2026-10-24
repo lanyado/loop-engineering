@@ -33,14 +33,17 @@ const pipelineUpdate = z.strictObject({
     .optional(),
 });
 
+/** Under /api; app.ts gives PUT here a larger body limit than the rest of /api. */
+export const PIPELINE_PATH = '/pipeline';
+
 export function pipelineModule({ stages }: { stages: EditableStageLibrary }): ServerModule {
   const view = () => ({ pipeline: stages.pipeline(), stages: stages.stages() });
   return {
     name: 'pipeline',
     api(api) {
-      api.get('/pipeline', (c) => c.json(view()));
+      api.get(PIPELINE_PATH, (c) => c.json(view()));
       // 30 stages of 4,000 characters, at up to 3 bytes each in UTF-8.
-      api.put('/pipeline', bodyLimit({ maxSize: 400 * 1024 }), async (c) => {
+      api.put(PIPELINE_PATH, bodyLimit({ maxSize: 400 * 1024 }), async (c) => {
         const parsed = pipelineUpdate.safeParse(await c.req.json().catch(() => null));
         if (!parsed.success) return c.json({ error: z.prettifyError(parsed.error) }, 400);
         stages.update(parsed.data);

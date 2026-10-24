@@ -290,9 +290,14 @@ describe('fail closed: a broken stage file or pipeline.json never lets a PR skip
     expect(h.pr()).toMatchObject({ stage: 'check', outcome: null });
     expect(loopState(h.pr())).toMatchObject({
       check: 'security',
-      lastError: 'stage security is broken: no front matter',
+      heldFor: 'stage security is broken: no front matter',
     });
     expect(h.logs.filter((l) => l.includes('waits: stage security'))).toHaveLength(1);
+    // Held, the row is not written again on later ticks.
+    const updated = h.pr().updatedAt;
+    h.clock.advance(60_000);
+    await h.engine.tick();
+    expect(h.pr().updatedAt).toBe(updated);
   });
 
   it('holds a PR at a check whose stage file is gone', async () => {
@@ -300,7 +305,7 @@ describe('fail closed: a broken stage file or pipeline.json never lets a PR skip
     await h.builderWithPr();
     await h.engine.tick();
     expect(h.launcher.jobs).toEqual([]);
-    expect(loopState(h.pr()).lastError).toBe('stage ghost has no stage file');
+    expect(loopState(h.pr()).heldFor).toBe('stage ghost has no stage file');
     expect(h.pr().outcome).toBeNull();
   });
 
@@ -314,11 +319,11 @@ describe('fail closed: a broken stage file or pipeline.json never lets a PR skip
     await h.engine.tick();
     expect(h.launcher.jobs).toEqual([]);
     expect(h.pr().outcome).toBeNull();
-    expect(loopState(h.pr()).lastError).toBe('pipeline.json: not valid JSON');
+    expect(loopState(h.pr()).heldFor).toBe('pipeline.json: not valid JSON');
     lib.pipeline = () => real;
     await h.engine.tick();
     expect(h.pr().outcome).toBe('merged');
-    expect(loopState(h.pr()).lastError).toBeUndefined(); // the hold's message is gone once it is fixed
+    expect(loopState(h.pr()).heldFor).toBeUndefined(); // lifted once it is fixed
   });
 
   it('neither watches nor reverts a deploy while pipeline.json cannot be read', async () => {

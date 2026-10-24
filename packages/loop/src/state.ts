@@ -58,8 +58,8 @@ export type LoopState = {
   /** Consecutive failed attempts of the current step (job crash, bad verdict, merge refused); reset on progress. */
   attempts?: number;
   lastError?: string;
-  /** The loop held the PR (lastError says why): a broken pipeline.json or stage file. */
-  held?: boolean;
+  /** Why the loop holds the PR until it is fixed: a broken pipeline.json or stage file. */
+  heldFor?: string;
   /** The head the loop's conflict fixer already tried; the builder gets the conflict after that. */
   conflictTriedSha?: string;
   /** Every model was at a limit: the job is not retried before this time (not a failed attempt). */
