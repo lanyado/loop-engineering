@@ -11,12 +11,17 @@ const m = vi.hoisted(() => {
       super(`NEXT_REDIRECT ${url}`);
     }
   }
-  return { Redirect, headers: new Headers(), backendCalls: 0 };
+  return { Redirect, headers: new Headers(), backendCalls: 0, cookiesSet: [] as string[] };
 });
 
 vi.mock('server-only', () => ({}));
 vi.mock('next/headers', () => ({
-  cookies: () => Promise.resolve({ get: () => undefined, set: () => {}, delete: () => {} }),
+  cookies: () =>
+    Promise.resolve({
+      get: () => undefined,
+      set: (name: string, value: string) => m.cookiesSet.push(`${name}=${value}`),
+      delete: () => {},
+    }),
   headers: () => Promise.resolve(m.headers),
 }));
 vi.mock('next/navigation', () => ({
@@ -54,6 +59,7 @@ const setHeaders = (entries: Record<string, string>) => {
 
 beforeEach(() => {
   m.backendCalls = 0;
+  m.cookiesSet = [];
   setHeaders({ host: '127.0.0.1:3737' });
 });
 
@@ -80,12 +86,15 @@ describe('pages', () => {
 
 describe('Server Actions', () => {
   const answer = async () => (await import('../../app/actions')).answerQuestion(1, 'Postgres');
+  const theme = async () => (await import('../../app/actions')).setTheme('dark');
 
   it('run for a same-origin call', async () => {
     setHeaders({ host: '127.0.0.1:3737', origin: 'http://127.0.0.1:3737', 'next-action': 'x' });
     // Demo backend: refused as read-only, after the access check passed.
     expect(await answer()).toMatchObject({ ok: false, error: /read-only/ });
     expect(m.backendCalls).toBe(1);
+    await theme();
+    expect(m.cookiesSet).toEqual(['loop-theme=dark']);
   });
 
   it('refuse a cross-origin, Origin-less or foreign-Host call', async () => {
@@ -96,8 +105,10 @@ describe('Server Actions', () => {
     ]) {
       setHeaders(headers);
       await expect(answer(), JSON.stringify(headers)).rejects.toThrow('Forbidden');
+      await expect(theme(), JSON.stringify(headers)).rejects.toThrow('Forbidden');
     }
     expect(m.backendCalls).toBe(0);
+    expect(m.cookiesSet).toEqual([]);
   });
 });
 

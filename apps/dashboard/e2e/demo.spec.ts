@@ -363,23 +363,48 @@ test('settings sit with their project and in the top bar, disabled in demo mode'
 });
 
 test('the theme switch works in read-only demo mode and survives a reload', async ({ page }, info) => {
-  await open(page);
+  const LIGHT = 'rgb(245, 246, 248)';
+  const DARK = 'rgb(12, 14, 18)';
   const html = page.locator('html');
-  await expect(html).not.toHaveAttribute('data-theme');
-  const sheet = await globalSettings(page);
-  await expect(sheet.getByTestId('theme-system')).toBeChecked();
+  const looks = () =>
+    page.evaluate(() => ({
+      bg: getComputedStyle(document.body).backgroundColor,
+      scheme: getComputedStyle(document.documentElement).colorScheme,
+    }));
+  const pick = (label: string) =>
+    page.getByTestId('settings-sheet').getByText(label, { exact: true }).click();
+  const themeCookies = async () => (await page.context().cookies()).filter((c) => c.name === 'loop-theme');
 
-  await sheet.getByText('Dark', { exact: true }).click();
+  await page.emulateMedia({ colorScheme: 'light' });
+  await open(page);
+  await expect(html).not.toHaveAttribute('data-theme');
+  await expect(
+    (await globalSettings(page))
+      .getByRole('group', { name: 'Appearance' })
+      .getByRole('radio', { name: 'System' }),
+  ).toBeChecked();
+  expect(await looks()).toEqual({ bg: LIGHT, scheme: 'light dark' });
+
+  // OS light, Dark picked.
+  await pick('Dark');
   await expect(html).toHaveAttribute('data-theme', 'dark');
-  const [cookie] = (await page.context().cookies()).filter((c) => c.name === 'loop-theme');
-  expect(cookie).toMatchObject({ value: 'dark', httpOnly: true, sameSite: 'Lax', path: '/' });
+  await expect.poll(looks).toEqual({ bg: DARK, scheme: 'dark' });
+  expect(await themeCookies()).toMatchObject([{ value: 'dark', httpOnly: true, sameSite: 'Lax', path: '/' }]);
   await snap(page, info, 'settings-dark');
 
   await page.reload();
   await expect(html).toHaveAttribute('data-theme', 'dark');
+  expect(await looks()).toEqual({ bg: DARK, scheme: 'dark' });
   await expect((await globalSettings(page)).getByTestId('theme-dark')).toBeChecked();
 
-  await page.getByTestId('settings-sheet').getByText('System', { exact: true }).click();
+  // OS dark: System follows it, Light overrides it.
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await pick('System');
   await expect(html).not.toHaveAttribute('data-theme');
-  expect((await page.context().cookies()).filter((c) => c.name === 'loop-theme')).toHaveLength(0);
+  await expect.poll(looks).toEqual({ bg: DARK, scheme: 'light dark' });
+  await expect.poll(themeCookies).toHaveLength(0);
+  await pick('Light');
+  await expect(html).toHaveAttribute('data-theme', 'light');
+  await expect.poll(looks).toEqual({ bg: LIGHT, scheme: 'light' });
+  await expect.poll(themeCookies).toMatchObject([{ value: 'light' }]);
 });

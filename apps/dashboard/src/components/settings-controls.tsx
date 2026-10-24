@@ -1,6 +1,6 @@
 'use client';
 
-import { useOptimistic, useState, useTransition, type ReactNode } from 'react';
+import { useId, useOptimistic, useState, useTransition, type ReactNode } from 'react';
 import {
   setPermissionMode,
   setProjectToggle,
@@ -70,8 +70,9 @@ const THEME_LABELS: Record<ThemeOption, string> = { system: 'System', light: 'Li
 export function ThemeSwitch({ theme }: { theme: Theme | null }) {
   const [, start] = useTransition();
   const [shown, setShown] = useOptimistic<ThemeOption>(theme ?? 'system');
+  const hintId = useId();
   return (
-    <fieldset className="theme-field" data-testid="theme-switch">
+    <fieldset className="theme-field" aria-describedby={hintId} data-testid="theme-switch">
       <legend>Appearance</legend>
       <div className="segmented">
         {THEME_OPTIONS.map((option) => (
@@ -85,6 +86,10 @@ export function ThemeSwitch({ theme }: { theme: Theme | null }) {
               onChange={() =>
                 start(async () => {
                   setShown(option);
+                  // Applied now rather than after the round trip; the server render sets the same value.
+                  const root = document.documentElement;
+                  if (option === 'system') delete root.dataset.theme;
+                  else root.dataset.theme = option;
                   await setTheme(option);
                 })
               }
@@ -94,7 +99,9 @@ export function ThemeSwitch({ theme }: { theme: Theme | null }) {
           </label>
         ))}
       </div>
-      <span className="muted small">Saved in this browser only.</span>
+      <span id={hintId} className="muted small">
+        Saved in this browser only.
+      </span>
     </fieldset>
   );
 }

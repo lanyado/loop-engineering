@@ -9,6 +9,7 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
+// The browser chrome colour: the same as --bg in globals.css, light and dark.
 const THEME_COLOR = { light: '#f5f6f8', dark: '#0c0e12' };
 
 export async function generateViewport(): Promise<Viewport> {
