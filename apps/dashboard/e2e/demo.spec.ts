@@ -420,6 +420,9 @@ test('the pencil edits one example project in place; Save and Discard each ask f
   await page.getByRole('link', { name: 'Edit the dashboard' }).click();
   const editor = page.getByTestId('editor');
   await expect(editor).toBeVisible();
+  // No help text, and the Session node carries none of its buttons here.
+  await expect(editor.getByText('An example project with your layout')).toHaveCount(0);
+  await expect(editor.getByTestId('session-plus')).toHaveCount(0);
   // One example project, and nothing to save yet: Discard just leaves.
   await expect(editor.getByTestId('project')).toHaveCount(1);
   await expect(editor.getByTestId('editor-save')).toBeDisabled();
@@ -457,13 +460,28 @@ test('the pencil edits one example project in place; Save and Discard each ask f
   await expect(steps.nth(1)).toHaveAttribute('data-testid', 'ghost-item');
   await editor.getByRole('button', { name: 'Add Tests' }).click();
   await expect(lane.nth(1)).toHaveAttribute('data-item', 'tests');
+  // Dragging: QA, carried by the mouse onto the first place, lifts, and lands there without opening.
+  const centre = async (item: string) => {
+    const b = (await editor.locator(`.lane-step > [data-item="${item}"]`).boundingBox())!;
+    return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+  };
+  const [qa, first] = [await centre('qa'), await centre('review')];
+  await page.mouse.move(qa.x, qa.y);
+  await page.mouse.down();
+  await page.mouse.move(qa.x - 20, qa.y, { steps: 4 });
+  await expect(editor.locator('[data-item="qa"]')).toHaveClass(/lifted/);
+  await page.mouse.move(first.x, first.y, { steps: 12 });
+  await page.mouse.up();
+  await expect(lane.first()).toHaveAttribute('data-item', 'qa');
+  await expect(editor.locator('.lifted')).toHaveCount(0);
+  await expect(page.getByTestId('stage-sheet')).toHaveCount(0);
 
   // A stage file not in the pipeline waits faded on the lane; "+" adds it.
   await editor.getByRole('button', { name: 'Add Security review' }).click();
   await expect(editor.locator('[data-testid="editable-item"][data-item="security"]')).toHaveCount(1);
 
-  // A new stage, from the faded "New stage" tile, with the wider Runs choices.
-  await editor.getByRole('button', { name: 'Add a new stage' }).click();
+  // A new stage, from the button above the pipeline, with the wider Runs choices.
+  await editor.getByTestId('new-stage').click();
   await page.getByLabel('Name').fill('Docs check');
   await page.getByLabel('Label on the node (10 characters at most)').fill('Docs');
   await page.getByLabel('Runs').selectOption({ label: 'Only when docs change' });
@@ -475,6 +493,15 @@ test('the pencil edits one example project in place; Save and Discard each ask f
   await editor.getByRole('button', { name: 'Edit Security review' }).click();
   await page.getByTestId('stage-delete').click();
   await expect(editor.locator('[data-item="security"]')).toHaveCount(0);
+
+  // Tapping Guardian edits its instructions; only those are offered.
+  await editor.getByRole('button', { name: 'Edit Guardian' }).click();
+  await expect(page.getByLabel('Name')).toHaveCount(0);
+  await page.getByLabel('Instructions').fill('Check the booking flow end to end.');
+  await page.getByTestId('stage-save').click();
+  await editor.getByRole('button', { name: 'Edit Guardian' }).click();
+  await expect(page.getByLabel('Instructions')).toHaveValue('Check the booking flow end to end.');
+  await page.keyboard.press('Escape');
 
   // Removing review warns that every PR will wait for approval; Deploy waits faded after Merge.
   await editor.getByRole('button', { name: 'Remove Code review' }).click();

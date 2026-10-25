@@ -249,6 +249,8 @@ export type RigorMap = z.infer<typeof rigorMapSchema>;
 export const pipelineViewSchema = z.object({
   pipeline: pipelineSchema,
   stages: z.array(stageSchema),
+  /** The Production Guardian's instructions (guardian.md): only its prompt is edited. */
+  guardian: stageSchema,
   choices: stageChoicesSchema,
   /** Absent from older servers: then every level draws the whole pipeline. */
   rigor: rigorMapSchema.optional(),

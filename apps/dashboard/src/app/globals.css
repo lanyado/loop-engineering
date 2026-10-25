@@ -2070,11 +2070,6 @@ button.node-plus:hover:not(:disabled) {
   overflow: visible;
   justify-items: start;
 }
-/* "New stage" needs no full tile: a narrow one keeps the lane shorter. */
-.ghost-item[data-item=':new'] .node {
-  width: 64px;
-}
-
 /*
  * iOS-style edit mode: what can change wiggles gently where it sits, "−" on its corner removes it,
  * and the arrows under a reorderable one move it. A removed item stays faded in place with a "+".
@@ -2090,8 +2085,32 @@ button.node-plus:hover:not(:disabled) {
   animation: wiggle 0.9s ease-in-out infinite alternate;
   transform-origin: 50% 50%;
 }
-.wiggle[draggable='true'] {
+/* Reorderable: grab it. A long press must not select text or open the callout on touch. */
+.wiggle[data-order] {
   cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+/* Lifted: it stops wiggling, grows, tilts and casts a shadow while it follows the pointer. */
+.wiggle.lifted {
+  z-index: 10;
+  animation: none;
+  scale: 1.08;
+  rotate: 2deg;
+  cursor: grabbing;
+  filter: drop-shadow(0 14px 18px rgb(0 0 0 / 0.28));
+  transition:
+    scale 0.15s ease-out,
+    rotate 0.15s ease-out;
+}
+.wiggle.lifted .wiggle-move,
+.wiggle.lifted .wiggle-remove {
+  visibility: hidden;
+}
+/* While one is carried, the rest wiggle a little livelier, ready to make room. */
+.sorting .wiggle:not(.lifted) {
+  animation-duration: 0.5s;
 }
 .wiggle:nth-child(even) {
   animation-delay: -0.45s;
@@ -2151,8 +2170,13 @@ button.node-plus:hover:not(:disabled) {
   background: transparent;
   cursor: pointer;
 }
-.wiggle-open:hover {
+/* Over the preview, so the base button's hover fill and press shrink would hide it: a light tint only. */
+.wiggle-open:hover:not(:disabled) {
+  border: none;
   background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.wiggle-open:active:not(:disabled) {
+  transform: none;
 }
 .wiggle-open:focus-visible {
   outline: 2px solid var(--ring);
@@ -2249,7 +2273,12 @@ button.node-plus:hover:not(:disabled) {
   .wiggle {
     animation: none;
   }
+  .wiggle.lifted {
+    rotate: none;
+    transition: none;
+  }
 }
+
 /* With a mouse the arrows show on hover and focus; on touch they always show. */
 @media (hover: hover) {
   .wiggle .wiggle-move {

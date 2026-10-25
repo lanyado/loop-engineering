@@ -40,7 +40,7 @@ import {
   parseGuardian,
   type GuardianContext,
 } from './prompts.js';
-import type { StageLibrary } from './stages.js';
+import { builtinStageLibrary, type StageLibrary } from './stages.js';
 import { loopState, patchState } from './state.js';
 
 const MINUTE = 60_000;
@@ -403,6 +403,7 @@ export class ProductionGuardian {
       sha: c.sha,
       pr: c.prInfo,
       retryOf,
+      instructions: (this.deps.stages ?? builtinStageLibrary()).guardian().prompt,
     };
     const name = `guardian${c.run.id}-${area}-${retryOf.length > 0 ? 2 : 1}`;
     const evidence = c.dir ? join(c.dir, area) : null;

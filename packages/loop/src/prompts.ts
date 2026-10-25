@@ -465,6 +465,8 @@ export interface GuardianContext {
   } | null;
   /** The last attempt's failures, when this run is the retry. */
   retryOf: string[];
+  /** The user's instructions for every Guardian run (guardian.md). */
+  instructions: string;
 }
 
 export function guardianPrompt(c: GuardianContext, diffLimit: number): string {
@@ -482,6 +484,7 @@ export function guardianPrompt(c: GuardianContext, diffLimit: number): string {
     `Check the production site ${c.url} of repo ${c.repo} (code checked out at ${c.sha} in your working directory).`,
     ...deployed.filter(Boolean),
     GUARDIAN_AREAS_TEXT[c.area],
+    `Your instructions for this site:\n${c.instructions}`,
     c.retryOf.length === 0
       ? ''
       : `This is the retry: the first attempt failed with the problems below. Check them again from scratch, since they may have been transient.\n${fence(c.retryOf.join('\n'))}`,

@@ -483,6 +483,17 @@ export function demoData(now: Date): DemoData {
           builtin: false,
         },
       ],
+      guardian: {
+        ...stage(
+          'guardian',
+          'Production Guardian',
+          'Guardian',
+          'browser',
+          'always',
+          "Focus on what users need most: the landing page, signing in with the test account, and the product's main flow.",
+        ),
+        icon: 'shield',
+      },
       // Sample values; a real server sends its own lists.
       choices: {
         icons: [
