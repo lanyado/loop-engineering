@@ -1614,7 +1614,7 @@ button.node-plus:hover:not(:disabled) {
   text-overflow: ellipsis;
 }
 /* The label is narrow: the metrics line wraps instead of being cut off. */
-.lane-label > .lane-metrics {
+.lane-label .lane-metrics {
   white-space: normal;
 }
 .lane-flow,
@@ -1877,62 +1877,66 @@ button.node-plus:hover:not(:disabled) {
 .editor .topbar {
   flex-wrap: wrap;
 }
-/* Room for the "−" badges, so they cover no text. */
-.editor .topbar .wiggle {
+/* Room for the "−" and "+" badges, so they cover no text. */
+.editor .topbar .wiggle,
+.editor .topbar .ghost-item {
   padding: 8px 0 0 12px;
 }
-.add-stage {
-  display: inline-flex;
-  align-items: center;
-}
-.pipeline-editor {
+.editor-notes {
   display: grid;
-  gap: var(--s-2);
-  padding: var(--s-4);
+  gap: var(--s-1);
+  padding: var(--s-3) var(--s-4);
   border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
-.pipeline-editor p {
+.editor-notes p {
   margin: 0;
 }
-.pipeline-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--s-3);
-  align-items: center;
+/* Room above each lane for the badges on its nodes' corners. */
+.editor .lane-flow {
+  padding-top: 10px;
 }
-.stage-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s-1);
-  padding: var(--s-1) var(--s-3);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-pill);
-  background: var(--surface-2);
-  font-size: var(--text-sm);
-  font-weight: 600;
-  white-space: nowrap;
+/* A part of a row (text, not a node): its badge sits in a margin of its own, over no text. */
+.editor .session-meta .wiggle,
+.editor .session-meta .ghost-item,
+.editor .lane-label .wiggle,
+.editor .lane-label .ghost-item,
+.editor .block {
+  padding: 8px 0 0 14px;
 }
-.stage-chip svg {
-  width: 16px;
-  height: 16px;
+.editor .block {
+  margin-top: var(--s-2);
 }
-.stage-chip.locked {
-  opacity: 0.7;
-  border-style: dashed;
+.editor .lane-label > .wiggle,
+.editor .lane-label > .ghost-item {
+  overflow: visible;
+  justify-items: start;
+}
+/* "New stage" needs no full tile: a narrow one keeps Deploy and Guardian in view. */
+.ghost-item[data-item=':new'] .node {
+  width: 64px;
 }
 
-/* iOS-style edit mode: items wiggle, "−" on the corner removes, the arrows under them move them. */
-.wiggle {
+/*
+ * iOS-style edit mode: what can change wiggles gently where it sits, "−" on its corner removes it,
+ * and the arrows under a reorderable one move it. A removed item stays faded in place with a "+".
+ */
+.wiggle,
+.ghost-item {
   position: relative;
   display: inline-grid;
   justify-items: center;
   gap: 2px;
-  animation: wiggle 0.28s ease-in-out infinite alternate;
+}
+.wiggle {
+  animation: wiggle 0.9s ease-in-out infinite alternate;
+  transform-origin: 50% 50%;
+}
+.wiggle[draggable='true'] {
   cursor: grab;
 }
 .wiggle:nth-child(even) {
-  animation-delay: -0.14s;
+  animation-delay: -0.45s;
 }
 /* Still under the pointer or the keyboard, so what is aimed at stays put. */
 .wiggle:hover,
@@ -1941,38 +1945,85 @@ button.node-plus:hover:not(:disabled) {
 }
 @keyframes wiggle {
   from {
-    transform: rotate(-1.2deg);
+    transform: rotate(-0.6deg);
   }
   to {
-    transform: rotate(1.2deg);
+    transform: rotate(0.6deg);
+  }
+}
+/* A whole line (a list, a paragraph) takes the width and only sways a hair. */
+.wiggle.block,
+.ghost-item.block {
+  display: grid;
+  justify-items: stretch;
+}
+.wiggle.block {
+  animation-name: wiggle-block;
+}
+@keyframes wiggle-block {
+  from {
+    transform: translateX(-0.5px);
+  }
+  to {
+    transform: translateX(0.5px);
   }
 }
 .wiggle-body {
-  all: unset;
   display: inline-flex;
   align-items: center;
-  border-radius: var(--radius);
-  cursor: inherit;
 }
-.wiggle-body:focus-visible {
+.block > .wiggle-body {
+  display: block;
+}
+.ghost-item > .wiggle-body {
+  opacity: 0.4;
+  filter: grayscale(1);
+}
+.ghost-item .node {
+  border-style: dashed;
+}
+/* The whole item is the button that opens (or adds) it; its preview is underneath. */
+.wiggle-open {
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  cursor: pointer;
+}
+.wiggle-open:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.wiggle-open:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
-.wiggle-remove {
+.wiggle-remove,
+.ghost-add {
   position: absolute;
   top: -8px;
   left: -8px;
   z-index: 1;
+  display: grid;
+  place-items: center;
   width: 20px;
   height: 20px;
   min-height: 0;
   padding: 0;
   border-radius: 50%;
   border: none;
-  background: var(--muted);
   color: var(--bg);
   font-weight: 800;
   line-height: 1;
+}
+.wiggle-remove {
+  background: var(--muted);
+}
+.ghost-add {
+  background: var(--good);
+  pointer-events: none;
 }
 .wiggle-move {
   display: flex;
@@ -2005,11 +2056,6 @@ button.node-plus:hover:not(:disabled) {
 .editor-sheet h3 {
   font-size: var(--text-sm);
   color: var(--muted);
-}
-.add-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--s-2);
 }
 .icon-picker {
   display: flex;

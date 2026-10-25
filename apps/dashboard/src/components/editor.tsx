@@ -3,12 +3,14 @@
 import { useRouter } from 'next/navigation';
 import { useMemo, useState, useTransition } from 'react';
 import { applyEdits } from '../app/actions';
-import { buildBoard } from '../lib/board';
+import { buildBoard, GUARDIAN_NODE, type StageNode } from '../lib/board';
 import {
+  ROW_DETAIL_LABELS,
   toggle,
   TOPBAR_ITEMS,
   TOPBAR_LABELS,
   type Layout,
+  type RowDetail,
   type TopbarItem as TopbarItemName,
 } from '../lib/layout';
 import type {
@@ -20,16 +22,18 @@ import type {
   Stage,
   TreeProject,
 } from '../lib/schemas';
-import { BoardView } from './board-view';
-import { AddSheet, Chip, CloseDialog, EditableRow, Wiggle } from './editor-parts';
+import { ConfirmDialog, EditableRow, Ghost, useReorder, Wiggle } from './editor-parts';
+import { FinishedGroup } from './finished-sessions';
+import { PipelineRow, type LaneStep, type RowEdit } from './pipeline';
+import { KindChip } from './project-kind';
 import { fieldsOf, StageSheet, type StageFields } from './stage-sheet';
 import { TopbarItem } from './topbar-items';
 
 /*
- * The pencil's editor, like iOS's Control Center: everything wiggles, "−" removes, dragging (or the
- * arrows) reorders, "+" adds back. It edits a draft of the user's own top bar, row details and
- * pipeline, drawn on the demo board; ✕ asks to Discard or Approve, and only Approve changes their
- * dashboard. Project order and hiding are on the real board, not here.
+ * The pencil's editor, like iOS's Control Center: one example project, drawn as the board draws it,
+ * where everything that can change wiggles. "−" removes, "+" on a faded item puts it back, dragging
+ * (or the arrows) reorders, and tapping a stage edits it. Discard and Save each ask first; only Save
+ * changes the user's dashboard and the PR loop. Project order and hiding are on the real board.
  */
 
 interface Draft {
@@ -51,17 +55,34 @@ const BLANK_STAGE: Stage = {
   overridden: false,
 };
 
+/** The faded tile that makes a new stage: no stage id can look like this. */
+const NEW_STAGE = ':new';
+
+/** A node for something not in the pipeline, drawn faded where it would go. */
+const ghostNode = (stage: string, label: string, icon: string): StageNode => ({
+  stage,
+  label,
+  icon,
+  custom: true,
+  check: false,
+  skipped: false,
+  skippable: false,
+  state: 'todo',
+  questions: [],
+});
+
 export function Editor({
   layout,
   view,
-  demo,
+  example,
   usage,
   now,
   readOnly,
 }: {
   layout: Layout;
   view: PipelineView;
-  demo: { tree: TreeProject[]; pullRequests: PullRequest[]; questions: Question[] };
+  /** The one demo project the editor draws. */
+  example: { tree: TreeProject[]; pullRequests: PullRequest[]; questions: Question[] };
   usage: ClaudeUsage;
   now: number;
   readOnly: boolean;
@@ -75,7 +96,7 @@ export function Editor({
   };
   const [draft, setDraft] = useState<Draft>(initial);
   const [stages, setStages] = useState<Stage[]>(view.stages);
-  const [sheet, setSheet] = useState<'add' | 'close' | { stage: Stage; isNew: boolean } | null>(null);
+  const [sheet, setSheet] = useState<'save' | 'discard' | { stage: Stage; isNew: boolean } | null>(null);
   const [saving, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
@@ -93,19 +114,17 @@ export function Editor({
     });
   const { checks } = draft.pipeline;
   const stage = (id: string) => stages.find((s) => s.id === id);
+  const checkOrder = useReorder(checks, (next) => setPipeline({ checks: next }));
 
   const board = useMemo(
     () =>
       buildBoard(
-        demo.tree,
-        demo.pullRequests,
-        demo.questions.filter((q) => q.status === 'pending'),
-        {
-          pipeline: draft.pipeline,
-          stages,
-        },
+        example.tree,
+        example.pullRequests,
+        example.questions.filter((q) => q.status === 'pending'),
+        { pipeline: draft.pipeline, stages },
       ),
-    [demo, draft.pipeline, stages],
+    [example, draft.pipeline, stages],
   );
   const changed = brokenPipeline !== undefined || JSON.stringify(draft) !== JSON.stringify(initial);
   /** Checks the loop would hold PRs at: their stage file is missing or broken. */
@@ -123,7 +142,7 @@ export function Editor({
     setEdit(id, fields);
     if (!checks.includes(id)) setPipeline({ checks: [...checks, id] });
   };
-  /** A built-in's own prompt comes back from the server on Approve; until then the sheet says so. */
+  /** A built-in's own prompt comes back from the server on Save; until then the sheet says so. */
   const resetStage = (id: string) => {
     setSheet(null);
     const original = view.stages.find((s) => s.id === id);
@@ -144,8 +163,13 @@ export function Editor({
     setPipeline({ checks: checks.filter((c) => c !== id) });
     setEdit(id, null);
   };
+  const openStage = (id: string) =>
+    setSheet({
+      stage: stage(id) ?? { ...BLANK_STAGE, id, title: id, label: id.slice(0, 10) },
+      isNew: false,
+    });
 
-  const approve = () =>
+  const save = () =>
     start(async () => {
       setError(null);
       // An unreadable pipeline.json is replaced by what the editor shows.
@@ -168,69 +192,136 @@ export function Editor({
       else setError(result.error);
     });
 
+  /** A part of the row: "−" hides it on the dashboard, "+" shows it again. */
+  const part: RowEdit['part'] = (detail: RowDetail, content) => {
+    const props = {
+      item: detail,
+      label: ROW_DETAIL_LABELS[detail],
+      block: detail === 'earlierPrs' || detail === 'finished',
+    };
+    const flip = () => setLayout({ hiddenDetails: toggle(draft.layout.hiddenDetails, detail) });
+    return draft.layout.hiddenDetails.includes(detail) ? (
+      <Ghost {...props} onAdd={flip}>
+        {content}
+      </Ghost>
+    ) : (
+      <Wiggle {...props} onRemove={flip}>
+        {content}
+      </Wiggle>
+    );
+  };
+
+  /**
+   * A lane as the editor draws it: the checks wiggle and reorder, then the stages not in the pipeline
+   * and "New stage" wait faded where they would go; Approval and Merge are fixed; Deploy and Guardian
+   * come and go.
+   */
+  const lane: RowEdit['lane'] = (l, node) => {
+    const ghost = (n: StageNode, label: string, onAdd: () => void): LaneStep => ({
+      key: `+${n.stage}`,
+      state: 'todo',
+      content: (
+        <Ghost item={n.stage} label={label} onAdd={onAdd}>
+          {node(n, 'add')}
+        </Ghost>
+      ),
+    });
+    const step = (n: StageNode): LaneStep => {
+      const optional = n.stage === 'deploying' ? 'deploy' : n.stage === GUARDIAN_NODE ? 'guardian' : null;
+      return {
+        key: n.stage,
+        state: n.state,
+        content: n.check ? (
+          <Wiggle
+            item={n.stage}
+            label={stage(n.stage)?.title ?? n.label}
+            onRemove={() => setPipeline({ checks: checks.filter((c) => c !== n.stage) })}
+            onOpen={() => openStage(n.stage)}
+            order={checkOrder(checks.indexOf(n.stage))}
+          >
+            {node(n)}
+          </Wiggle>
+        ) : optional ? (
+          <Wiggle item={n.stage} label={n.label} onRemove={() => setPipeline({ [optional]: false })}>
+            {node(n)}
+          </Wiggle>
+        ) : (
+          <span className="fixed-node" inert>
+            {node(n)}
+          </span>
+        ),
+      };
+    };
+    const spare = [
+      ...stages
+        .filter((s) => !checks.includes(s.id))
+        .map((s) =>
+          ghost(ghostNode(s.id, s.label, s.icon), s.title, () => setPipeline({ checks: [...checks, s.id] })),
+        ),
+      ghost(ghostNode(NEW_STAGE, 'New stage', 'sparkle'), 'a new stage', () =>
+        setSheet({ stage: BLANK_STAGE, isNew: true }),
+      ),
+    ];
+    const deployGhost = ghost(ghostNode('deploying', 'Deploy', 'deploying'), 'Deploy', () =>
+      setPipeline({ deploy: true }),
+    );
+    const guardianGhost = ghost(ghostNode(GUARDIAN_NODE, 'Guardian', 'guardian'), 'Guardian', () =>
+      setPipeline({ guardian: true }),
+    );
+    const firstFixed = l.nodes.findIndex((n) => !n.check);
+    const at = firstFixed < 0 ? l.nodes.length : firstFixed;
+    return [
+      ...l.nodes.slice(0, at).map(step),
+      ...spare,
+      ...l.nodes
+        .slice(at)
+        .flatMap((n) => (n.stage === 'merge' && !draft.pipeline.deploy ? [step(n), deployGhost] : [step(n)])),
+      ...(draft.pipeline.guardian ? [] : [guardianGhost]),
+    ];
+  };
+
   return (
     <div className="app editor" data-testid="editor">
       <header className="topbar editing">
         <div className="topbar-items" aria-label="Top bar">
           <EditableRow<TopbarItemName>
             items={draft.layout.topbar}
+            all={TOPBAR_ITEMS}
             label={(item) => TOPBAR_LABELS[item]}
             render={(item) => <TopbarItem item={item} usage={usage} now={now} preview />}
             onChange={(topbar) => setLayout({ topbar })}
           />
         </div>
         <div className="topbar-actions">
-          <button type="button" className="small" onClick={() => setSheet('add')} data-testid="editor-add">
-            + Add
+          <button
+            type="button"
+            className="ghost small"
+            onClick={() => (changed ? setSheet('discard') : router.push('/'))}
+            data-testid="editor-discard"
+          >
+            Discard
           </button>
           <button
             type="button"
-            className="ghost small icon-button"
-            aria-label="Done editing"
-            onClick={() => (changed ? setSheet('close') : router.push('/'))}
-            data-testid="editor-close"
+            className="small"
+            disabled={!changed}
+            onClick={() => setSheet('save')}
+            data-testid="editor-save"
           >
-            ✕
+            Save
           </button>
         </div>
       </header>
 
-      <section className="pipeline-editor" aria-label="Pipeline">
+      <section className="editor-notes" aria-label="Editing">
         <p className="muted small">
-          Your pipeline, on demo projects. Drag or use the arrows to reorder, − to remove, tap a stage to edit
-          what it checks. Approve applies it to your dashboard and the PR loop.
+          An example project with your layout and pipeline. Tap − to remove, + to add back, drag or use the
+          arrows to reorder, and tap a stage to change what it checks. Save applies it to your dashboard and
+          the PR loop.
         </p>
-        <div className="pipeline-strip">
-          <Chip icon="session" label="Session" locked />
-          <Chip icon="builder" label="Builder" locked />
-          <EditableRow<string>
-            items={checks}
-            label={(id) => stage(id)?.title ?? id}
-            render={(id) => <Chip icon={stage(id)?.icon ?? 'check'} label={stage(id)?.label ?? id} />}
-            onChange={(next) => setPipeline({ checks: next })}
-            onOpen={(id) =>
-              setSheet({
-                stage: stage(id) ?? { ...BLANK_STAGE, id, title: id, label: id.slice(0, 10) },
-                isNew: false,
-              })
-            }
-          />
-          <Chip icon="awaiting_approval" label="Approval" locked />
-          <Chip icon="merge" label="Merge" locked />
-          {draft.pipeline.deploy && (
-            <Wiggle item="deploy" label="Deploy" onRemove={() => setPipeline({ deploy: false })}>
-              <Chip icon="deploying" label="Deploy" />
-            </Wiggle>
-          )}
-          {draft.pipeline.guardian && (
-            <Wiggle item="guardian" label="Guardian" onRemove={() => setPipeline({ guardian: false })}>
-              <Chip icon="guardian" label="Guardian" />
-            </Wiggle>
-          )}
-        </div>
         {brokenPipeline && (
           <p className="warning small" data-testid="pipeline-error">
-            The PR loop waits: {brokenPipeline}. Approve writes the pipeline shown here.
+            The PR loop waits: {brokenPipeline}. Save writes the pipeline shown here.
           </p>
         )}
         {stuck.length > 0 && (
@@ -244,41 +335,33 @@ export function Editor({
             Without Code review, every PR waits for your approval, even in projects with auto-merge on.
           </p>
         )}
-        <p className="muted small">
-          Approval follows each project&apos;s auto-merge switch. CI always gates the merge.
-        </p>
       </section>
 
-      {/* A preview: nothing on it can be clicked. */}
-      <main className="content" inert>
-        <BoardView
-          board={board}
-          projects={board.projects}
-          layout={{ ...layout, ...draft.layout }}
-          now={now}
-          readOnly
-          settings={() => null}
-        />
+      <main className="content">
+        {board.projects.map((p) => (
+          <section key={p.project.id} className="project" data-testid="project" data-project={p.project.name}>
+            <header className="project-head" inert>
+              <div className="project-title">
+                <h2>{p.project.name}</h2>
+                <KindChip project={p.project} />
+              </div>
+            </header>
+            <ul className="rows">
+              {p.rows.map((row) => (
+                <PipelineRow
+                  key={row.session.id}
+                  row={row}
+                  folder={p.project.kind === 'folder'}
+                  readOnly
+                  now={now}
+                  edit={{ part, lane }}
+                />
+              ))}
+            </ul>
+            {p.finished.length > 0 && part('finished', <FinishedGroup sessions={p.finished} now={now} />)}
+          </section>
+        ))}
       </main>
-
-      {sheet === 'add' && (
-        <AddSheet
-          topbar={TOPBAR_ITEMS.filter((item) => !draft.layout.topbar.includes(item))}
-          spare={stages.filter((s) => !checks.includes(s.id))}
-          deploy={draft.pipeline.deploy}
-          guardian={draft.pipeline.guardian}
-          hiddenDetails={draft.layout.hiddenDetails}
-          onAddTopbar={(item) => setLayout({ topbar: [...draft.layout.topbar, item] })}
-          onAddStage={(id) => setPipeline({ checks: [...checks, id] })}
-          onEditStage={(s) => setSheet({ stage: s, isNew: false })}
-          onNewStage={() => setSheet({ stage: BLANK_STAGE, isNew: true })}
-          onPipeline={setPipeline}
-          onToggleDetail={(detail) =>
-            setLayout({ hiddenDetails: toggle(draft.layout.hiddenDetails, detail) })
-          }
-          onClose={() => setSheet(null)}
-        />
-      )}
 
       {sheet !== null && typeof sheet === 'object' && (
         <StageSheet
@@ -294,13 +377,13 @@ export function Editor({
         />
       )}
 
-      {sheet === 'close' && (
-        <CloseDialog
+      {(sheet === 'save' || sheet === 'discard') && (
+        <ConfirmDialog
+          action={sheet}
           readOnly={readOnly}
           saving={saving}
           error={error}
-          onApprove={approve}
-          onDiscard={() => router.push('/')}
+          onConfirm={sheet === 'save' ? save : () => router.push('/')}
           onKeepEditing={() => {
             setError(null);
             setSheet(null);

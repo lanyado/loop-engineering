@@ -411,7 +411,7 @@ test('the theme switch works in read-only demo mode and survives a reload', asyn
   await expect.poll(themeCookies).toMatchObject([{ value: 'light' }]);
 });
 
-test('the pencil edits a draft on the demo board; Discard changes nothing, and demo data cannot be approved', async ({
+test('the pencil edits one example project in place; Save and Discard each ask first, and demo data cannot be saved', async ({
   page,
 }, info) => {
   // Still items: the wiggle is off with reduced motion, so clicks land without waiting for it.
@@ -420,48 +420,61 @@ test('the pencil edits a draft on the demo board; Discard changes nothing, and d
   await page.getByRole('link', { name: 'Edit the dashboard' }).click();
   const editor = page.getByTestId('editor');
   await expect(editor).toBeVisible();
-  // Every demo project, as a preview nothing on it can be clicked.
-  await expect(editor.getByTestId('project')).toHaveCount(await page.getByTestId('project').count());
+  // One example project, and nothing to save yet.
+  await expect(editor.getByTestId('project')).toHaveCount(1);
+  await expect(editor.getByTestId('editor-save')).toBeDisabled();
 
-  // Top bar: the weekly limit goes, and "+ Add" offers it back.
+  // Top bar: the weekly limit goes, and stays in place faded, with a "+" that brings it back.
   await editor.getByRole('button', { name: 'Remove Weekly limit' }).click();
-  await expect(editor.locator('[data-testid="usage-meter"][data-window="Weekly"]')).toHaveCount(0);
+  await expect(editor.locator('[data-testid="ghost-item"][data-item="weekly"]')).toHaveCount(1);
+  await editor.getByRole('button', { name: 'Add Weekly limit' }).click();
+  await expect(editor.locator('[data-testid="editable-item"][data-item="weekly"]')).toHaveCount(1);
+  await editor.getByRole('button', { name: 'Remove Weekly limit' }).click();
 
-  // Pipeline: Code review moves before Tests on the strip and on every lane of the preview.
+  // A part of the row: the PR's cost goes, faded where it was.
+  await editor.getByRole('button', { name: 'Remove PR cost and tokens' }).click();
+  await expect(editor.locator('[data-testid="ghost-item"][data-item="prMetrics"]')).toContainText('tokens');
+
+  // The pipeline is edited on the example's own lane: Code review moves before Tests.
+  const lane = editor.getByTestId('lane').locator('[data-testid="editable-item"]');
   await editor.getByRole('button', { name: 'Move Code review left' }).click();
-  const strip = editor.getByRole('region', { name: 'Pipeline' }).getByTestId('editable-item');
-  await expect(strip.first()).toHaveAttribute('data-item', 'review');
-  const lane = editor.getByTestId('lane').first().locator('[data-testid="node"]');
-  await expect(lane.first()).toHaveAttribute('data-stage', 'review');
+  await expect(lane.first()).toHaveAttribute('data-item', 'review');
 
-  // A new stage: its node shows up in the preview's lanes.
-  await editor.getByTestId('editor-add').click();
-  await editor.getByTestId('new-stage').click();
+  // A stage file not in the pipeline waits faded on the lane; "+" adds it.
+  await editor.getByRole('button', { name: 'Add Security review' }).click();
+  await expect(editor.locator('[data-testid="editable-item"][data-item="security"]')).toHaveCount(1);
+
+  // A new stage, from the faded "New stage" tile, with the wider Runs choices.
+  await editor.getByRole('button', { name: 'Add a new stage' }).click();
   await page.getByLabel('Name').fill('Docs check');
   await page.getByLabel('Label on the node (10 characters at most)').fill('Docs');
+  await page.getByLabel('Runs').selectOption({ label: 'Only when docs change' });
   await page.getByTestId('stage-prompt').fill('Check the README covers the change.');
   await page.getByTestId('stage-save').click();
-  await expect(editor.getByTestId('lane').first().locator('[data-stage="docs-check"]')).toContainText('Docs');
+  await expect(editor.locator('[data-testid="editable-item"][data-item="docs-check"]')).toContainText('Docs');
 
-  // A custom stage that is not in the pipeline can be edited and deleted from "+ Add"; Escape closes sheets.
-  await editor.getByTestId('editor-add').click();
-  await page.getByRole('button', { name: 'Edit Security review' }).click();
+  // Tapping a custom stage opens it; Delete takes it off the lane for good.
+  await editor.getByRole('button', { name: 'Edit Security review' }).click();
   await page.getByTestId('stage-delete').click();
-  await editor.getByTestId('editor-add').click();
-  await expect(page.getByRole('button', { name: 'Edit Security review' })).toHaveCount(0);
-  await page.keyboard.press('Escape');
-  await expect(page.getByTestId('add-sheet')).toHaveCount(0);
-  await expect(editor.getByTestId('editor-add')).toBeFocused(); // focus back where it was
+  await expect(editor.locator('[data-item="security"]')).toHaveCount(0);
 
-  // Removing review warns that every PR will wait for approval.
+  // Removing review warns that every PR will wait for approval; Deploy waits faded after Merge.
   await editor.getByRole('button', { name: 'Remove Code review' }).click();
   await expect(editor.getByTestId('no-review-warning')).toBeVisible();
+  await editor.getByRole('button', { name: 'Remove Deploy' }).click();
+  await expect(editor.locator('[data-testid="ghost-item"][data-item="deploying"]')).toHaveCount(1);
   await snap(page, info, 'editor');
 
-  // ✕: demo data cannot be approved; Discard goes back with nothing changed.
-  await editor.getByTestId('editor-close').click();
-  await expect(page.getByTestId('editor-approve')).toBeDisabled();
-  await page.getByTestId('editor-discard').click();
+  // Save asks first, and demo data cannot be applied; Keep editing goes back to the editor.
+  await editor.getByTestId('editor-save').click();
+  await expect(page.getByTestId('confirm-dialog')).toContainText('Apply these changes to your dashboard?');
+  await expect(page.getByTestId('confirm-yes')).toBeDisabled();
+  await page.getByRole('button', { name: 'Keep editing' }).click();
+  await expect(page.getByTestId('confirm-dialog')).toHaveCount(0);
+  // Discard asks too, then goes back with nothing changed.
+  await editor.getByTestId('editor-discard').click();
+  await expect(page.getByTestId('confirm-dialog')).toContainText('Discard your changes?');
+  await page.getByTestId('confirm-yes').click();
   await expect(page).toHaveURL(/\/$/);
   await expect(page.locator('[data-testid="usage-meter"][data-window="Weekly"]')).toHaveCount(1);
   await expect(page.getByTestId('lane').first().locator('[data-testid="node"]').first()).toHaveAttribute(

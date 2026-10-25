@@ -58,7 +58,6 @@ import {
   TEST_SYSTEM,
   testPrompt,
   type PrContext,
-  touchesUi,
   type ReviewVerdict,
 } from './prompts.js';
 import {
@@ -69,7 +68,9 @@ import {
   isBuiltinCheck,
   type Pipeline,
   type StageLibrary,
+  type StageRuns,
 } from './stages.js';
+import { runsOn } from './changes.js';
 import {
   loopState,
   nextCheck,
@@ -716,7 +717,7 @@ export class LoopEngine {
     if (!job.ok) return job.progressed;
     const v = job.verdict;
     // QA is slow: it runs only when the tester asks for it AND the diff touches UI files.
-    if (v.qaNeeded && !(await this.changesUi(c))) {
+    if (v.qaNeeded && !(await this.changes(c, 'ui-changes'))) {
       this.log(
         `PR ${c.pr.repo}#${c.pr.number}: the tester asked for QA, but the diff changes no UI files; skipping QA`,
       );
@@ -762,7 +763,7 @@ export class LoopEngine {
     if (c.s.feedback) return this.awaitFix(c, gh);
     // No tester ran before QA to judge whether it is needed: QA runs when the diff touches UI files.
     if (!testsBeforeQa(this.checksOf(c))) {
-      if (!(await this.changesUi(c))) {
+      if (!(await this.changes(c, 'ui-changes'))) {
         this.log(`PR ${c.pr.repo}#${c.pr.number}: the diff changes no UI files; skipping QA`);
         return this.afterCheck(c, gh, { qaSha: gh.headRefOid }, {});
       }
@@ -791,8 +792,8 @@ export class LoopEngine {
     const stage = this.stages.stage(id)!;
     const passed = (usage: MetricsDelta) =>
       this.afterCheck(c, gh, { passed: { ...c.s.passed, [id]: gh.headRefOid } }, usage);
-    if (stage.runs === 'ui-changes' && !(await this.changesUi(c))) {
-      this.log(`PR ${c.pr.repo}#${c.pr.number}: the diff changes no UI files; skipping ${stage.title}`);
+    if (!(await this.changes(c, stage.runs))) {
+      this.log(`PR ${c.pr.repo}#${c.pr.number}: no ${stage.runs} in the diff; skipping ${stage.title}`);
       return passed({});
     }
     // A custom check answers like QA: passed, and the failures.
@@ -839,8 +840,9 @@ export class LoopEngine {
     return this.pipeline().checks.includes('review') && !c.s.skip?.includes('review');
   }
 
-  private async changesUi(c: Ctx): Promise<boolean> {
-    return touchesUi(await this.deps.github.diff(c.ref, c.pr.number));
+  /** Whether the PR's diff makes a check with this `runs` setting run (no diff is fetched for "always"). */
+  private async changes(c: Ctx, runs: StageRuns): Promise<boolean> {
+    return runs === 'always' || runsOn(runs, await this.deps.github.diff(c.ref, c.pr.number));
   }
 
   /** The checks this PR runs: the pipeline's, without the ones the human skipped for it. */

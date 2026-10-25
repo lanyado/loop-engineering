@@ -288,12 +288,12 @@ function Node({
   );
 }
 
-function Edge({ state }: { state: NodeState }) {
+export function Edge({ state }: { state: NodeState }) {
   return <span className={`edge edge-${state}`} aria-hidden="true" />;
 }
 
 /** The edge into a node is lit when the node has started. */
-const edgeInto = (state: NodeState): NodeState =>
+export const edgeInto = (state: NodeState): NodeState =>
   state === 'todo' ? 'todo' : state === 'halted' ? 'halted' : 'done';
 
 /** What a lane node shows in its detail: who it waits on, else the plain state word. */
@@ -353,13 +353,80 @@ function WithTerminal({
   );
 }
 
-function LaneView({ lane, metrics, readOnly }: { lane: Lane; metrics: boolean; readOnly: boolean }) {
+/** One step of a lane as drawn: a node, or (in the editor) something to add. */
+export interface LaneStep {
+  key: string;
+  /** Lights the edge into it. */
+  state: NodeState;
+  content: ReactNode;
+}
+
+/**
+ * The editor's hooks into a row: the parts the layout can hide get their "−" (or "+" when hidden),
+ * and it lays out each lane's steps itself, so the pipeline is edited where it is drawn.
+ */
+export interface RowEdit {
+  part: (detail: RowDetail, content: ReactNode) => ReactNode;
+  /** `node` draws a node as the board does, without its buttons; `detail` replaces its state word. */
+  lane: (lane: Lane, node: (node: StageNode, detail?: string) => ReactNode) => LaneStep[];
+}
+
+function LaneView({
+  lane,
+  part,
+  edit,
+  readOnly,
+}: {
+  lane: Lane;
+  part: RowEdit['part'];
+  edit: RowEdit | undefined;
+  readOnly: boolean;
+}) {
   const pr = lane.pr;
   // The board already left out what this pipeline does not run (Approval in auto-merge projects, …).
   const nodes = lane.nodes;
   const feedback = pr?.loopState.feedback;
-  const origin = feedback ? nodes.findIndex((n) => n.stage === feedbackOrigin(feedback)) : -1;
+  // The way back is drawn by node position, which the editor's own steps would shift.
+  const origin = feedback && !edit ? nodes.findIndex((n) => n.stage === feedbackOrigin(feedback)) : -1;
   const back = laneFeedbacks([lane])[0];
+  const node = (node: StageNode, buttons: boolean, detail?: string) => (
+    <WithTerminal target={buttons ? stageTerminal(lane, node) : null} readOnly={readOnly}>
+      {(button) => (
+        <Node
+          kind={node.icon}
+          stage={node.stage}
+          state={node.state}
+          title={node.label}
+          detail={
+            detail ??
+            (node.stage === 'deploying'
+              ? deployDetail(node, lane)
+              : node.stage === 'guardian'
+                ? guardianDetail(node, lane)
+                : nodeDetail(node))
+          }
+          questions={node.stage === 'deploying' ? [...node.questions, ...lane.end.questions] : node.questions}
+          chip={
+            buttons && pr && node.skippable ? (
+              <SkipCheck
+                prId={pr.id}
+                pr={`${pr.repo}#${pr.number}`}
+                check={node.stage}
+                label={node.label}
+                skipped={node.skipped}
+                readOnly={readOnly}
+              />
+            ) : undefined
+          }
+        >
+          {button}
+        </Node>
+      )}
+    </WithTerminal>
+  );
+  const steps: LaneStep[] = edit
+    ? edit.lane(lane, (n, detail) => node(n, false, detail))
+    : nodes.map((n) => ({ key: n.stage, state: n.state, content: node(n, true) }));
   return (
     <li
       className={`lane${origin >= 0 ? ' has-return' : ''}`}
@@ -373,10 +440,11 @@ function LaneView({ lane, metrics, readOnly }: { lane: Lane; metrics: boolean; r
               {pr.repo}#{pr.number}
             </a>
             {pr.outcome === null && <span className="muted">{roundLabel(pr.round)}</span>}
-            {metrics && (
+            {part(
+              'prMetrics',
               <span className="muted lane-metrics" data-testid="pr-metrics">
                 {formatPrMetrics(pr.metrics)}
-              </span>
+              </span>,
             )}
           </>
         )}
@@ -385,43 +453,10 @@ function LaneView({ lane, metrics, readOnly }: { lane: Lane; metrics: boolean; r
         {feedback && back && origin >= 0 && (
           <ReturnPath short={back.short} count={Math.max(feedback.items.length, 1)} from={origin} />
         )}
-        {nodes.map((node, i) => (
-          <span key={node.stage} className="lane-step">
-            {i > 0 && <Edge state={edgeInto(node.state)} />}
-            <WithTerminal target={stageTerminal(lane, node)} readOnly={readOnly}>
-              {(button) => (
-                <Node
-                  kind={node.icon}
-                  stage={node.stage}
-                  state={node.state}
-                  title={node.label}
-                  detail={
-                    node.stage === 'deploying'
-                      ? deployDetail(node, lane)
-                      : node.stage === 'guardian'
-                        ? guardianDetail(node, lane)
-                        : nodeDetail(node)
-                  }
-                  questions={
-                    node.stage === 'deploying' ? [...node.questions, ...lane.end.questions] : node.questions
-                  }
-                  chip={
-                    pr && node.skippable ? (
-                      <SkipCheck
-                        prId={pr.id}
-                        pr={`${pr.repo}#${pr.number}`}
-                        check={node.stage}
-                        label={node.label}
-                        skipped={node.skipped}
-                        readOnly={readOnly}
-                      />
-                    ) : undefined
-                  }
-                >
-                  {button}
-                </Node>
-              )}
-            </WithTerminal>
+        {steps.map((step, i) => (
+          <span key={step.key} className="lane-step">
+            {i > 0 && <Edge state={edgeInto(step.state)} />}
+            {step.content}
           </span>
         ))}
       </span>
@@ -488,6 +523,7 @@ export function PipelineRow({
   hidden = [],
   readOnly,
   now,
+  edit,
 }: {
   row: Row;
   folder: boolean;
@@ -495,8 +531,11 @@ export function PipelineRow({
   hidden?: readonly RowDetail[];
   readOnly: boolean;
   now: number;
+  /** In the editor: a preview whose parts and pipeline are edited in place. */
+  edit?: RowEdit;
 }) {
-  const show = (detail: RowDetail) => shows(hidden, detail);
+  const part: RowEdit['part'] = (detail, content) =>
+    edit ? edit.part(detail, content) : shows(hidden, detail) ? content : null;
   const { session, builder } = row;
   const pause = pauseLabel(session.pauseReason);
   const open = session.status !== 'ended';
@@ -550,12 +589,14 @@ export function PipelineRow({
               {humanize(session.status)}
               {pause && ` · ${pause}`}
             </span>
-            {show('runtime') && <span className="muted">{running}</span>}
-            {show('subagents') && session.subagents.length > 0 && (
-              <span className="muted" data-testid="subagent-count">
-                {session.subagents.length} subagent{session.subagents.length === 1 ? '' : 's'}
-              </span>
-            )}
+            {part('runtime', <span className="muted">{running}</span>)}
+            {session.subagents.length > 0 &&
+              part(
+                'subagents',
+                <span className="muted" data-testid="subagent-count">
+                  {session.subagents.length} subagent{session.subagents.length === 1 ? '' : 's'}
+                </span>,
+              )}
           </div>
         </div>
         <div className="flow">
@@ -566,7 +607,7 @@ export function PipelineRow({
             testId="session-node"
             detail={null}
           >
-            <span className="node-actions">
+            <span className="node-actions" inert={edit !== undefined}>
               {open && <MessageButton />}
               {session.status === 'active' && (
                 <TerminalButton target={{ kind: 'session', sessionId: session.id }} readOnly={readOnly} />
@@ -576,7 +617,7 @@ export function PipelineRow({
           </Node>
           <Edge state="done" />
           <WithTerminal
-            target={session.status === 'active' ? { kind: 'session', sessionId: session.id } : null}
+            target={session.status === 'active' && !edit ? { kind: 'session', sessionId: session.id } : null}
             readOnly={readOnly}
           >
             {(button) => (
@@ -588,7 +629,7 @@ export function PipelineRow({
                 }
                 title="Builder"
                 detail={builder.state === 'working' ? 'building' : builder.state === 'paused' ? 'paused' : ''}
-                chip={feedbacks.length > 0 && <FeedbackButton label={feedbackChip} />}
+                chip={feedbacks.length > 0 && !edit && <FeedbackButton label={feedbackChip} />}
                 questions={builder.questions}
               >
                 {button}
@@ -603,7 +644,8 @@ export function PipelineRow({
                   <LaneView
                     key={lane.pr?.id ?? 'none'}
                     lane={lane}
-                    metrics={show('prMetrics')}
+                    part={part}
+                    edit={edit}
                     readOnly={readOnly}
                   />
                 ))}
@@ -617,22 +659,24 @@ export function PipelineRow({
           )}
         </div>
       </div>
-      {show('earlierPrs') && row.olderPrs.length > 0 && (
-        <p className="muted small older-prs">
-          Earlier PRs:{' '}
-          {row.olderPrs.map((pr, i) => (
-            <span key={pr.id}>
-              {i > 0 && ', '}
-              <a href={pr.url} target="_blank" rel="noreferrer" className="mono">
-                {pr.repo}#{pr.number}
-              </a>{' '}
-              ({humanize(pr.outcome ?? pr.stage)})
-            </span>
-          ))}
-        </p>
-      )}
+      {row.olderPrs.length > 0 &&
+        part(
+          'earlierPrs',
+          <p className="muted small older-prs" data-testid="earlier-prs">
+            Earlier PRs:{' '}
+            {row.olderPrs.map((pr, i) => (
+              <span key={pr.id}>
+                {i > 0 && ', '}
+                <a href={pr.url} target="_blank" rel="noreferrer" className="mono">
+                  {pr.repo}#{pr.number}
+                </a>{' '}
+                ({humanize(pr.outcome ?? pr.stage)})
+              </span>
+            ))}
+          </p>,
+        )}
       {questions.length > 0 && (
-        <div className="row-questions">
+        <div className="row-questions" inert={edit !== undefined}>
           {questions.map((q) => (
             <div key={q.id} id={questionAnchor(q)} className="row-question">
               <QuestionCard question={q} asker={askerLabel(q, row)} readOnly={readOnly} />

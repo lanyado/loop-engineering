@@ -357,6 +357,13 @@ export function demoData(now: Date): DemoData {
       { costUsd: 2.05, tokensIn: 1_120_000, tokensOut: 61_000, failures: 0 },
       { question: { kind: 'approval', id: 54 } },
     ),
+    // Search relevance's first PR, shipped: its row lists it under "Earlier PRs".
+    pr(10, 1, 102, 11, 'api', 79, 'deployed', 1, 'merged', 30 * HOUR, {
+      costUsd: 1.1,
+      tokensIn: 580_000,
+      tokensOut: 30_000,
+      failures: 0,
+    }),
     pr(5, 2, 202, 10, 'site', 44, 'deploying', 1, 'merged', 3 * MIN, {
       costUsd: 0.92,
       tokensIn: 400_000,
@@ -472,7 +479,17 @@ export function demoData(now: Date): DemoData {
           'check',
         ],
         access: ['read', 'shell', 'browser'],
-        runs: ['always', 'ui-changes'],
+        runs: [
+          'always',
+          'code-changes',
+          'ui-changes',
+          'server-changes',
+          'test-changes',
+          'docs-changes',
+          'dependency-changes',
+          'database-changes',
+          'infra-changes',
+        ],
         // The server's RESERVED_STAGE_IDS (http-backend.test.ts checks they match).
         reserved: [
           'check',
@@ -567,4 +584,21 @@ function request(
   createdAt: string,
 ): TaskRequest {
   return { id, projectId, sessionId, targetSessionId: null, text, source, createdAt };
+}
+
+/**
+ * The editor's one example: the shop project with Search relevance, a live session that shows every
+ * part of a row the layout can hide (run time, a subagent, PR cost, an earlier PR), and a finished one.
+ */
+export function editorExample(now: Date): Pick<DemoData, 'tree' | 'pullRequests' | 'questions' | 'usage'> {
+  const { tree, pullRequests, questions, usage } = demoData(now);
+  const shown = new Set([102, 103]);
+  return {
+    tree: tree
+      .filter((p) => p.name === 'shop')
+      .map((p) => ({ ...p, sessions: p.sessions.filter((s) => shown.has(s.id)) })),
+    pullRequests: pullRequests.filter((pr) => pr.sessionId === 102),
+    questions,
+    usage,
+  };
 }

@@ -22,7 +22,12 @@ Look for secrets committed in the diff and for unsafe handling of user input.
 | `label`  | The pipeline node's name, 10 characters at most; needed when the title is longer               |
 | `icon`   | `tests`, `review`, `qa`, `shield`, `lock`, `bug`, `book`, `gauge`, `globe`, `sparkle`, `check` |
 | `access` | `read` (files only), `shell` (can run commands) or `browser` (a shell and a headless browser)  |
-| `runs`   | `always`, or `ui-changes` (only when the diff touches UI files)                                |
+| `runs`   | `always`, or only when the diff changes that kind of file (below)                              |
+
+`runs` values besides `always`: `code-changes` (anything but docs), `ui-changes` (pages, components,
+styles), `server-changes` (source that isn't UI or tests), `test-changes`, `docs-changes`,
+`dependency-changes` (package manifests and lockfiles), `database-changes` (migrations, `.sql`,
+schemas) and `infra-changes` (CI, Docker, deploy config, Terraform).
 
 The prompt (4,000 characters at most) says what to check. The loop adds the PR, the request and
 the diff, and asks for pass or fail; failures go back to the builder like failing tests. No stage

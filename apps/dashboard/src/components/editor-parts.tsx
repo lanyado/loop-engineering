@@ -1,53 +1,151 @@
 'use client';
 
-import { useState, type HTMLAttributes, type ReactNode } from 'react';
-import { move, ROW_DETAIL_LABELS, ROW_DETAILS, TOPBAR_LABELS, type TopbarItem } from '../lib/layout';
-import type { Stage } from '../lib/schemas';
+import { useState, type DragEvent, type ReactNode } from 'react';
+import { move } from '../lib/layout';
 import { Dialog } from './dialog';
-import { Icon } from './pipeline';
-import { Switch } from './settings-controls';
 
-/** One item in edit mode: it wiggles, and "−" on its corner removes it. */
+/** Where an item sits in a row it can be reordered in: drag it, or use its arrows. */
+export interface Order {
+  index: number;
+  count: number;
+  onMove: (to: number) => void;
+  drag: {
+    draggable: true;
+    onDragStart: (e: DragEvent) => void;
+    onDragEnd: () => void;
+    onDragOver: (e: DragEvent) => void;
+    onDrop: () => void;
+  };
+}
+
+/** Reordering for `items`: the Order of the item at each index. */
+export function useReorder<T>(items: readonly T[], onChange: (items: T[]) => void): (i: number) => Order {
+  const [dragged, setDragged] = useState<number | null>(null);
+  return (i) => ({
+    index: i,
+    count: items.length,
+    onMove: (to) => onChange(move(items, i, to)),
+    drag: {
+      draggable: true,
+      onDragStart: (e) => {
+        e.dataTransfer.setData('text/plain', String(i)); // Firefox starts a drag only with data
+        setDragged(i);
+      },
+      onDragEnd: () => setDragged(null),
+      onDragOver: (e) => e.preventDefault(),
+      onDrop: () => {
+        if (dragged !== null) onChange(move(items, dragged, i));
+      },
+    },
+  });
+}
+
+/**
+ * One item in edit mode, where it sits on the dashboard: it wiggles, "−" on its corner removes it,
+ * tapping it opens it (onOpen), and with an order it drags or moves with its arrows. What it shows
+ * is a preview: nothing inside can be clicked.
+ */
 export function Wiggle({
   item,
   label,
   onRemove,
+  onOpen,
+  order,
+  block = false,
   children,
-  ...drag
 }: {
   item: string;
   label: string;
   onRemove: () => void;
+  onOpen?: () => void;
+  order?: Order;
+  /** A whole line (a list, a paragraph): it takes the width and barely moves. */
+  block?: boolean;
   children: ReactNode;
-} & Pick<
-  HTMLAttributes<HTMLSpanElement>,
-  'draggable' | 'onDragStart' | 'onDragEnd' | 'onDragOver' | 'onDrop'
->) {
+}) {
   return (
-    <span className="wiggle" data-testid="editable-item" data-item={item} {...drag}>
+    <span
+      className={`wiggle${block ? ' block' : ''}`}
+      data-testid="editable-item"
+      data-item={item}
+      {...order?.drag}
+    >
+      <span className="wiggle-body" inert>
+        {children}
+      </span>
+      {onOpen && (
+        <button type="button" className="wiggle-open" aria-label={`Edit ${label}`} onClick={onOpen} />
+      )}
       <button type="button" className="wiggle-remove" aria-label={`Remove ${label}`} onClick={onRemove}>
         −
       </button>
-      {children}
+      {order && (
+        <span className="wiggle-move">
+          <button
+            type="button"
+            aria-label={`Move ${label} left`}
+            disabled={order.index === 0}
+            onClick={() => order.onMove(order.index - 1)}
+          >
+            ‹
+          </button>
+          <button
+            type="button"
+            aria-label={`Move ${label} right`}
+            disabled={order.index === order.count - 1}
+            onClick={() => order.onMove(order.index + 1)}
+          >
+            ›
+          </button>
+        </span>
+      )}
     </span>
   );
 }
 
-/** A row of wiggling items: drag or the arrows reorder, "−" removes. */
+/** Something removed (or not added yet), faded where it would sit: "+" or a tap puts it there. */
+export function Ghost({
+  item,
+  label,
+  onAdd,
+  block = false,
+  children,
+}: {
+  item: string;
+  label: string;
+  onAdd: () => void;
+  block?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <span className={`ghost-item${block ? ' block' : ''}`} data-testid="ghost-item" data-item={item}>
+      <span className="wiggle-body" inert>
+        {children}
+      </span>
+      <button type="button" className="wiggle-open" aria-label={`Add ${label}`} onClick={onAdd} />
+      <span className="ghost-add" aria-hidden="true">
+        +
+      </span>
+    </span>
+  );
+}
+
+/** A row of items to reorder and remove, followed by the removed ones to add back. */
 export function EditableRow<T extends string>({
   items,
+  all,
   label,
   render,
   onChange,
-  onOpen,
 }: {
   items: T[];
+  /** Every item the row may hold, in the order removed ones are offered back. */
+  all: readonly T[];
   label: (item: T) => string;
   render: (item: T) => ReactNode;
   onChange: (items: T[]) => void;
-  onOpen?: (item: T) => void;
 }) {
-  const [dragged, setDragged] = useState<number | null>(null);
+  const order = useReorder(items, onChange);
   return (
     <>
       {items.map((item, i) => (
@@ -56,175 +154,52 @@ export function EditableRow<T extends string>({
           item={item}
           label={label(item)}
           onRemove={() => onChange(items.filter((x) => x !== item))}
-          draggable
-          onDragStart={(e) => {
-            e.dataTransfer.setData('text/plain', item); // Firefox starts a drag only with data
-            setDragged(i);
-          }}
-          onDragEnd={() => setDragged(null)}
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={() => {
-            if (dragged !== null) onChange(move(items, dragged, i));
-          }}
+          order={order(i)}
         >
-          {onOpen ? (
-            <button
-              type="button"
-              className="wiggle-body"
-              onClick={() => onOpen(item)}
-              aria-label={`Edit ${label(item)}`}
-            >
-              {render(item)}
-            </button>
-          ) : (
-            <span className="wiggle-body">{render(item)}</span>
-          )}
-          <span className="wiggle-move">
-            <button
-              type="button"
-              aria-label={`Move ${label(item)} left`}
-              disabled={i === 0}
-              onClick={() => onChange(move(items, i, i - 1))}
-            >
-              ‹
-            </button>
-            <button
-              type="button"
-              aria-label={`Move ${label(item)} right`}
-              disabled={i === items.length - 1}
-              onClick={() => onChange(move(items, i, i + 1))}
-            >
-              ›
-            </button>
-          </span>
+          {render(item)}
         </Wiggle>
       ))}
+      {all
+        .filter((item) => !items.includes(item))
+        .map((item) => (
+          <Ghost key={item} item={item} label={label(item)} onAdd={() => onChange([...items, item])}>
+            {render(item)}
+          </Ghost>
+        ))}
     </>
   );
 }
 
-export function Chip({ icon, label, locked }: { icon: string; label: string; locked?: boolean }) {
-  return (
-    <span className={`stage-chip${locked ? ' locked' : ''}`}>
-      <Icon kind={icon} />
-      {label}
-      {locked && <span className="sr-only"> (fixed)</span>}
-    </span>
-  );
-}
-
-/** "+ Add": what is not on the screen now, to put back, and the switches for each row's details. */
-export function AddSheet({
-  topbar,
-  spare,
-  deploy,
-  guardian,
-  hiddenDetails,
-  onAddTopbar,
-  onAddStage,
-  onEditStage,
-  onNewStage,
-  onPipeline,
-  onToggleDetail,
-  onClose,
-}: {
-  /** Top bar items not shown. */
-  topbar: TopbarItem[];
-  /** Stages not in the pipeline. */
-  spare: Stage[];
-  deploy: boolean;
-  guardian: boolean;
-  hiddenDetails: readonly (typeof ROW_DETAILS)[number][];
-  onAddTopbar: (item: TopbarItem) => void;
-  onAddStage: (id: string) => void;
-  onEditStage: (stage: Stage) => void;
-  onNewStage: () => void;
-  onPipeline: (patch: { deploy?: boolean; guardian?: boolean }) => void;
-  onToggleDetail: (detail: (typeof ROW_DETAILS)[number]) => void;
-  onClose: () => void;
-}) {
-  return (
-    <Dialog label="Add" onClose={onClose} testId="add-sheet">
-      <h2>Add</h2>
-      <h3>Top bar</h3>
-      {topbar.length === 0 && <p className="muted small">Everything is in the top bar.</p>}
-      <div className="add-grid">
-        {topbar.map((item) => (
-          <button key={item} type="button" className="ghost" onClick={() => onAddTopbar(item)}>
-            + {TOPBAR_LABELS[item]}
-          </button>
-        ))}
-      </div>
-      <h3>Pipeline</h3>
-      <div className="add-grid">
-        {spare.map((s) => (
-          <span key={s.id} className="add-stage">
-            <button type="button" className="ghost" onClick={() => onAddStage(s.id)}>
-              + <Chip icon={s.icon} label={s.title} />
-            </button>
-            <button
-              type="button"
-              className="ghost small"
-              onClick={() => onEditStage(s)}
-              aria-label={`Edit ${s.title}`}
-            >
-              Edit
-            </button>
-          </span>
-        ))}
-        {!deploy && (
-          <button type="button" className="ghost" onClick={() => onPipeline({ deploy: true })}>
-            + <Chip icon="deploying" label="Deploy watch" />
-          </button>
-        )}
-        {!guardian && (
-          <button type="button" className="ghost" onClick={() => onPipeline({ guardian: true })}>
-            + <Chip icon="guardian" label="Production Guardian" />
-          </button>
-        )}
-        <button type="button" onClick={onNewStage} data-testid="new-stage">
-          + New stage
-        </button>
-      </div>
-      <h3>On each row</h3>
-      {ROW_DETAILS.map((detail) => (
-        <Switch
-          key={detail}
-          label={ROW_DETAIL_LABELS[detail]}
-          checked={!hiddenDetails.includes(detail)}
-          onChange={() => onToggleDetail(detail)}
-        />
-      ))}
-      <button type="button" className="ghost" onClick={onClose}>
-        Done
-      </button>
-    </Dialog>
-  );
-}
-
-/** ✕ with changes: Approve, Discard or Keep editing. */
-export function CloseDialog({
+/** Save and Discard each ask first; Save says where the changes go. */
+export function ConfirmDialog({
+  action,
   readOnly,
   saving,
   error,
-  onApprove,
-  onDiscard,
+  onConfirm,
   onKeepEditing,
 }: {
+  action: 'save' | 'discard';
   readOnly: boolean;
   saving: boolean;
   error: string | null;
-  onApprove: () => void;
-  onDiscard: () => void;
+  onConfirm: () => void;
   onKeepEditing: () => void;
 }) {
+  const save = action === 'save';
   return (
-    <Dialog label="Apply the changes?" onClose={onKeepEditing} testId="close-dialog">
-      <h2>Apply these changes to your dashboard?</h2>
+    <Dialog
+      label={save ? 'Apply the changes?' : 'Discard the changes?'}
+      onClose={onKeepEditing}
+      testId="confirm-dialog"
+    >
+      <h2>{save ? 'Apply these changes to your dashboard?' : 'Discard your changes?'}</h2>
       <p className="muted">
-        Approve saves the layout and the pipeline; the PR loop uses the new pipeline from its next step.
+        {save
+          ? 'Your dashboard gets this layout, and the PR loop uses this pipeline from its next step.'
+          : 'Your dashboard and the PR loop stay as they were.'}
       </p>
-      {readOnly && (
+      {save && readOnly && (
         <p className="warning small">Demo data is read-only: connect a server to apply changes.</p>
       )}
       {error && (
@@ -233,11 +208,14 @@ export function CloseDialog({
         </p>
       )}
       <div className="row-actions">
-        <button type="button" disabled={readOnly || saving} onClick={onApprove} data-testid="editor-approve">
-          {saving ? 'Applying…' : 'Approve'}
-        </button>
-        <button type="button" className="ghost" onClick={onDiscard} data-testid="editor-discard">
-          Discard
+        <button
+          type="button"
+          className={save ? undefined : 'danger'}
+          disabled={save && (readOnly || saving)}
+          onClick={onConfirm}
+          data-testid="confirm-yes"
+        >
+          {save ? (saving ? 'Applying…' : 'Apply') : 'Discard changes'}
         </button>
         <button type="button" className="ghost" onClick={onKeepEditing}>
           Keep editing
