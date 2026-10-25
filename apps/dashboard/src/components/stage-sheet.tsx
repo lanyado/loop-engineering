@@ -159,7 +159,7 @@ export function StageSheet({
             rows={8}
             maxLength={4000}
             required={!(stage.builtin && !stage.overridden && !f.prompt)}
-            placeholder={stage.builtin ? 'The built-in prompt (restored when you Approve).' : undefined}
+            placeholder={stage.builtin ? 'The built-in prompt (restored when you Save).' : undefined}
             onChange={(e) => set({ prompt: e.target.value })}
             data-testid="stage-prompt"
           />

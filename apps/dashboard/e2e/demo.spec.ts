@@ -420,9 +420,12 @@ test('the pencil edits one example project in place; Save and Discard each ask f
   await page.getByRole('link', { name: 'Edit the dashboard' }).click();
   const editor = page.getByTestId('editor');
   await expect(editor).toBeVisible();
-  // One example project, and nothing to save yet.
+  // One example project, and nothing to save yet: Discard just leaves.
   await expect(editor.getByTestId('project')).toHaveCount(1);
   await expect(editor.getByTestId('editor-save')).toBeDisabled();
+  await editor.getByTestId('editor-discard').click();
+  await expect(page).toHaveURL(/\/$/);
+  await page.getByRole('link', { name: 'Edit the dashboard' }).click();
 
   // Top bar: the weekly limit goes, and stays in place faded, with a "+" that brings it back.
   await editor.getByRole('button', { name: 'Remove Weekly limit' }).click();
@@ -435,7 +438,13 @@ test('the pencil edits one example project in place; Save and Discard each ask f
   await editor.getByRole('button', { name: 'Remove PR cost and tokens' }).click();
   await expect(editor.locator('[data-testid="ghost-item"][data-item="prMetrics"]')).toContainText('tokens');
 
-  // The pipeline is edited on the example's own lane: Code review moves before Tests.
+  // The pipeline is edited on the example's own lane. A removed check waits faded where it was.
+  const steps = editor.getByTestId('lane').locator('.lane-step > [data-item]');
+  await editor.getByRole('button', { name: 'Remove Tests' }).click();
+  await expect(steps.first()).toHaveAttribute('data-testid', 'ghost-item');
+  await editor.getByRole('button', { name: 'Add Tests' }).click();
+  await expect(steps.first()).toHaveAttribute('data-item', 'tests');
+  // Code review moves before Tests.
   const lane = editor.getByTestId('lane').locator('[data-testid="editable-item"]');
   await editor.getByRole('button', { name: 'Move Code review left' }).click();
   await expect(lane.first()).toHaveAttribute('data-item', 'review');

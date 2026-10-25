@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, type DragEvent, type ReactNode } from 'react';
-import { move } from '../lib/layout';
+import { insert, move, withGhosts } from '../lib/layout';
 import { Dialog } from './dialog';
 
 /** Where an item sits in a row it can be reordered in: drag it, or use its arrows. */
@@ -130,7 +130,7 @@ export function Ghost({
   );
 }
 
-/** A row of items to reorder and remove, followed by the removed ones to add back. */
+/** A row of items to reorder and remove, with the removed ones faded where they were. */
 export function EditableRow<T extends string>({
   items,
   all,
@@ -139,7 +139,7 @@ export function EditableRow<T extends string>({
   onChange,
 }: {
   items: T[];
-  /** Every item the row may hold, in the order removed ones are offered back. */
+  /** Every item the row may hold, in the order that places the removed ones. */
   all: readonly T[];
   label: (item: T) => string;
   render: (item: T) => ReactNode;
@@ -148,24 +148,27 @@ export function EditableRow<T extends string>({
   const order = useReorder(items, onChange);
   return (
     <>
-      {items.map((item, i) => (
-        <Wiggle
-          key={item}
-          item={item}
-          label={label(item)}
-          onRemove={() => onChange(items.filter((x) => x !== item))}
-          order={order(i)}
-        >
-          {render(item)}
-        </Wiggle>
-      ))}
-      {all
-        .filter((item) => !items.includes(item))
-        .map((item) => (
-          <Ghost key={item} item={item} label={label(item)} onAdd={() => onChange([...items, item])}>
+      {withGhosts(
+        items,
+        all.filter((item) => !items.includes(item)),
+        all,
+      ).map(({ item, ghost, at }) =>
+        ghost ? (
+          <Ghost key={item} item={item} label={label(item)} onAdd={() => onChange(insert(items, item, at))}>
             {render(item)}
           </Ghost>
-        ))}
+        ) : (
+          <Wiggle
+            key={item}
+            item={item}
+            label={label(item)}
+            onRemove={() => onChange(items.filter((x) => x !== item))}
+            order={order(at)}
+          >
+            {render(item)}
+          </Wiggle>
+        ),
+      )}
     </>
   );
 }

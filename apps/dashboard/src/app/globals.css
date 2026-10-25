@@ -1897,12 +1897,20 @@ button.node-plus:hover:not(:disabled) {
   padding-top: 10px;
 }
 /* A part of a row (text, not a node): its badge sits in a margin of its own, over no text. */
+.editor .block {
+  padding: 8px 0 0 14px;
+}
+/* Inline text (run time, subagents, the PR's cost): the badge sits to its left, on its middle. */
 .editor .session-meta .wiggle,
 .editor .session-meta .ghost-item,
 .editor .lane-label .wiggle,
-.editor .lane-label .ghost-item,
-.editor .block {
-  padding: 8px 0 0 14px;
+.editor .lane-label .ghost-item {
+  padding-left: 24px;
+}
+.editor .session-meta :is(.wiggle-remove, .ghost-add),
+.editor .lane-label :is(.wiggle-remove, .ghost-add) {
+  top: calc(50% - 10px);
+  left: 0;
 }
 .editor .block {
   margin-top: var(--s-2);

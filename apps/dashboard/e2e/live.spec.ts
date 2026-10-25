@@ -551,7 +551,7 @@ test('ends a session from its details after a confirm step', async ({ page }, in
 test('the editor applies the layout and the pipeline on Save', async ({ page }, info) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await open(page);
-  // A project hidden on the board first: the editor's Approve must keep it hidden (the server merges).
+  // A project hidden on the board first: the editor's Save must keep it hidden (the server merges).
   const names = () => page.getByTestId('project').evaluateAll((els) => els.map((e) => e.dataset.project));
   const last = (await names()).at(-1)!;
   await projectSettings(page, last);
@@ -560,6 +560,7 @@ test('the editor applies the layout and the pipeline on Save', async ({ page }, 
   await page.getByRole('link', { name: 'Edit the dashboard' }).click();
   const editor = page.getByTestId('editor');
   await editor.getByRole('button', { name: 'Remove Weekly limit' }).click();
+  await editor.getByRole('button', { name: 'Remove PR cost and tokens' }).click();
   await editor.getByRole('button', { name: 'Move Code review left' }).click();
   await editor.getByRole('button', { name: 'Add a new stage' }).click();
   await page.getByLabel('Name').fill('Docs check');
@@ -583,6 +584,8 @@ test('the editor applies the layout and the pipeline on Save', async ({ page }, 
   await expect(lane.locator('[data-testid="node"]').first()).toHaveAttribute('data-stage', 'review');
   await expect(lane.locator('[data-stage="docs-check"]')).toContainText('Docs');
   expect(await names()).not.toContain(last);
+  const { settings } = await api<{ settings: { dashboardLayout: { hiddenDetails: string[] } } }>('/settings');
+  expect(settings.dashboardLayout.hiddenDetails).toEqual(['prMetrics']);
 });
 
 test('a project moves up and hides from its settings, and shows again from the list under the board', async ({

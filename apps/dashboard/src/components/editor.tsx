@@ -5,8 +5,10 @@ import { useMemo, useState, useTransition } from 'react';
 import { applyEdits } from '../app/actions';
 import { buildBoard, GUARDIAN_NODE, type StageNode } from '../lib/board';
 import {
+  insert,
   ROW_DETAIL_LABELS,
   toggle,
+  withGhosts,
   TOPBAR_ITEMS,
   TOPBAR_LABELS,
   type Layout,
@@ -115,6 +117,8 @@ export function Editor({
   const { checks } = draft.pipeline;
   const stage = (id: string) => stages.find((s) => s.id === id);
   const checkOrder = useReorder(checks, (next) => setPipeline({ checks: next }));
+  /** Where a stage left out of the pipeline waits: its place in the saved pipeline, else after it. */
+  const stageOrder = [...new Set([...savedChecks, ...view.stages.map((s) => s.id)])];
 
   const board = useMemo(
     () =>
@@ -212,11 +216,11 @@ export function Editor({
   };
 
   /**
-   * A lane as the editor draws it: the checks wiggle and reorder, then the stages not in the pipeline
-   * and "New stage" wait faded where they would go; Approval and Merge are fixed; Deploy and Guardian
-   * come and go.
+   * A lane as the editor draws it: the checks wiggle and reorder; stage files not in the pipeline,
+   * "New stage" and a removed Deploy or Guardian wait faded where they would go (on the first lane,
+   * so a split row offers each once); Approval and Merge are fixed.
    */
-  const lane: RowEdit['lane'] = (l, node) => {
+  const lane: RowEdit['lane'] = (l, node, first) => {
     const ghost = (n: StageNode, label: string, onAdd: () => void): LaneStep => ({
       key: `+${n.stage}`,
       state: 'todo',
@@ -252,31 +256,46 @@ export function Editor({
         ),
       };
     };
-    const spare = [
-      ...stages
-        .filter((s) => !checks.includes(s.id))
-        .map((s) =>
-          ghost(ghostNode(s.id, s.label, s.icon), s.title, () => setPipeline({ checks: [...checks, s.id] })),
-        ),
-      ghost(ghostNode(NEW_STAGE, 'New stage', 'sparkle'), 'a new stage', () =>
-        setSheet({ stage: BLANK_STAGE, isNew: true }),
-      ),
-    ];
-    const deployGhost = ghost(ghostNode('deploying', 'Deploy', 'deploying'), 'Deploy', () =>
-      setPipeline({ deploy: true }),
+    // The checks, and (on the first lane only) the stage files not in the pipeline where they were.
+    const spare = first ? stages.filter((s) => !checks.includes(s.id)).map((s) => s.id) : [];
+    const checkSteps = withGhosts(checks, spare, stageOrder).flatMap(({ item, ghost: off, at }) => {
+      const s = stage(item);
+      const n = l.nodes.find((x) => x.stage === item);
+      if (off && s)
+        return [
+          ghost(ghostNode(item, s.label, s.icon), s.title, () =>
+            setPipeline({ checks: insert(checks, item, at) }),
+          ),
+        ];
+      return n ? [step(n)] : [];
+    });
+    const newStage = ghost(ghostNode(NEW_STAGE, 'New stage', 'sparkle'), 'a new stage', () =>
+      setSheet({ stage: BLANK_STAGE, isNew: true }),
     );
-    const guardianGhost = ghost(ghostNode(GUARDIAN_NODE, 'Guardian', 'guardian'), 'Guardian', () =>
-      setPipeline({ guardian: true }),
-    );
-    const firstFixed = l.nodes.findIndex((n) => !n.check);
-    const at = firstFixed < 0 ? l.nodes.length : firstFixed;
+    const has = (id: string) => l.nodes.some((n) => n.stage === id);
+    const deployGhost =
+      first && !draft.pipeline.deploy && !has('deploying')
+        ? [
+            ghost(ghostNode('deploying', 'Deploy', 'deploying'), 'Deploy', () =>
+              setPipeline({ deploy: true }),
+            ),
+          ]
+        : [];
+    const guardianGhost =
+      first && !draft.pipeline.guardian && !has(GUARDIAN_NODE)
+        ? [
+            ghost(ghostNode(GUARDIAN_NODE, 'Guardian', 'guardian'), 'Guardian', () =>
+              setPipeline({ guardian: true }),
+            ),
+          ]
+        : [];
     return [
-      ...l.nodes.slice(0, at).map(step),
-      ...spare,
+      ...checkSteps,
+      ...(first ? [newStage] : []),
       ...l.nodes
-        .slice(at)
-        .flatMap((n) => (n.stage === 'merge' && !draft.pipeline.deploy ? [step(n), deployGhost] : [step(n)])),
-      ...(draft.pipeline.guardian ? [] : [guardianGhost]),
+        .filter((n) => !n.check)
+        .flatMap((n) => (n.stage === 'merge' ? [step(n), ...deployGhost] : [step(n)])),
+      ...guardianGhost,
     ];
   };
 

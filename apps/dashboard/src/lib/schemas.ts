@@ -324,6 +324,6 @@ export const pipelineUpdateInput = z.object({
   stages: z.record(z.string().max(32), stageInput.nullable()).optional(),
 });
 export type PipelineUpdate = z.infer<typeof pipelineUpdateInput>;
-/** What the editor's Approve sends: the layout, and the pipeline when it changed. */
+/** What the editor's Save sends: the layout, and the pipeline when it changed. */
 export const editsInput = z.object({ layout: layoutPatch, pipeline: pipelineUpdateInput.optional() });
 export const hideProjectInput = z.object({ projectId: z.number().int().positive(), hidden: z.boolean() });

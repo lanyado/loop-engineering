@@ -124,11 +124,11 @@ export async function setProjectHidden(projectId: number, hidden: boolean): Prom
   });
 }
 
-/** The editor's Approve: the pipeline first (the server may refuse it), then the layout. */
+/** The editor's Save: the pipeline first (the server may refuse it), then the layout. */
 export async function applyEdits(edits: unknown): Promise<ActionResult> {
   return write(editsInput, edits, async (d, backend) => {
     if (d.pipeline) await backend.updatePipeline(d.pipeline);
-    // A pipeline-only Approve leaves the layout alone, so it cannot overwrite another tab's save.
+    // A pipeline-only Save leaves the layout alone, so it cannot overwrite another tab's save.
     if (Object.keys(d.layout).length > 0) await mergeLayout(backend, () => d.layout);
     return undefined;
   });

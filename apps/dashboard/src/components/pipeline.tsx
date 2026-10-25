@@ -288,12 +288,12 @@ function Node({
   );
 }
 
-export function Edge({ state }: { state: NodeState }) {
+function Edge({ state }: { state: NodeState }) {
   return <span className={`edge edge-${state}`} aria-hidden="true" />;
 }
 
 /** The edge into a node is lit when the node has started. */
-export const edgeInto = (state: NodeState): NodeState =>
+const edgeInto = (state: NodeState): NodeState =>
   state === 'todo' ? 'todo' : state === 'halted' ? 'halted' : 'done';
 
 /** What a lane node shows in its detail: who it waits on, else the plain state word. */
@@ -368,16 +368,18 @@ export interface LaneStep {
 export interface RowEdit {
   part: (detail: RowDetail, content: ReactNode) => ReactNode;
   /** `node` draws a node as the board does, without its buttons; `detail` replaces its state word. */
-  lane: (lane: Lane, node: (node: StageNode, detail?: string) => ReactNode) => LaneStep[];
+  lane: (lane: Lane, node: (node: StageNode, detail?: string) => ReactNode, first: boolean) => LaneStep[];
 }
 
 function LaneView({
   lane,
+  first,
   part,
   edit,
   readOnly,
 }: {
   lane: Lane;
+  first: boolean;
   part: RowEdit['part'];
   edit: RowEdit | undefined;
   readOnly: boolean;
@@ -425,7 +427,7 @@ function LaneView({
     </WithTerminal>
   );
   const steps: LaneStep[] = edit
-    ? edit.lane(lane, (n, detail) => node(n, false, detail))
+    ? edit.lane(lane, (n, detail) => node(n, false, detail), first)
     : nodes.map((n) => ({ key: n.stage, state: n.state, content: node(n, true) }));
   return (
     <li
@@ -436,7 +438,14 @@ function LaneView({
       <span className="lane-label">
         {pr && (
           <>
-            <a href={pr.url} target="_blank" rel="noreferrer" className="mono" data-testid="lane-pr">
+            <a
+              href={pr.url}
+              target="_blank"
+              rel="noreferrer"
+              className="mono"
+              data-testid="lane-pr"
+              inert={edit !== undefined}
+            >
               {pr.repo}#{pr.number}
             </a>
             {pr.outcome === null && <span className="muted">{roundLabel(pr.round)}</span>}
@@ -640,10 +649,11 @@ export function PipelineRow({
             <>
               <Edge state={row.lanes.some((l) => l.pr) ? 'done' : 'todo'} />
               <ul className={`lanes${row.lanes.length > 1 ? ' split' : ''}`}>
-                {row.lanes.map((lane) => (
+                {row.lanes.map((lane, i) => (
                   <LaneView
                     key={lane.pr?.id ?? 'none'}
                     lane={lane}
+                    first={i === 0}
                     part={part}
                     edit={edit}
                     readOnly={readOnly}
