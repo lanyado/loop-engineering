@@ -8,7 +8,6 @@ import {
   insert,
   ROW_DETAIL_LABELS,
   toggle,
-  withGhosts,
   TOPBAR_ITEMS,
   TOPBAR_LABELS,
   type Layout,
@@ -24,7 +23,7 @@ import type {
   Stage,
   TreeProject,
 } from '../lib/schemas';
-import { ConfirmDialog, EditableRow, Ghost, useReorder, Wiggle } from './editor-parts';
+import { ConfirmDialog, EditableRow, Ghost, useGhostPlaces, useReorder, Wiggle } from './editor-parts';
 import { FinishedGroup } from './finished-sessions';
 import { PipelineRow, type LaneStep, type RowEdit } from './pipeline';
 import { KindChip } from './project-kind';
@@ -116,9 +115,13 @@ export function Editor({
     });
   const { checks } = draft.pipeline;
   const stage = (id: string) => stages.find((s) => s.id === id);
-  const checkOrder = useReorder(checks, (next) => setPipeline({ checks: next }));
-  /** Where a stage left out of the pipeline waits: its place in the saved pipeline, else after it. */
-  const stageOrder = [...new Set([...savedChecks, ...view.stages.map((s) => s.id)])];
+  // Every change to the checks goes through setChecks, so a removed one waits where it last was.
+  const { entries: checkEntries, change: setChecks } = useGhostPlaces(
+    checks,
+    stages.map((s) => s.id),
+    (next) => setPipeline({ checks: next }),
+  );
+  const checkOrder = useReorder(checks, setChecks);
 
   const board = useMemo(
     () =>
@@ -144,7 +147,7 @@ export function Editor({
         : [...all, { id, ...fields, builtin: false, overridden: false }],
     );
     setEdit(id, fields);
-    if (!checks.includes(id)) setPipeline({ checks: [...checks, id] });
+    if (!checks.includes(id)) setChecks([...checks, id]);
   };
   /** A built-in's own prompt comes back from the server on Save; until then the sheet says so. */
   const resetStage = (id: string) => {
@@ -164,7 +167,7 @@ export function Editor({
   const deleteStage = (id: string) => {
     setSheet(null);
     setStages((all) => all.filter((s) => s.id !== id));
-    setPipeline({ checks: checks.filter((c) => c !== id) });
+    setChecks(checks.filter((c) => c !== id));
     setEdit(id, null);
   };
   const openStage = (id: string) =>
@@ -239,12 +242,15 @@ export function Editor({
           <Wiggle
             item={n.stage}
             label={stage(n.stage)?.title ?? n.label}
-            onRemove={() => setPipeline({ checks: checks.filter((c) => c !== n.stage) })}
+            onRemove={() => setChecks(checks.filter((c) => c !== n.stage))}
             onOpen={() => openStage(n.stage)}
             order={checkOrder(checks.indexOf(n.stage))}
           >
             {node(n)}
           </Wiggle>
+        ) : optional && !draft.pipeline[optional] ? (
+          // A PR already at a step the pipeline no longer runs: shown, and offered back.
+          ghost(n, n.label, () => setPipeline({ [optional]: true })).content
         ) : optional ? (
           <Wiggle item={n.stage} label={n.label} onRemove={() => setPipeline({ [optional]: false })}>
             {node(n)}
@@ -257,16 +263,13 @@ export function Editor({
       };
     };
     // The checks, and (on the first lane only) the stage files not in the pipeline where they were.
-    const spare = first ? stages.filter((s) => !checks.includes(s.id)).map((s) => s.id) : [];
-    const checkSteps = withGhosts(checks, spare, stageOrder).flatMap(({ item, ghost: off, at }) => {
+    const checkSteps = checkEntries.flatMap(({ item, ghost: off, at }) => {
       const s = stage(item);
       const n = l.nodes.find((x) => x.stage === item);
-      if (off && s)
-        return [
-          ghost(ghostNode(item, s.label, s.icon), s.title, () =>
-            setPipeline({ checks: insert(checks, item, at) }),
-          ),
-        ];
+      if (off)
+        return first && s
+          ? [ghost(ghostNode(item, s.label, s.icon), s.title, () => setChecks(insert(checks, item, at)))]
+          : [];
       return n ? [step(n)] : [];
     });
     const newStage = ghost(ghostNode(NEW_STAGE, 'New stage', 'sparkle'), 'a new stage', () =>

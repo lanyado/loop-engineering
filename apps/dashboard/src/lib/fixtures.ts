@@ -456,7 +456,7 @@ export function demoData(now: Date): DemoData {
           'Review for bugs, gaps and security problems.',
         ),
         stage('qa', 'Manual QA', 'QA', 'browser', 'ui-changes', 'Check the changed pages in a browser.'),
-        // A custom stage file that is not in the pipeline: the editor offers it under "+ Add".
+        // A custom stage file that is not in the pipeline: the editor shows it faded, to add.
         {
           ...stage('security', 'Security review', 'Security', 'read', 'always', 'Look for leaked secrets.'),
           icon: 'shield',

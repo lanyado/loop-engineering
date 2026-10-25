@@ -444,10 +444,19 @@ test('the pencil edits one example project in place; Save and Discard each ask f
   await expect(steps.first()).toHaveAttribute('data-testid', 'ghost-item');
   await editor.getByRole('button', { name: 'Add Tests' }).click();
   await expect(steps.first()).toHaveAttribute('data-item', 'tests');
-  // Code review moves before Tests.
+  // Code review moves before Tests, with a real mouse: the arrows show on hover, above the item's tap.
   const lane = editor.getByTestId('lane').locator('[data-testid="editable-item"]');
-  await editor.getByRole('button', { name: 'Move Code review left' }).click();
+  const left = editor.getByRole('button', { name: 'Move Code review left' });
+  await left.hover();
+  const box = (await left.boundingBox())!;
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(page.getByTestId('stage-sheet')).toHaveCount(0);
   await expect(lane.first()).toHaveAttribute('data-item', 'review');
+  // After that reorder, − then + puts Tests back where it now sits, second.
+  await editor.getByRole('button', { name: 'Remove Tests' }).click();
+  await expect(steps.nth(1)).toHaveAttribute('data-testid', 'ghost-item');
+  await editor.getByRole('button', { name: 'Add Tests' }).click();
+  await expect(lane.nth(1)).toHaveAttribute('data-item', 'tests');
 
   // A stage file not in the pipeline waits faded on the lane; "+" adds it.
   await editor.getByRole('button', { name: 'Add Security review' }).click();

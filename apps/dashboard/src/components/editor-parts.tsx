@@ -41,6 +41,27 @@ export function useReorder<T>(items: readonly T[], onChange: (items: T[]) => voi
 }
 
 /**
+ * `items` with the missing ones of `all` faded where they last sat on screen. Every change goes
+ * through `change`, which remembers the order shown, so − then + puts an item back in its place.
+ */
+export function useGhostPlaces<T>(items: readonly T[], all: readonly T[], onChange: (items: T[]) => void) {
+  const [shown, setShown] = useState<readonly T[]>(() => [...new Set([...items, ...all])]);
+  const missing = (list: readonly T[]) => all.filter((x) => !list.includes(x));
+  const entries = withGhosts(items, missing(items), shown);
+  const change = (next: T[]) => {
+    setShown(
+      withGhosts(
+        next,
+        missing(next),
+        entries.map((e) => e.item),
+      ).map((e) => e.item),
+    );
+    onChange(next);
+  };
+  return { entries, change };
+}
+
+/**
  * One item in edit mode, where it sits on the dashboard: it wiggles, "−" on its corner removes it,
  * tapping it opens it (onOpen), and with an order it drags or moves with its arrows. What it shows
  * is a preview: nothing inside can be clicked.
@@ -139,22 +160,19 @@ export function EditableRow<T extends string>({
   onChange,
 }: {
   items: T[];
-  /** Every item the row may hold, in the order that places the removed ones. */
+  /** Every item the row may hold. */
   all: readonly T[];
   label: (item: T) => string;
   render: (item: T) => ReactNode;
   onChange: (items: T[]) => void;
 }) {
-  const order = useReorder(items, onChange);
+  const { entries, change } = useGhostPlaces(items, all, onChange);
+  const order = useReorder(items, change);
   return (
     <>
-      {withGhosts(
-        items,
-        all.filter((item) => !items.includes(item)),
-        all,
-      ).map(({ item, ghost, at }) =>
+      {entries.map(({ item, ghost, at }) =>
         ghost ? (
-          <Ghost key={item} item={item} label={label(item)} onAdd={() => onChange(insert(items, item, at))}>
+          <Ghost key={item} item={item} label={label(item)} onAdd={() => change(insert(items, item, at))}>
             {render(item)}
           </Ghost>
         ) : (
@@ -162,7 +180,7 @@ export function EditableRow<T extends string>({
             key={item}
             item={item}
             label={label(item)}
-            onRemove={() => onChange(items.filter((x) => x !== item))}
+            onRemove={() => change(items.filter((x) => x !== item))}
             order={order(at)}
           >
             {render(item)}

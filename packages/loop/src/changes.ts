@@ -39,7 +39,8 @@ const KINDS: Record<Exclude<StageRuns, 'always'>, (file: string) => boolean> = {
 /** Whether a check with this `runs` setting runs on a PR with this unified diff. */
 export function runsOn(runs: StageRuns, diff: string): boolean {
   if (runs === 'always') return true;
-  // "a/<path> b/<path>": the same path twice, so a path with spaces still splits at the one " b/".
-  const files = [...diff.matchAll(/^diff --git a\/(.+) b\/(.+)$/gm)].map((m) => m[2]!);
+  // "a/<path> b/<path>", split at the last " b/" so a path may hold spaces; git quotes a path with
+  // unusual characters ("b/caf\303\251.md"), which keeps its extension readable.
+  const files = [...diff.matchAll(/^diff --git "?a\/(.+) "?b\/(.+?)"?$/gm)].map((m) => m[2]!);
   return files.some(KINDS[runs]);
 }

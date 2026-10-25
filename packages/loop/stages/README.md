@@ -25,10 +25,10 @@ Look for secrets committed in the diff and for unsafe handling of user input.
 | `runs`   | `always`, or only when the diff changes that kind of file (below)                              |
 
 `runs` values besides `always`: `code-changes` (anything but Markdown, MDX, reStructuredText or
-AsciiDoc docs), `ui-changes` (pages, components, styles), `server-changes` (source that isn't UI or
-tests), `test-changes`, `docs-changes`, `dependency-changes` (package manifests and lockfiles),
-`database-changes` (migrations, `.sql`, schemas) and `infra-changes` (CI, Docker, deploy config,
-Terraform).
+AsciiDoc docs), `ui-changes` (pages, components, styles), `server-changes` (source that isn't UI,
+tests or tool config such as `vite.config.ts`), `test-changes`, `docs-changes`, `dependency-changes`
+(package manifests and lockfiles), `database-changes` (migrations, `.sql`, schemas) and
+`infra-changes` (CI, Docker, deploy config, Terraform).
 
 The prompt (4,000 characters at most) says what to check. The loop adds the PR, the request and
 the diff, and asks for pass or fail; failures go back to the builder like failing tests. No stage

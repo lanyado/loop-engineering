@@ -75,7 +75,10 @@ describe('runsOn', () => {
     for (const f of no) expect([f, runsOn(runs, diff(f))]).toEqual([f, false]);
   });
 
-  it('reads paths with spaces', () => {
+  it('reads paths with spaces, and the ones git quotes', () => {
+    expect(runsOn('docs-changes', 'diff --git "a/docs/caf\\303\\251.md" "b/docs/caf\\303\\251.md"\n')).toBe(
+      true,
+    );
     expect(runsOn('docs-changes', diff('docs/Getting started.md'))).toBe(true);
     expect(runsOn('ui-changes', diff('docs/Getting started.md'))).toBe(false);
   });

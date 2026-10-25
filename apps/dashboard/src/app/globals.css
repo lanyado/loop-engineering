@@ -1898,6 +1898,7 @@ button.node-plus:hover:not(:disabled) {
 }
 /* A part of a row (text, not a node): its badge sits in a margin of its own, over no text. */
 .editor .block {
+  margin-top: var(--s-2);
   padding: 8px 0 0 14px;
 }
 /* Inline text (run time, subagents, the PR's cost): the badge sits to its left, on its middle. */
@@ -1912,15 +1913,12 @@ button.node-plus:hover:not(:disabled) {
   top: calc(50% - 10px);
   left: 0;
 }
-.editor .block {
-  margin-top: var(--s-2);
-}
 .editor .lane-label > .wiggle,
 .editor .lane-label > .ghost-item {
   overflow: visible;
   justify-items: start;
 }
-/* "New stage" needs no full tile: a narrow one keeps Deploy and Guardian in view. */
+/* "New stage" needs no full tile: a narrow one keeps the lane shorter. */
 .ghost-item[data-item=':new'] .node {
   width: 64px;
 }
@@ -2034,6 +2032,8 @@ button.node-plus:hover:not(:disabled) {
   pointer-events: none;
 }
 .wiggle-move {
+  position: relative;
+  z-index: 1; /* above the item's own tap target */
   display: flex;
   gap: 2px;
 }
