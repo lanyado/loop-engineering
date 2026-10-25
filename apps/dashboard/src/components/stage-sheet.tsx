@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { GUARDIAN_NODE } from '../lib/board';
 import type { Stage, StageChoices } from '../lib/schemas';
 import { Dialog } from './dialog';
 import { Icon } from './pipeline';
@@ -65,7 +66,7 @@ export function StageSheet({
 }) {
   const [f, setF] = useState<StageFields>(fieldsOf(stage));
   // The Guardian's instructions: only the prompt is the user's to change.
-  const guardian = stage.id === 'guardian';
+  const guardian = stage.id === GUARDIAN_NODE;
   const set = (patch: Partial<StageFields>) => setF((prev) => ({ ...prev, ...patch }));
   const id = isNew ? slug(f.title) : stage.id;
   const problem = !isNew
@@ -83,7 +84,9 @@ export function StageSheet({
         className="stack"
         onSubmit={(e) => {
           e.preventDefault();
-          onSave(id, f);
+          // A built-in's prompt left empty means its own again.
+          if (stage.builtin && !isNew && !f.prompt.trim()) onReset(stage.id);
+          else onSave(id, f);
         }}
       >
         <h2>{isNew ? 'New stage' : stage.title}</h2>
@@ -172,7 +175,7 @@ export function StageSheet({
             value={f.prompt}
             rows={8}
             maxLength={4000}
-            required={!(stage.builtin && !stage.overridden && !f.prompt)}
+            required={!stage.builtin}
             placeholder={stage.builtin ? 'The built-in prompt (restored when you Save).' : undefined}
             onChange={(e) => set({ prompt: e.target.value })}
             data-testid="stage-prompt"
@@ -193,7 +196,7 @@ export function StageSheet({
           <button type="button" className="ghost" onClick={onClose}>
             Cancel
           </button>
-          {!isNew && stage.builtin && stage.overridden && (
+          {!isNew && stage.builtin && (stage.overridden || stage.error) && (
             <button type="button" className="ghost" onClick={() => onReset(stage.id)}>
               Reset to built-in
             </button>

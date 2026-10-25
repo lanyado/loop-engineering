@@ -2108,10 +2108,6 @@ button.node-plus:hover:not(:disabled) {
 .wiggle.lifted .wiggle-remove {
   visibility: hidden;
 }
-/* While one is carried, the rest wiggle a little livelier, ready to make room. */
-.sorting .wiggle:not(.lifted) {
-  animation-duration: 0.5s;
-}
 .wiggle:nth-child(even) {
   animation-delay: -0.45s;
 }

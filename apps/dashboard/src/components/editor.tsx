@@ -110,7 +110,9 @@ export function Editor({
     setDraft((d) => {
       const rest = Object.fromEntries(Object.entries(d.edits).filter(([key]) => key !== id));
       const saved = id === GUARDIAN_NODE ? view.guardian : view.stages.find((s) => s.id === id);
-      const fileOnServer = saved !== undefined && (!saved.builtin || saved.overridden);
+      // A broken file is on the server too, even where it changes nothing (a built-in's, unread).
+      const fileOnServer =
+        saved !== undefined && (!saved.builtin || saved.overridden || saved.error !== undefined);
       return { ...d, edits: edit === null && !fileOnServer ? rest : { ...rest, [id]: edit } };
     });
   const { checks } = draft.pipeline;

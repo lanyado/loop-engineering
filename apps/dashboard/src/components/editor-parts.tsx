@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -29,7 +30,10 @@ interface Drag {
   el: HTMLElement;
   /** The row it moves in: the items there slide aside as it passes. */
   area: HTMLElement;
+  pointerType: string;
+  /** Where it is in the list now, and where it started (Escape puts it back). */
   index: number;
+  startIndex: number;
   pointerId: number;
   start: { x: number; y: number };
   pointer: { x: number; y: number };
@@ -41,116 +45,138 @@ interface Drag {
 }
 
 const calm = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
-const centre = (r: DOMRect) => ({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
-/** Where the item sits in the layout, without the offset that makes it follow the pointer. */
-function home(el: HTMLElement): DOMRect {
-  const offset = el.style.translate;
-  el.style.translate = '';
-  const r = el.getBoundingClientRect();
-  el.style.translate = offset;
-  return r;
+
+/** An element's place in the page as laid out: offsets, which no transform or running animation moves. */
+function laidOutAt(el: HTMLElement): { x: number; y: number } {
+  let x = 0;
+  let y = 0;
+  for (let e: HTMLElement | null = el; e; e = e.offsetParent as HTMLElement | null) {
+    x += e.offsetLeft;
+    y += e.offsetTop;
+  }
+  return { x, y };
+}
+
+/** An item's middle in its row's coordinates, where the layout puts it (not where a slide shows it now). */
+function middle(el: HTMLElement, area: HTMLElement) {
+  const [p, a] = [laidOutAt(el), laidOutAt(area)];
+  return { x: p.x - a.x + el.offsetWidth / 2, y: p.y - a.y + el.offsetHeight / 2, h: el.offsetHeight };
+}
+
+/**
+ * Where the carried item belongs: after every other item that comes before the pointer, reading the
+ * row (or its wrapped lines) as laid out. Positions are the layout's, so an item still sliding away
+ * never pulls it back, and items of different widths cannot swap back and forth.
+ */
+function placeFor(d: Drag): number {
+  const box = d.area.getBoundingClientRect();
+  const p = { x: d.pointer.x - box.left, y: d.pointer.y - box.top };
+  const others = [...d.area.querySelectorAll<HTMLElement>('[data-order]')]
+    .filter((el) => el !== d.el)
+    .map((el) => middle(el, d.area));
+  if (others.length === 0) return 0;
+  // The line the pointer is on: the nearest line's middle (a single row has one line).
+  const lineOf = (y: number) => others.reduce((a, b) => (Math.abs(b.y - y) < Math.abs(a.y - y) ? b : a)).y;
+  const line = lineOf(p.y);
+  // Items whose middles are within half a height of each other share a line.
+  return others.filter((o) => o.y < line - o.h / 2 || (Math.abs(o.y - line) <= o.h / 2 && o.x < p.x)).length;
 }
 
 /**
  * Reordering for `items`, like iOS's edit mode: a drag lifts the item (a long press on touch), it
  * follows the pointer, the others slide out of its way as it passes their middle, and it springs into
- * its new place on release. The arrows move it one step, with the same slide.
+ * its new place on release (Escape puts it back). The arrows move it one step, with the same slide.
  */
 export function useReorder<T>(items: readonly T[], onChange: (items: T[]) => void): (i: number) => Order {
   const latest = useRef({ items, onChange });
   const drag = useRef<Drag | null>(null);
+  /** A released item, springing into place once the list it was dropped in has rendered. */
+  const landing = useRef<Drag | null>(null);
   /** Where each item of the row was before a reorder, to slide it from there to its new place. */
   const before = useRef<Map<Element, DOMRect> | null>(null);
+
   useLayoutEffect(() => {
     latest.current = { items, onChange };
     const was = before.current;
-    if (!was) return;
     before.current = null;
+    const carried = drag.current?.el ?? landing.current?.el;
+    if (was && !calm())
+      for (const [el, r] of was) {
+        if (el === carried || !el.isConnected) continue;
+        const now = el.getBoundingClientRect();
+        const [dx, dy] = [r.left - now.left, r.top - now.top];
+        if (dx || dy) el.animate([{ translate: `${dx}px ${dy}px` }, { translate: '0 0' }], SLIDE);
+      }
     const d = drag.current;
-    for (const [el, r] of was) {
-      if (el === d?.el || !el.isConnected || calm()) continue;
-      const now = el.getBoundingClientRect();
-      const [dx, dy] = [r.left - now.left, r.top - now.top];
-      if (dx || dy) el.animate([{ translate: `${dx}px ${dy}px` }, { translate: '0 0' }], SLIDE);
-    }
-    if (d) follow(d);
+    if (d?.lifted) {
+      follow(d);
+      retarget(d); // moves that came while the last reorder rendered
+    } else if (landing.current) land();
   });
+  // A drag cut short by the editor closing leaves no listeners behind.
+  useEffect(() => () => drag.current?.stop(), []);
 
   const reorder = (from: number, to: number, area: Element | null) => {
     const { items: now, onChange: change } = latest.current;
-    if (to < 0 || to >= now.length || to === from) return;
+    if (to < 0 || to >= now.length || to === from) return false;
     if (area)
       before.current = new Map(
         [...area.querySelectorAll('[data-item]')].map((el) => [el, el.getBoundingClientRect()]),
       );
     change(move(now, from, to));
+    return true;
   };
 
   function follow(d: Drag) {
-    const c = centre(home(d.el));
-    d.el.style.translate = `${d.pointer.x - d.grab.x - c.x}px ${d.pointer.y - d.grab.y - c.y}px`;
+    const box = d.area.getBoundingClientRect();
+    const m = middle(d.el, d.area);
+    d.el.style.translate = `${d.pointer.x - d.grab.x - box.left - m.x}px ${d.pointer.y - d.grab.y - box.top - m.y}px`;
+  }
+
+  /** Moves the carried item to where the pointer is, unless a reorder is still rendering. */
+  function retarget(d: Drag, to = placeFor(d)) {
+    if (before.current || to === d.index) return;
+    if (reorder(d.index, to, d.area)) d.index = to;
   }
 
   function lift(d: Drag) {
-    const c = centre(d.el.getBoundingClientRect());
-    d.grab = { x: d.start.x - c.x, y: d.start.y - c.y };
+    const r = d.el.getBoundingClientRect();
+    d.grab = { x: d.start.x - (r.left + r.width / 2), y: d.start.y - (r.top + r.height / 2) };
     d.lifted = true;
     d.el.classList.add('lifted');
-    d.area.classList.add('sorting');
-    navigator.vibrate?.(10);
+    if (d.pointerType !== 'mouse') navigator.vibrate?.(10);
     follow(d);
   }
 
-  function onMove(e: PointerEvent) {
-    const d = drag.current;
-    if (!d || e.pointerId !== d.pointerId) return;
-    d.pointer = { x: e.clientX, y: e.clientY };
-    if (!d.lifted) {
-      const far = Math.hypot(d.pointer.x - d.start.x, d.pointer.y - d.start.y) > LIFT_PX;
-      if (far && e.pointerType === 'mouse') lift(d);
-      else if (far) d.stop(); // a finger that moves before the hold is a scroll
-      return;
-    }
-    follow(d);
-    if (before.current) return; // the last move has not rendered yet
-    // It belongs where the nearest item's middle is (its own place counts as where it sits now).
-    let to = d.index;
-    let best = Infinity;
-    for (const el of d.area.querySelectorAll<HTMLElement>('[data-order]')) {
-      const c = centre(el === d.el ? home(el) : el.getBoundingClientRect());
-      const dist = Math.hypot(c.x - d.pointer.x, c.y - d.pointer.y);
-      if (dist < best) [best, to] = [dist, Number(el.dataset.order)];
-    }
-    if (to === d.index) return;
-    reorder(d.index, to, d.area);
-    d.index = to;
-  }
-
-  /** Stops the page scrolling under a finger that carries an item. */
-  const holdPage = (e: TouchEvent) => {
-    if (drag.current?.lifted) e.preventDefault();
-  };
-
-  function onEnd(e: PointerEvent) {
-    const d = drag.current;
-    if (!d || e.pointerId !== d.pointerId) return;
-    d.stop();
-    if (!d.lifted) return;
-    const from = d.el.style.translate;
+  /** The released item springs from where it was shown into its place in the list. */
+  function land() {
+    const d = landing.current;
+    landing.current = null;
+    if (!d) return;
+    const shown = d.el.getBoundingClientRect();
     d.el.style.translate = '';
     d.el.classList.remove('lifted');
-    d.area.classList.remove('sorting');
-    if (!calm())
-      d.el.animate(
-        [
-          { translate: from, scale: '1.08' },
-          { translate: '0 0', scale: '1' },
-        ],
-        {
-          ...SLIDE,
-          duration: 320,
-        },
-      );
+    if (calm()) return;
+    const now = d.el.getBoundingClientRect();
+    const dx = shown.left + shown.width / 2 - (now.left + now.width / 2);
+    const dy = shown.top + shown.height / 2 - (now.top + now.height / 2);
+    d.el.animate(
+      [
+        { translate: `${dx}px ${dy}px`, scale: '1.08' },
+        { translate: '0 0', scale: '1' },
+      ],
+      { ...SLIDE, duration: 320 },
+    );
+  }
+
+  /** Ends a drag: it lands where the pointer is (or where it started, when cancelled). */
+  function finish(d: Drag, cancel: boolean) {
+    d.stop();
+    if (!d.lifted) return;
+    landing.current = d;
+    retarget(d, cancel ? d.startIndex : placeFor(d));
+    // With a reorder on its way, the layout effect lands it once the list has rendered.
+    if (!before.current) land();
     // The click that ends a drag must not also open the item.
     const swallow = (ev: Event) => {
       ev.stopPropagation();
@@ -160,20 +186,67 @@ export function useReorder<T>(items: readonly T[], onChange: (items: T[]) => voi
     setTimeout(() => window.removeEventListener('click', swallow, { capture: true }), 0);
   }
 
+  function onMove(e: PointerEvent) {
+    const d = drag.current;
+    if (!d || e.pointerId !== d.pointerId) return;
+    // A mouse whose release never came (a context menu took it): the drag is over.
+    if (e.pointerType === 'mouse' && e.buttons === 0) return finish(d, false);
+    d.pointer = { x: e.clientX, y: e.clientY };
+    if (!d.lifted) {
+      const far = Math.hypot(d.pointer.x - d.start.x, d.pointer.y - d.start.y) > LIFT_PX;
+      if (far && e.pointerType === 'mouse') lift(d);
+      else if (far) d.stop(); // a finger that moves before the hold is a scroll
+      return;
+    }
+    follow(d);
+    retarget(d);
+  }
+
+  function onEnd(e: PointerEvent) {
+    const d = drag.current;
+    if (d && e.pointerId === d.pointerId) finish(d, e.type === 'pointercancel');
+  }
+
+  function onKey(e: KeyboardEvent) {
+    const d = drag.current;
+    if (d?.lifted && e.key === 'Escape') finish(d, true);
+  }
+
+  function onBlur() {
+    const d = drag.current;
+    if (d) finish(d, true);
+  }
+
+  /** Stops the page scrolling under a finger that carries an item. */
+  const holdPage = (e: TouchEvent) => {
+    if (drag.current?.lifted) e.preventDefault();
+  };
+
   return (i) => ({
     index: i,
     count: items.length,
-    onMove: (to, button) => reorder(i, to, button.closest('[data-sort-area]')),
+    onMove: (to, button) => {
+      reorder(i, to, button.closest('[data-sort-area]'));
+    },
     onPointerDown: (e) => {
-      if (drag.current || (e.pointerType === 'mouse' && e.button !== 0)) return;
+      if (drag.current || landing.current || (e.pointerType === 'mouse' && e.button !== 0)) return;
       if ((e.target as Element).closest('.wiggle-remove, .wiggle-move')) return;
       const el = e.currentTarget;
       const area = el.closest<HTMLElement>('[data-sort-area]') ?? el.parentElement!;
       const at = { x: e.clientX, y: e.clientY };
+      const listeners = [
+        ['pointermove', onMove],
+        ['pointerup', onEnd],
+        ['pointercancel', onEnd],
+        ['keydown', onKey],
+        ['blur', onBlur],
+      ] as const;
       const d: Drag = {
         el,
         area,
+        pointerType: e.pointerType,
         index: i,
+        startIndex: i,
         pointerId: e.pointerId,
         start: at,
         pointer: at,
@@ -181,21 +254,13 @@ export function useReorder<T>(items: readonly T[], onChange: (items: T[]) => voi
         lifted: false,
         stop: () => {
           clearTimeout(d.hold);
-          window.removeEventListener('pointermove', onMove);
-          window.removeEventListener('pointerup', onEnd);
-          window.removeEventListener('pointercancel', onEnd);
+          for (const [type, fn] of listeners) window.removeEventListener(type, fn as EventListener);
           window.removeEventListener('touchmove', holdPage);
-          if (d.lifted) {
-            d.el.classList.remove('lifted');
-            d.area.classList.remove('sorting');
-          }
           drag.current = null;
         },
       };
       drag.current = d;
-      window.addEventListener('pointermove', onMove);
-      window.addEventListener('pointerup', onEnd);
-      window.addEventListener('pointercancel', onEnd);
+      for (const [type, fn] of listeners) window.addEventListener(type, fn as EventListener);
       window.addEventListener('touchmove', holdPage, { passive: false });
       if (e.pointerType !== 'mouse') d.hold = setTimeout(() => lift(d), HOLD_MS);
     },
