@@ -16,25 +16,32 @@ export class EmailConfigError extends Error {
 }
 
 const ADDRESS = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-/** Domains anyone can get an address at: "@gmail.com" would let the whole world send tasks. */
-const PUBLIC_DOMAINS = new Set([
-  'gmail.com',
-  'googlemail.com',
-  'outlook.com',
-  'hotmail.com',
-  'live.com',
-  'msn.com',
-  'yahoo.com',
-  'icloud.com',
-  'me.com',
-  'aol.com',
-  'proton.me',
-  'protonmail.com',
-  'gmx.com',
-  'mail.com',
-  'yandex.com',
-  'zoho.com',
+/** Providers anyone can get an address at (any country's domain): "@gmail.com" would let the whole world send tasks. */
+const PUBLIC_PROVIDERS = new Set([
+  'gmail',
+  'googlemail',
+  'outlook',
+  'hotmail',
+  'live',
+  'msn',
+  'yahoo',
+  'ymail',
+  'icloud',
+  'aol',
+  'proton',
+  'protonmail',
+  'gmx',
+  'yandex',
+  'zoho',
 ]);
+/** "yahoo.co.uk", "hotmail.fr", "gmail.com": a provider's name and a top-level domain; plus me.com and mail.com. */
+const isPublic = (domain: string) => {
+  const [name, ...tld] = domain.split('.');
+  return (
+    ['me.com', 'mail.com'].includes(domain) ||
+    (PUBLIC_PROVIDERS.has(name!) && /^((com?|net|org)\.)?[a-z]{2,3}$/.test(tld.join('.')))
+  );
+};
 
 /**
  * Reads the email channel's settings from the environment. With no EMAIL_ADDRESS it is disabled.
@@ -61,7 +68,7 @@ export function loadEmailConfig(env: NodeJS.ProcessEnv = process.env): EmailConf
   for (const entry of allowlist)
     if (!(entry.startsWith('@') ? ADDRESS.test(`x${entry}`) : ADDRESS.test(entry)))
       problems.push(`EMAIL_ALLOWLIST has "${entry}": use an address or @domain`);
-    else if (entry.startsWith('@') && PUBLIC_DOMAINS.has(entry.slice(1)))
+    else if (entry.startsWith('@') && isPublic(entry.slice(1)))
       problems.push(
         `EMAIL_ALLOWLIST has "${entry}": anyone can have an address there, so list the addresses`,
       );

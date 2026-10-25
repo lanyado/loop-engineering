@@ -103,6 +103,13 @@ describe('senderAuthenticated', () => {
     expect(
       senderAuthenticated(gmail('spf=pass (a\\) ; dmarc=pass header.from=acme.com (b)'), 'd@acme.com'),
     ).toBe(false);
+    // A DKIM pass for the domain does not outweigh Gmail's own DMARC fail.
+    expect(
+      senderAuthenticated(
+        gmail('dkim=pass header.i=@acme.com; dmarc=fail header.from=acme.com'),
+        'd@acme.com',
+      ),
+    ).toBe(false);
     // Two DMARC verdicts.
     expect(
       senderAuthenticated(

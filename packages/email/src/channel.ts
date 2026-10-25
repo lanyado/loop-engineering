@@ -272,7 +272,6 @@ export class EmailChannel implements QuestionChannel {
   private async clarify(thread: EmailThread): Promise<void> {
     const { store, clarifier } = this.o;
     const all = store.email.messages(thread.id);
-    if (all.at(-1)?.direction !== 'in') return;
     // What earlier rounds started (each plan, each reply passed to a session): context, not new asks.
     const started = all.filter((m) => m.requestId !== null);
     const earlier = started.length === 0 ? null : started.map((m) => m.text).join('\n\n---\n\n');
@@ -284,6 +283,8 @@ export class EmailChannel implements QuestionChannel {
         m.requestId === null &&
         (m.direction === 'in' || m.text.startsWith(QUESTIONS_INTRO)),
     );
+    // Only a round whose last mail is the requester's moves on (a release note sent meanwhile is not the round's).
+    if (mails.at(-1)?.direction !== 'in') return;
     const conversation = mails.map(
       (m) => ({ from: m.direction === 'in' ? 'requester' : 'loop', text: m.text }) as const,
     );

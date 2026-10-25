@@ -446,6 +446,26 @@ describe('while the work runs', () => {
     expect(round.earlier).toContain('The plan is approved');
   });
 
+  it('a new round still plans when a release note goes out before its first plan', async () => {
+    const { request, project, session } = await building();
+    const pr = store.pullRequests.create({
+      projectId: project.id,
+      repo: 'web',
+      number: 7,
+      url: 'u',
+      requestId: request.id,
+    });
+    store.pullRequests.update(pr.id, { stage: 'deployed', outcome: 'merged' });
+    store.sessions.update(session.id, { status: 'ended' });
+    mailbox.reply(last(), BOSS, 'Now a contact page.');
+    answers = [new Error('claude failed')]; // the plan fails once; the note goes out in that poll
+    await channel.poll();
+    expect(last().text).toContain('is in production');
+    answers = [{ plan: 'Add a contact page.' }];
+    await channel.poll();
+    expect(last().text).toContain('Add a contact page.');
+  });
+
   it('gives up waiting on a hung clarifier and tries again', async () => {
     mailbox.deliver({ from: BOSS, text: 'Add a sitemap.' });
     answers = ['hang'];

@@ -128,15 +128,18 @@ export function senderAuthenticated(topResults: string | undefined, from: string
   // One DMARC verdict per mail: two mean one was smuggled in.
   if (results.filter((r) => /^\s*dmarc=/.test(r)).length > 1) return false;
   const aligned = (d: string) => d === domain || domain.endsWith(`.${d}`);
-  return results.some((result) => {
+  const parsed = results.map((result) => {
     const r = result.trim();
     const prop = (name: string) => new RegExp(`(?:^|\\s)${name.replace('.', '\\.')}=([^\\s;]+)`).exec(r)?.[1];
-    if (/^dmarc=pass\b/.test(r)) return prop('header.from') === domain;
-    if (/^dkim=pass\b/.test(r)) {
-      const d = prop('header.d') ?? prop('header.i')?.replace(/^.*@/, '');
-      return d !== undefined && aligned(d);
-    }
-    return false;
+    return { r, prop };
+  });
+  // Gmail's DMARC verdict, when it gave one, is the answer; DKIM counts only where it gave none.
+  const dmarc = parsed.find(({ r }) => /^dmarc=/.test(r));
+  if (dmarc) return /^dmarc=pass\b/.test(dmarc.r) && dmarc.prop('header.from') === domain;
+  return parsed.some(({ r, prop }) => {
+    if (!/^dkim=pass\b/.test(r)) return false;
+    const d = prop('header.d') ?? prop('header.i')?.replace(/^.*@/, '');
+    return d !== undefined && aligned(d);
   });
 }
 

@@ -33,9 +33,22 @@ describe('loadEmailConfig', () => {
     );
     expect(() =>
       loadEmailConfig(
-        env({ EMAIL_ADDRESS: 'a@b.co', EMAIL_APP_PASSWORD: 'x', EMAIL_ALLOWLIST: '@gmail.com' }),
+        env({
+          EMAIL_ADDRESS: 'a@b.co',
+          EMAIL_APP_PASSWORD: 'x',
+          EMAIL_ALLOWLIST: '@gmail.com, @yahoo.co.uk',
+        }),
       ),
-    ).toThrow(/anyone can have an address there/);
+    ).toThrow(/"@gmail.com".*"@yahoo.co.uk"/);
+    expect(
+      loadEmailConfig(
+        env({
+          EMAIL_ADDRESS: 'a@b.co',
+          EMAIL_APP_PASSWORD: 'x',
+          EMAIL_ALLOWLIST: '@mail.acme.com, @gmailer.com',
+        }),
+      ).enabled,
+    ).toBe(true);
     expect(() => loadEmailConfig(env({ EMAIL_ADDRESS: 'a@b.co', EMAIL_APP_PASSWORD: 'x' }))).toThrow(
       /EMAIL_ALLOWLIST is empty/,
     );
