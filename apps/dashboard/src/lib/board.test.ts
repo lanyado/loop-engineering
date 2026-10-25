@@ -384,6 +384,16 @@ describe('the rigor dial shapes the lane', () => {
     expect(off(fast)).toEqual(['tests', 'review', 'qa']);
     // A finished PR ran what it ran: today's level does not dim it.
     expect(off(lane('fast', [pr(1, 1, 'deployed', { outcome: 'merged' })]))).toEqual([]);
+    // What it did not run at its merged head says so (unknown without the merged head: left alone).
+    const head = 'abc';
+    const merged = pr(2, 1, 'deployed', {
+      outcome: 'merged',
+      loopState: { mergedHeadSha: head, testedSha: head, reviewedSha: 'older', skip: ['qa'] },
+    });
+    const done = lane('standard', [merged]).nodes;
+    expect(done.filter((n) => n.notRun).map((n) => n.stage)).toEqual(['review']);
+    expect(done.find((n) => n.stage === 'qa')).toMatchObject({ skipped: true, notRun: false });
+    expect(lane('standard', [pr(3, 1, 'qa')]).nodes.some((n) => n.notRun)).toBe(false);
     expect(off(lane('fast', [pr(1, 1, 'deploying', { outcome: 'merged' })]))).toEqual([]);
     // An off check whose stage file is gone does not hold anything: no problem shown.
     const ghost = lane('fast', [], false, {

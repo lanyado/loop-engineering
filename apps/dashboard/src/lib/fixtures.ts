@@ -368,12 +368,21 @@ export function demoData(now: Date): DemoData {
       tokensOut: 30_000,
       failures: 0,
     }),
-    pr(5, 2, 202, 10, 'site', 44, 'deploying', 1, 'merged', 3 * MIN, {
-      costUsd: 0.92,
-      tokensIn: 400_000,
-      tokensOut: 22_000,
-      failures: 0,
-    }),
+    pr(
+      5,
+      2,
+      202,
+      10,
+      'site',
+      44,
+      'deploying',
+      1,
+      'merged',
+      3 * MIN,
+      { costUsd: 0.92, tokensIn: 400_000, tokensOut: 22_000, failures: 0 },
+      // Merged at rigor Fast: no check passed at the merged head, so its lane says "not run".
+      { mergedHeadSha: '4e1d9a07c3b2f6e58d1a0b9c7e6f5d4c3b2a1908' },
+    ),
     pr(4, 1, 103, 9, 'web', 207, 'deployed', 2, 'merged', 3 * 24 * HOUR, {
       costUsd: 2.6,
       tokensIn: 1_400_000,

@@ -568,6 +568,9 @@ test('a rigor dial sits above each git session pipeline, and the lane dims what 
       'true',
     );
   await expect(cdn.locator('[data-pr-number="44"] [data-off]')).toHaveCount(0);
+  // It merged at Fast: no check passed at its merged head, and its lane says so.
+  await expect(cdn.locator('[data-pr-number="44"] [data-not-run]')).toHaveCount(3);
+  await expect(cdn.locator('[data-pr-number="44"] [data-stage="qa"]')).toContainText('not run');
 
   // Standard draws the pipeline as it is; a folder project has no PRs and no dial.
   await expect(row('Search relevance').getByTestId('rigor-dial')).toHaveAttribute('data-rigor', 'standard');

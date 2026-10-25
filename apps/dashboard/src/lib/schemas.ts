@@ -151,6 +151,12 @@ export const pullRequestSchema = z.object({
         .catch(undefined),
       /** With stage "check": the custom stage (a stage file) the PR is at. */
       check: z.string().optional().catch(undefined),
+      /** The heads each check passed at, and the head that was merged: which checks really ran. */
+      testedSha: z.string().optional().catch(undefined),
+      reviewedSha: z.string().optional().catch(undefined),
+      qaSha: z.string().optional().catch(undefined),
+      passed: z.record(z.string(), z.string()).optional().catch(undefined),
+      mergedHeadSha: z.string().optional().catch(undefined),
       /** The PR's round budget (5, plus 5 per "Continue"); older data has none. */
       maxRounds: z.number().optional().catch(undefined),
       /** Checks the human skipped for this PR. */

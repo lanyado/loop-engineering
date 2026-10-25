@@ -68,6 +68,7 @@ const ghostNode = (stage: string, label: string, icon: string): StageNode => ({
   check: false,
   skipped: false,
   off: false,
+  notRun: false,
   skippable: false,
   state: 'todo',
   questions: [],

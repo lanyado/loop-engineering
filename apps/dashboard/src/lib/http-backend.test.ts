@@ -146,6 +146,7 @@ describe('HttpBackend against the real server', () => {
     });
     expect((await backend.pullRequests())[0]?.loopState).toEqual({
       question: { kind: 'approval', id: q.id },
+      reviewedSha: 'abc',
     });
     expect(await backend.messageSession(sessionId, 'Also refunds')).toMatchObject({
       targetSessionId: sessionId,

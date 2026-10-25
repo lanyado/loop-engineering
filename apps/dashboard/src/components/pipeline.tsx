@@ -253,6 +253,7 @@ function Node({
   testId = 'node',
   stage,
   off = false,
+  notRun = false,
   children,
 }: {
   kind: keyof typeof ICON_PATHS;
@@ -264,8 +265,9 @@ function Node({
   chip?: ReactNode;
   testId?: string;
   stage?: string;
-  /** The session's rigor does not run this check: drawn dimmed. */
+  /** The session's rigor does not run this check (or it never ran at a merged head): drawn dimmed. */
   off?: boolean;
+  notRun?: boolean;
   children?: ReactNode;
 }) {
   const shown = questions.length > 0 ? 'waiting' : state;
@@ -275,7 +277,8 @@ function Node({
       data-testid={testId}
       data-stage={stage ?? kind}
       data-state={shown}
-      data-off={off || undefined}
+      data-off={(off && !notRun) || undefined}
+      data-not-run={notRun || undefined}
     >
       <span className="node-icon">
         <Icon kind={kind} />
@@ -307,7 +310,9 @@ const nodeDetail = (node: StageNode): string =>
     ? 'waiting on you'
     : node.off
       ? 'off'
-      : (node.problem ?? (node.skipped ? 'skipped' : STATE_WORDS[node.state]));
+      : node.notRun
+        ? 'not run'
+        : (node.problem ?? (node.skipped ? 'skipped' : STATE_WORDS[node.state]));
 
 /** The deploy node also carries where the lane ended: shipped, merged, or how it stopped. */
 function deployDetail(node: StageNode, lane: Lane): string {
@@ -412,7 +417,8 @@ function LaneView({
           kind={node.icon}
           stage={node.stage}
           state={node.state}
-          off={node.off}
+          off={node.off || node.notRun}
+          notRun={node.notRun}
           title={node.label}
           detail={
             detail ??

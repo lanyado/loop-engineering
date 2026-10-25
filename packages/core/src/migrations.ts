@@ -610,7 +610,8 @@ export const MIGRATIONS: readonly Migration[] = [
         last_uid INTEGER NOT NULL
       );
     `,
-  },  {
+  },
+  {
     version: 21,
     name: 'sessions: the rigor dial',
     sql: `ALTER TABLE sessions ADD COLUMN rigor TEXT NOT NULL DEFAULT 'standard'

@@ -724,8 +724,9 @@ export class LoopEngine {
       // Tests the tester wrote are committed and pushed by the loop, never by the job.
       // Once per PR: each push is a new head and a new review round, so pushing every round would
       // loop until the round cap.
-      // At rigor Light the tester writes none; any it wrote anyway are not pushed (a push costs a round).
-      verdict.passed && !c.s.testsAdded && c.rigor !== 'light'
+      // At rigor Light the tester writes none; any it wrote anyway are not pushed (a push costs a
+      // round). Read now: the level, or a skip, may have changed while the job ran.
+      verdict.passed && !c.s.testsAdded && this.rigorOf(c.pr) !== 'light' && !this.droppedNow(c, 'tests')
         ? this.deps.workspace.commitAndPush(c.repo, path, {
             branch: gh.headRefName,
             baseSha: gh.headRefOid,
@@ -905,7 +906,9 @@ export class LoopEngine {
 
   /**
    * The head is not verified at approval or merge: new commits go back to the first check (round+1),
-   * while a check added to the pipeline since just runs, in the same round.
+   * while a check added since (to the pipeline, by a rigor change, a skip taken back) just runs, in
+   * the same round. Its approval question stays: it is about this same head, so once the check
+   * passes, approvalStep waits on (or acts on) that one question instead of asking a second time.
    */
   private recheck(c: Ctx, head: string, why: string): boolean {
     if (newCommitsSince(c.s, head)) return this.restartChecks(c, why);
@@ -913,7 +916,7 @@ export class LoopEngine {
     this.log(
       `PR ${c.pr.repo}#${c.pr.number}: ${next} has not run at this head (new in the pipeline, or brought back); running it before merge`,
     );
-    return this.save(c, stageFor(next), { ...checkField(next), question: undefined, approvedSha: undefined });
+    return this.save(c, stageFor(next), { ...checkField(next), approvedSha: undefined });
   }
 
   /**
@@ -955,7 +958,7 @@ export class LoopEngine {
           !c.project.autoMerge
             ? `Auto-merge is off for ${c.project.name}.`
             : c.rigor === 'fast'
-              ? 'It was already waiting for your approval when the session moved to rigor Fast, which merges without asking only the PRs that reach the merge after that.'
+              ? 'It was waiting for your approval before Fast could merge it without asking: Fast does that only for PRs that reach the merge at Fast.'
               : !this.levelChecks(c).includes('review')
                 ? 'The pipeline has no code review, so it is not merged automatically.'
                 : !this.reviews(c)

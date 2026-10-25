@@ -45,6 +45,8 @@ export interface StageNode {
   skipped: boolean;
   /** The session's rigor does not run this check (the dial above the pipeline). */
   off: boolean;
+  /** A merged PR's check that did not pass at the merged head: it never ran there (a level, the tester's call). */
+  notRun: boolean;
   /** A check of a PR still in its checks: the human may skip it, or bring it back. */
   skippable: boolean;
   state: NodeState;
@@ -123,6 +125,14 @@ export function stageStates(
   // An unknown stage (one removed from the pipeline, which the loop moves past on its next step).
   if (index < 0) return order.map(() => 'halted');
   return order.map((_, i) => (i < index ? 'done' : i === index ? 'current' : 'todo'));
+}
+
+/** The head a check last passed at (packages/loop's passedAt). */
+function passedAt(s: PullRequest['loopState'], check: string): string | undefined {
+  if (check === 'tests') return s.testedSha;
+  if (check === 'review') return s.reviewedSha;
+  if (check === 'qa') return s.qaSha;
+  return s.passed?.[check];
 }
 
 /** The node a PR is at: a custom stage's id for stage "check". */
@@ -208,6 +218,10 @@ function lane(
     const off = check && (pr === null || pr.outcome === null) && !runs.includes(stage);
     // A skipped or off check is not waited for, so its file's state does not matter to the PR.
     const skipped = check && (pr?.loopState.skip?.includes(stage) ?? false);
+    // Merged (reverted ones merged too): only the checks that passed at the merged head ran there.
+    const merged =
+      pr?.outcome === 'merged' || pr?.outcome === 'reverted' ? pr.loopState.mergedHeadSha : undefined;
+    const notRun = check && !skipped && merged !== undefined && passedAt(pr!.loopState, stage) !== merged;
     const problem =
       !check || skipped || off ? undefined : !file ? 'no stage file' : file.error ? 'file broken' : undefined;
     return {
@@ -219,6 +233,7 @@ function lane(
       check,
       skipped,
       off,
+      notRun,
       skippable: check && !off && pr !== null && pr.outcome === null && pr.stage !== 'escalated',
       state,
       questions: [],

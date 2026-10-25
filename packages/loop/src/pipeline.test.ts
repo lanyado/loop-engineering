@@ -1,3 +1,4 @@
+import type { Rigor } from '@loop-engineering/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { verdictResult } from './fakes.js';
 import { skipCheck } from './skip.js';
@@ -814,7 +815,7 @@ describe('the rigor dial', () => {
     await h.engine.tick();
     const again = h.asked().find((x) => x.status === 'pending');
     expect(again?.context).toContain(
-      'already waiting for your approval when the session moved to rigor Fast',
+      'It was waiting for your approval before Fast could merge it without asking',
     );
     expect(h.pr().outcome).toBeNull();
   });
@@ -843,5 +844,70 @@ describe('the rigor dial', () => {
     await h.engine.tick();
     expect(h.workspace.pushes).toHaveLength(0);
     expect(h.pr()).toMatchObject({ outcome: 'merged', round: 1 });
+  });
+
+  // Auto-merge off: a PR waits for approval at every level. Raising the level while it waits runs the
+  // new checks, then the one question it already has stays the only one, and answering it acts.
+  const waitingThenRaised = async (from: Rigor, steps: (h: Harness, sessionId: number) => void) => {
+    const h = harness(library({ checks: ['tests', 'review', 'qa'] }), { autoMerge: false });
+    h.launcher.on('tests', testsPass()).on('review', clean()).on('qa', qaPass());
+    const { session } = await h.builderWithPr();
+    h.store.sessions.update(session.id, { rigor: from });
+    await h.engine.tick();
+    expect(h.pr()).toMatchObject({ stage: 'awaiting_approval' });
+    const [q] = h.asked();
+    steps(h, session.id);
+    await h.engine.tick();
+    await h.engine.tick();
+    expect(h.pr()).toMatchObject({ stage: 'awaiting_approval', outcome: null });
+    expect(
+      h
+        .asked()
+        .filter((x) => x.status === 'pending')
+        .map((x) => x.id),
+    ).toEqual([q!.id]);
+    expect(loopState(h.pr()).question?.id).toBe(q!.id);
+    h.answer(q!.id, 'Merge');
+    await h.engine.tick();
+    expect(h.pr().outcome).toBe('merged');
+    return h;
+  };
+
+  it('Fast to Light while a PR waits: its tests and review run, and its one question still decides', async () => {
+    const h = await waitingThenRaised('fast', (h, id) => h.store.sessions.update(id, { rigor: 'light' }));
+    expect(h.launcher.kinds()).toEqual(['tests', 'review']);
+  });
+
+  it('Fast to Standard while a PR waits: the same, one question', async () => {
+    const h = await waitingThenRaised('fast', (h, id) => h.store.sessions.update(id, { rigor: 'standard' }));
+    expect(h.launcher.kinds()).toEqual(['tests', 'review']); // the tester saw no need for QA
+  });
+
+  it('Standard to Thorough, then Fast during the QA it added: one question, and it still decides', async () => {
+    const h = await waitingThenRaised('standard', (h, id) => {
+      h.store.sessions.update(id, { rigor: 'thorough' });
+      h.launcher.on('qa', () => {
+        h.store.sessions.update(id, { rigor: 'fast' });
+        return qaPass();
+      });
+    });
+    expect(h.launcher.kinds()).toEqual(['tests', 'review', 'qa']);
+  });
+
+  it('a level that drops the tests while the tester works pushes none of its tests', async () => {
+    for (const level of ['light', 'fast'] as const) {
+      const h = harness(library({ checks: ['tests', 'review'] }));
+      h.workspace.onCommit = () => ({ status: 'pushed', sha: 'f'.repeat(40) });
+      h.launcher
+        .on('tests', () => {
+          h.store.sessions.update(h.pr().sessionId!, { rigor: level });
+          return testsPass({ addedTests: ['extra.test.ts'] });
+        })
+        .on('review', clean());
+      await h.builderWithPr();
+      await h.engine.tick();
+      expect(h.workspace.pushes, level).toHaveLength(0);
+      expect(h.pr(), level).toMatchObject({ outcome: 'merged', round: 1 });
+    }
   });
 });
