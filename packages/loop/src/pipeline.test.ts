@@ -623,8 +623,9 @@ describe('the rigor dial', () => {
     await h.engine.tick();
     expect(h.launcher.jobs).toEqual([]);
     expect(h.pr()).toMatchObject({ stage: 'awaiting_approval' });
-    expect(h.asked()[0]?.text).toMatch(/has no checks before merge at rigor Fast\. Merge it\?/);
+    expect(h.asked()[0]?.text).toMatch(/has no checks before merge\. Merge it\?/);
     expect(h.asked()[0]?.context).toContain('Auto-merge is off');
+    expect(h.asked()[0]?.context).toContain("The session's rigor is Fast.");
   });
 
   it('Light runs only tests and review, with their Light notes, and merges', async () => {
@@ -715,7 +716,8 @@ describe('the rigor dial', () => {
     h.github.pr(SLUG, number).checks = [{ name: 'build', bucket: 'pass' }];
     await h.engine.tick();
     expect(h.launcher.kinds()).toEqual(['review', 'qa']);
-    expect(h.asked()[0]?.text).toMatch(/passed its checks at rigor Thorough \(you skipped Tests\)/);
+    expect(h.asked()[0]?.text).toMatch(/passed its checks \(you skipped Tests\)/);
+    expect(h.asked()[0]?.context).toContain("The session's rigor is Thorough.");
   });
 
   it('a level changed mid-PR applies from the next step, both ways', async () => {
@@ -748,5 +750,98 @@ describe('the rigor dial', () => {
     await h.engine.tick();
     expect(h.launcher.jobs).toEqual([]);
     expect(h.pr().outcome).toBe('merged');
+  });
+
+  it('a level that drops a check while its job runs in the last round neither escalates nor sends it back', async () => {
+    const h = harness(library({ checks: ['tests', 'review'] }), { config: { maxRounds: 1 } });
+    h.launcher.on('tests', () => {
+      h.store.sessions.update(h.pr().sessionId!, { rigor: 'fast' });
+      return verdictResult({ passed: false, failures: ['x fails'] });
+    });
+    await h.builderWithPr();
+    await h.engine.tick();
+    expect(h.pr()).toMatchObject({ outcome: 'merged' });
+    expect(loopState(h.pr()).feedback).toBeUndefined();
+    expect(h.launcher.kinds()).toEqual(['tests']);
+    expect(h.store.metrics.get(h.pr().id)).toMatchObject({ failures: 1 }); // its usage still counts
+  });
+
+  it('a level that drops a check during its last no-decision attempt does not escalate', async () => {
+    const h = harness(library({ checks: ['tests', 'review'] }));
+    h.launcher
+      .on('tests', verdictResult({}), verdictResult({}), () => {
+        h.store.sessions.update(h.pr().sessionId!, { rigor: 'fast' });
+        return verdictResult({}); // attempt 3, the last: would escalate
+      })
+      .on('review', clean());
+    await h.builderWithPr();
+    for (let i = 0; i < 3; i++) await h.engine.tick();
+    expect(h.pr()).toMatchObject({ outcome: 'merged' });
+    expect(h.logs.some((l) => l.includes('sent to the human'))).toBe(false);
+  });
+
+  it('Fast does not merge a PR already waiting for approval; it stays with its one question', async () => {
+    const h = harness(library({ checks: ['tests'] })); // auto-merge on, but no review: approval
+    h.launcher.on('tests', testsPass());
+    const { session } = await h.builderWithPr();
+    await h.engine.tick();
+    expect(h.pr()).toMatchObject({ stage: 'awaiting_approval' });
+    const [q] = h.asked();
+    h.store.sessions.update(session.id, { rigor: 'fast' });
+    await h.engine.tick();
+    await h.engine.tick();
+    expect(h.pr()).toMatchObject({ stage: 'awaiting_approval', outcome: null });
+    expect(
+      h
+        .asked()
+        .filter((x) => x.status === 'pending')
+        .map((x) => x.id),
+    ).toEqual([q!.id]);
+    h.answer(q!.id, 'Merge');
+    await h.engine.tick();
+    expect(h.pr().outcome).toBe('merged');
+  });
+
+  it('Fast asks after a Hold with the reason, and new PRs at Fast still merge without asking', async () => {
+    const h = harness(library({ checks: ['tests'] }));
+    h.launcher.on('tests', testsPass());
+    const { session } = await h.builderWithPr();
+    await h.engine.tick();
+    h.answer(h.asked()[0]!.id, 'Hold');
+    await h.engine.tick();
+    h.store.sessions.update(session.id, { rigor: 'fast' });
+    h.clock.advance(25 * 60 * 60 * 1000); // past the hold, the question comes again
+    await h.engine.tick();
+    const again = h.asked().find((x) => x.status === 'pending');
+    expect(again?.context).toContain(
+      'already waiting for your approval when the session moved to rigor Fast',
+    );
+    expect(h.pr().outcome).toBeNull();
+  });
+
+  it('a level that adds a check while a PR waits for approval reuses the pending question, never a second one', async () => {
+    const h = harness(library({ checks: ['tests', 'review', 'qa'] }), { autoMerge: false });
+    h.launcher.on('tests', testsPass()).on('review', clean()).on('qa', qaPass());
+    const { session } = await h.builderWithPr();
+    await h.engine.tick();
+    expect(h.pr()).toMatchObject({ stage: 'awaiting_approval' });
+    const [q] = h.asked();
+    h.store.sessions.update(session.id, { rigor: 'thorough' });
+    await h.engine.tick();
+    expect(h.launcher.kinds()).toEqual(['tests', 'review', 'qa']); // QA now runs
+    expect(h.pr()).toMatchObject({ stage: 'awaiting_approval' });
+    expect(h.asked().map((x) => x.id)).toEqual([q!.id]);
+    expect(loopState(h.pr()).question?.id).toBe(q!.id);
+  });
+
+  it('Light never pushes tests the tester wrote anyway', async () => {
+    const h = harness(library({ checks: ['tests', 'review'] }));
+    h.workspace.onCommit = () => ({ status: 'pushed', sha: 'f'.repeat(40) });
+    h.launcher.on('tests', testsPass({ addedTests: ['extra.test.ts'] })).on('review', clean());
+    const { session } = await h.builderWithPr();
+    h.store.sessions.update(session.id, { rigor: 'light' });
+    await h.engine.tick();
+    expect(h.workspace.pushes).toHaveLength(0);
+    expect(h.pr()).toMatchObject({ outcome: 'merged', round: 1 });
   });
 });

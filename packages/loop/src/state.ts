@@ -4,7 +4,7 @@ import type { PullRequest } from '@loop-engineering/core';
 export type FeedbackKind = 'review' | 'tests' | 'qa' | 'check' | 'ci' | 'conflict';
 
 /** The check a send-back came from (a custom stage's id for "check"); CI and conflicts have none. */
-const feedbackCheck = (f: Pick<Feedback, 'kind' | 'stage'>): string | undefined =>
+export const feedbackCheck = (f: Pick<Feedback, 'kind' | 'stage'>): string | undefined =>
   f.kind === 'check' ? f.stage : f.kind === 'ci' || f.kind === 'conflict' ? undefined : f.kind;
 
 /** The human skipped `check` for this PR (no check: never skipped). */

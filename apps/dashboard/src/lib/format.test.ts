@@ -47,8 +47,9 @@ describe('format', () => {
     expect(pauseLabel('agent_exited')).toBe('agent exited');
     expect(pauseLabel('new_reason')).toBe('New reason');
     expect(roundLabel(2)).toBe('round 2/5');
-    expect(roundLabel(1, 'light')).toBe('round 1/2');
-    expect(roundLabel(1, 'thorough')).toBe('round 1/5');
+    expect(roundLabel(6, 10)).toBe('round 6/10'); // after "Continue 5 more"
+    expect(roundLabel(3, 7, 'light')).toBe('round 3');
+    expect(roundLabel(1, 5, 'thorough')).toBe('round 1/5');
   });
 
   it('parses the allowlist box', () => {

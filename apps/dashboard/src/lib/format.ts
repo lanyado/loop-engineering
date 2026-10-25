@@ -1,8 +1,6 @@
 /** Display helpers shared by server and client components. Pure functions, unit tested. */
 
 export const REVIEW_ROUND_CAP = 5;
-/** Rigor Light's cap (packages/loop/src/rigor.ts, LIGHT_MAX_ROUNDS). */
-export const LIGHT_ROUND_CAP = 2;
 
 /** Colour of a usage meter: calm, then amber from 70%, red from 90%. */
 export function usageTone(usedPercentage: number): 'active' | 'waiting' | 'bad' {
@@ -11,8 +9,16 @@ export function usageTone(usedPercentage: number): 'active' | 'waiting' | 'bad' 
   return 'active';
 }
 
-export function roundLabel(round: number, rigor = 'standard'): string {
-  return `round ${round}/${rigor === 'light' ? LIGHT_ROUND_CAP : REVIEW_ROUND_CAP}`;
+/**
+ * "round 2/5": out of the PR's own budget (Continue adds to it). At rigor Light the loop cuts that
+ * budget by its own rule, so no denominator is shown rather than one the dashboard would have to guess.
+ */
+export function roundLabel(
+  round: number,
+  maxRounds: number | undefined = REVIEW_ROUND_CAP,
+  rigor = 'standard',
+): string {
+  return rigor === 'light' ? `round ${round}` : `round ${round}/${maxRounds}`;
 }
 
 const PAUSE_LABELS: Record<string, string> = {

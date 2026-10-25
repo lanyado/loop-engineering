@@ -19,6 +19,15 @@ export const RIGOR_CAPTIONS: Record<Rigor, string> = {
   thorough: 'every check, QA on every PR, tests for every change',
 };
 
+/** Where an arrow, Home or End key goes from stop `from` (null: another key). */
+function moveFrom(key: string, from: number, last: number): number | null {
+  if (key === 'ArrowRight' || key === 'ArrowDown') return Math.min(from + 1, last);
+  if (key === 'ArrowLeft' || key === 'ArrowUp') return Math.max(from - 1, 0);
+  if (key === 'Home') return 0;
+  if (key === 'End') return last;
+  return null;
+}
+
 function LevelIcon({ level }: { level: Rigor }) {
   if (level !== 'fast' && level !== 'thorough') return null;
   return (
@@ -83,22 +92,14 @@ export function RigorDial({
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    const at = RIGOR_LEVELS.indexOf(shown);
-    const last = RIGOR_LEVELS.length - 1;
-    const next =
-      e.key === 'ArrowRight' || e.key === 'ArrowDown'
-        ? Math.min(at + 1, last)
-        : e.key === 'ArrowLeft' || e.key === 'ArrowUp'
-          ? Math.max(at - 1, 0)
-          : e.key === 'Home'
-            ? 0
-            : e.key === 'End'
-              ? last
-              : null;
-    if (next === null) return;
+    // Read-only, the arrows only move focus along the dial (choose() ignores the change).
+    const focused = stops.current.indexOf(document.activeElement as HTMLButtonElement);
+    const from = locked && focused >= 0 ? focused : RIGOR_LEVELS.indexOf(shown);
+    const to = moveFrom(e.key, from, RIGOR_LEVELS.length - 1);
+    if (to === null) return;
     e.preventDefault();
-    stops.current[next]?.focus();
-    choose(RIGOR_LEVELS[next]!);
+    stops.current[to]?.focus();
+    choose(RIGOR_LEVELS[to]!);
   };
 
   return (
@@ -131,7 +132,8 @@ export function RigorDial({
             tabIndex={level === shown ? 0 : -1}
             className={`rigor-stop rigor-stop-${level}`}
             data-testid={`rigor-${level}`}
-            disabled={readOnly}
+            // Not `disabled`: in demo mode the group stays reachable by keyboard; choose() ignores it.
+            aria-disabled={readOnly || undefined}
             onClick={() => choose(level)}
           >
             <LevelIcon level={level} />

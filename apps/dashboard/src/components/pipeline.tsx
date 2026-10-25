@@ -463,7 +463,9 @@ function LaneView({
             >
               {pr.repo}#{pr.number}
             </a>
-            {pr.outcome === null && <span className="muted">{roundLabel(pr.round, rigor)}</span>}
+            {pr.outcome === null && (
+              <span className="muted">{roundLabel(pr.round, pr.loopState.maxRounds, rigor)}</span>
+            )}
             {part(
               'prMetrics',
               <span className="muted lane-metrics" data-testid="pr-metrics">
@@ -587,7 +589,7 @@ export function PipelineRow({
                   <a className="mono" href={f.pr.url} target="_blank" rel="noreferrer">
                     {f.pr.repo}#{f.pr.number}
                   </a>{' '}
-                  · {f.label} ({roundLabel(f.pr.round, session.rigor)}) ·{' '}
+                  · {f.label} ({roundLabel(f.pr.round, f.pr.loopState.maxRounds, session.rigor)}) ·{' '}
                   {f.sentAt ? 'the builder is fixing it, nothing to do' : 'being sent to the builder'}
                 </p>
                 {f.items.length > 0 && (

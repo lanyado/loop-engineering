@@ -1365,8 +1365,7 @@ button.icon-button,
     color-mix(in srgb, var(--rigor-thorough) 18%, var(--surface))
   );
 }
-.rigor-stop,
-.rigor-stop:disabled {
+.rigor-stop {
   min-height: 32px;
   padding: 0 0.75rem;
   gap: 4px;
@@ -1379,22 +1378,28 @@ button.icon-button,
   color: var(--muted);
   white-space: nowrap;
 }
-.rigor-stop:hover:not(:disabled) {
+.rigor-stop:hover:not([aria-disabled='true']) {
   background: color-mix(in srgb, var(--surface) 70%, transparent);
   border-color: transparent;
   color: var(--text);
 }
 .rigor-stop[aria-checked='true'],
-.rigor-stop[aria-checked='true']:disabled,
-.rigor-stop[aria-checked='true']:hover:not(:disabled) {
+.rigor-stop[aria-checked='true']:hover {
   background: var(--surface);
   border-color: color-mix(in srgb, var(--rigor) 55%, transparent);
   color: var(--rigor);
   font-weight: 700;
   box-shadow: var(--shadow-sm);
 }
-.rigor-stop:disabled {
+.rigor-stop[aria-disabled='true'] {
   cursor: default;
+}
+.rigor-stop[aria-disabled='true']:active {
+  transform: none;
+}
+.rigor-stop[aria-disabled='true']:not([aria-checked='true']):hover {
+  background: transparent;
+  border-color: transparent;
 }
 .rigor-icon {
   width: 13px;
@@ -1429,8 +1434,7 @@ button.icon-button,
   }
 }
 @media (pointer: coarse) {
-  .rigor-stop,
-  .rigor-stop:disabled {
+  .rigor-stop {
     min-height: 40px;
   }
 }
@@ -1438,8 +1442,7 @@ button.icon-button,
   .rigor {
     flex-basis: 100%;
   }
-  .rigor-stop,
-  .rigor-stop:disabled {
+  .rigor-stop {
     padding: 0 0.5rem;
   }
 }

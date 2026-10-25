@@ -204,7 +204,8 @@ function lane(
   const node = (stage: string, state: NodeState): StageNode => {
     const file = view.stages.find((s) => s.id === stage);
     const check = !(stage in FIXED_LABELS);
-    const off = check && !runs.includes(stage);
+    // Only a PR still in its checks (or none yet) follows today's level; a finished one ran what it ran.
+    const off = check && (pr === null || pr.outcome === null) && !runs.includes(stage);
     // A skipped or off check is not waited for, so its file's state does not matter to the PR.
     const skipped = check && (pr?.loopState.skip?.includes(stage) ?? false);
     const problem =

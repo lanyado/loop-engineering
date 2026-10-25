@@ -382,6 +382,9 @@ describe('the rigor dial shapes the lane', () => {
     expect(light.nodes.find((n) => n.stage === 'tests')).toMatchObject({ off: false, skippable: true });
     const fast = lane('fast', [pr(1, 1, 'merge')]);
     expect(off(fast)).toEqual(['tests', 'review', 'qa']);
+    // A finished PR ran what it ran: today's level does not dim it.
+    expect(off(lane('fast', [pr(1, 1, 'deployed', { outcome: 'merged' })]))).toEqual([]);
+    expect(off(lane('fast', [pr(1, 1, 'deploying', { outcome: 'merged' })]))).toEqual([]);
     // An off check whose stage file is gone does not hold anything: no problem shown.
     const ghost = lane('fast', [], false, {
       ...PIPELINE,

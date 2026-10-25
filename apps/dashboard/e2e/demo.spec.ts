@@ -535,8 +535,16 @@ test('a rigor dial sits above each git session pipeline, and the lane dims what 
   );
   await expect(dial.getByRole('radiogroup')).toHaveAttribute('title', 'Demo data is read-only.');
   await expect(checkout.locator('[data-off]')).toHaveCount(0);
-  // Demo data: every stop is disabled.
-  for (const radio of await dial.getByRole('radio').all()) await expect(radio).toBeDisabled();
+  // Demo data: read-only, yet reachable by keyboard; clicks and arrows change nothing.
+  for (const radio of await dial.getByRole('radio').all())
+    await expect(radio).toHaveAttribute('aria-disabled', 'true');
+  // force: Playwright counts aria-disabled as not clickable; the point is that a click does nothing.
+  await dial.getByRole('radio', { name: 'Fast', exact: true }).click({ force: true });
+  await expect(dial).toHaveAttribute('data-rigor', 'thorough');
+  await dial.getByRole('radio', { name: 'Thorough', exact: true }).focus();
+  await page.keyboard.press('ArrowLeft');
+  await expect(dial.getByRole('radio', { name: 'Standard', exact: true })).toBeFocused();
+  await expect(dial).toHaveAttribute('data-rigor', 'thorough');
 
   // Light: QA is off (dimmed, no Skip), tests and review run; two rounds at most.
   const rss = row('RSS feed + dark mode');
@@ -547,9 +555,11 @@ test('a rigor dial sits above each git session pipeline, and the lane dims what 
   await expect(qa.getByTestId('skip-check')).toHaveCount(0);
   expect(Number(await qa.evaluate((el) => getComputedStyle(el).opacity))).toBeLessThan(1);
   await expect(rss.locator('[data-stage="tests"]')).not.toHaveAttribute('data-off', 'true');
-  await expect(rss).toContainText('round 2/2');
+  // Light cuts the PR's budget by its own rule: the round shows without a denominator.
+  await expect(rss.getByTestId('lane')).toContainText('round 2');
+  await expect(rss.getByTestId('lane')).not.toContainText('round 2/');
 
-  // Fast: every check off.
+  // Fast: every check of its open PR off; its merged PR still shows the checks it ran.
   const cdn = row('Image CDN migration');
   await expect(cdn.getByTestId('rigor-dial')).toHaveAttribute('data-rigor', 'fast');
   for (const stage of ['tests', 'review', 'qa'])
@@ -557,6 +567,7 @@ test('a rigor dial sits above each git session pipeline, and the lane dims what 
       'data-off',
       'true',
     );
+  await expect(cdn.locator('[data-pr-number="44"] [data-off]')).toHaveCount(0);
 
   // Standard draws the pipeline as it is; a folder project has no PRs and no dial.
   await expect(row('Search relevance').getByTestId('rigor-dial')).toHaveAttribute('data-rigor', 'standard');

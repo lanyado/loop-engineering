@@ -151,6 +151,8 @@ export const pullRequestSchema = z.object({
         .catch(undefined),
       /** With stage "check": the custom stage (a stage file) the PR is at. */
       check: z.string().optional().catch(undefined),
+      /** The PR's round budget (5, plus 5 per "Continue"); older data has none. */
+      maxRounds: z.number().optional().catch(undefined),
       /** Checks the human skipped for this PR. */
       skip: z.array(z.string()).optional().catch(undefined),
       feedback: z

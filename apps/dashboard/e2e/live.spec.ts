@@ -636,13 +636,18 @@ test('a check is skipped for one PR from a pop-up on its node, and brought back 
 test('the rigor dial saves a level, and the lane under it runs those checks again', async ({
   page,
 }, info) => {
+  // An open PR: a finished one keeps showing the checks it ran, whatever the level.
+  await testRoute('/test/pr', {
+    sessionId: ids.rss,
+    pr: { projectId: ids.blog, repo: 'site', number: 46, stage: 'tests', round: 1 },
+  });
   await open(page);
   const row = page
     .locator('[data-testid="project"][data-project="blog"]')
     .getByTestId('session-row')
     .filter({ hasText: 'RSS feed' });
   const dial = row.getByTestId('rigor-dial');
-  const lane = row.locator('[data-testid="lane"][data-pr-number="44"]');
+  const lane = row.locator('[data-testid="lane"][data-pr-number="46"]');
   const stored = async () => {
     const { projects } = await api<{
       projects: { name: string; sessions: { id: number; rigor: string }[] }[];
@@ -674,5 +679,7 @@ test('the rigor dial saves a level, and the lane under it runs those checks agai
   await expect(dial.getByRole('radio', { name: 'Light', exact: true })).toBeFocused();
   await expect.poll(stored).toBe('light');
   await expect(lane.locator('[data-off]')).toHaveCount(1);
+  await expect(lane).toContainText('round 1');
+  await expect(lane).not.toContainText('round 1/');
   await snap(page, info, 'rigor');
 });
