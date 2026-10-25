@@ -13,18 +13,18 @@ let mailbox: FakeMailbox;
 let channel: EmailChannel;
 let logs: string[];
 /** What the clarifier answers next (a function sees the conversation); an Error makes it fail. */
-let answers: (
-  | ({ questions: string[] } | { plan: string } | Error)
-  | ((mails: ClarifyMail[], mustPlan: boolean) => { plan: string })
-)[];
-let seen: { mails: ClarifyMail[]; mustPlan: boolean }[];
+let answers: ({ questions: string[] } | { plan: string } | { nothing: true } | Error | 'hang')[];
+let seen: { mails: ClarifyMail[]; mustPlan: boolean; earlier: string | null }[];
 
 const clarifier: Clarifier = {
-  clarify(mails, mustPlan) {
-    seen.push({ mails, mustPlan });
+  clarify(mails, { mustPlan, earlier = null }, signal) {
+    seen.push({ mails, mustPlan, earlier });
     const next = answers.shift() ?? { plan: 'Build it.' };
-    const answer = typeof next === 'function' ? next(mails, mustPlan) : next;
-    return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(answer);
+    if (next === 'hang')
+      return new Promise((_, reject) =>
+        signal.addEventListener('abort', () => reject(new Error('timed out'))),
+      );
+    return next instanceof Error ? Promise.reject(next) : Promise.resolve(next);
   },
 };
 
@@ -52,6 +52,7 @@ beforeEach(async () => {
     clarifier,
     allowlist: [BOSS, '@team.example'],
     pollMs: 60_000,
+    clarifyTimeoutMs: 50,
     log: (m) => logs.push(m),
   });
   channel.start(); // its first read only marks where the inbox ends
@@ -160,7 +161,7 @@ describe('a task by email', () => {
     await channel.poll();
     expect(mailbox.sent).toEqual([]);
     expect(store.email.threads()).toEqual([]);
-    expect(logs.join('\n')).toMatch(/not on the allowlist[\s\S]*did not authenticate/);
+    expect(logs.join('\n')).toMatch(/not on the allowlist[\s\S]*did not authenticate its sender/);
 
     const task = mailbox.deliver({ from: BOSS, text: 'Add a sitemap.' });
     await channel.poll();
@@ -185,7 +186,7 @@ describe('a task by email', () => {
     for (let i = 0; i < 11; i++) mailbox.deliver({ from: BOSS, text: `Task ${i}` });
     await channel.poll();
     expect(store.email.threads()).toHaveLength(10);
-    expect(logs.join('\n')).toContain('10 tasks this hour already');
+    expect(logs.join('\n')).toContain('10 this hour already');
   });
 });
 
@@ -234,12 +235,13 @@ describe('while the work runs', () => {
     });
   });
 
-  it('says so when a reply comes before the task is routed', async () => {
+  it('a reply right after the plan, before routing, does not start the work again', async () => {
     mailbox.deliver({ from: BOSS, subject: 'Dark mode', text: 'Please add a dark mode.' });
     await channel.poll();
     mailbox.reply(last(), BOSS, 'One more thing.');
     await channel.poll();
-    expect(last().text).toContain('still being set up');
+    expect(last().text).toContain('still finishing');
+    expect(store.requests.list()).toHaveLength(1);
   });
 
   it('notes on the thread when a question is answered elsewhere', async () => {
@@ -256,8 +258,52 @@ describe('while the work runs', () => {
     expect(last().text).toBe('The question "Ship it?" is settled: answered: No (via dashboard).');
   });
 
-  it('writes once, on the same thread, when its PR is in production', async () => {
-    const { request, project } = await building();
+  it("never emails the PR loop's own decisions, and a reply that is no answer goes to the session", async () => {
+    const { request, project, session } = await building();
+    const pr = store.pullRequests.create({
+      projectId: project.id,
+      repo: 'web',
+      number: 7,
+      url: 'u',
+      requestId: request.id,
+    });
+    // The PR loop asks in the builder's session, then records the question on the PR.
+    const { question: approval } = questions.ask({
+      sessionId: session.id,
+      text: 'Merge web#7?',
+      options: ['Merge', 'Hold'],
+      recommendedOption: 'Hold',
+    });
+    store.pullRequests.update(pr.id, { loopState: { question: { kind: 'approval', id: approval.id } } });
+    const { question } = questions.ask({
+      sessionId: session.id,
+      text: 'Which theme?',
+      options: ['Light', 'Dark'],
+      recommendedOption: 'Light',
+    });
+    await flush();
+    await channel.poll();
+    expect(mailbox.sent.some((m) => m.text.includes('Merge web#7?'))).toBe(false);
+    expect(store.email.messageForQuestion(question.id)).toBeDefined();
+    // Not threaded under the question and not an option: a message for the session, not an answer.
+    mailbox.deliver({
+      from: BOSS,
+      subject: 'Re: Dark mode',
+      text: 'Merge it now please',
+      threadId: null,
+      references: [store.email.messages(1)[0]!.messageId],
+    });
+    await channel.poll();
+    expect(store.questions.require(question.id).status).toBe('pending');
+    expect(store.questions.require(approval.id).status).toBe('pending');
+    expect(store.requests.list().at(-1)).toMatchObject({
+      text: 'Merge it now please',
+      targetSessionId: session.id,
+    });
+  });
+
+  it('writes once, on the same thread, when a PR is in production, also one a follow-up started', async () => {
+    const { request, project, session } = await building();
     const pr = store.pullRequests.create({
       projectId: project.id,
       repo: 'web',
@@ -276,18 +322,87 @@ describe('while the work runs', () => {
       'The new version is in production: web#7 (https://github.com/x/web/pull/7) is merged and deployed.',
     );
     expect(last().references![0]).toBe(store.email.messages(store.email.threads()[0]!.id)[0]!.messageId);
+
+    // A reply passed to the session becomes a request; the PR the loop links to it is announced too.
+    mailbox.reply(last(), BOSS, 'Also make the logo white.');
+    await channel.poll();
+    const followUp = store.requests.list().at(-1)!;
+    expect(followUp).toMatchObject({ targetSessionId: session.id });
+    const second = store.pullRequests.create({
+      projectId: project.id,
+      repo: 'web',
+      number: 8,
+      url: 'u8',
+      requestId: followUp.id,
+    });
+    store.pullRequests.update(second.id, { stage: 'deployed', outcome: 'merged' });
+    await channel.poll();
+    expect(last().text).toContain('web#8');
   });
 
-  it('a reply after the work ended starts a new round on the same thread', async () => {
+  it('a reply while the PR is still deploying waits, it does not start a new round', async () => {
+    const { request, project, session } = await building();
+    const pr = store.pullRequests.create({
+      projectId: project.id,
+      repo: 'web',
+      number: 7,
+      url: 'u',
+      requestId: request.id,
+    });
+    store.pullRequests.update(pr.id, { stage: 'deploying', outcome: 'merged' });
+    store.sessions.update(session.id, { status: 'ended' }); // the loop ends the session at cleanup
+    mailbox.reply(last(), BOSS, 'Thanks!');
+    await channel.poll();
+    expect(last().text).toContain('still finishing');
+    expect(store.email.threads()[0]!.state).toBe('building');
+    store.pullRequests.update(pr.id, { stage: 'deployed' });
+    await channel.poll();
+    expect(last().text).toContain('is in production');
+  });
+
+  it('after the work ended, a reply is a new round: the earlier plan is context, and "nothing" sends nothing', async () => {
     const { session } = await building();
     store.sessions.update(session.id, { status: 'ended' });
+    const plan = mailbox.sent.find((m) => m.text.startsWith('The plan is approved'))!;
+    mailbox.reply(last(), BOSS, 'Thanks, looks great!');
+    answers = [{ nothing: true }];
+    let sent = mailbox.sent.length;
+    await channel.poll();
+    expect(seen.at(-1)).toMatchObject({
+      earlier: plan.text,
+      mails: [{ from: 'requester', text: 'Thanks, looks great!' }],
+    });
+    expect(mailbox.sent).toHaveLength(sent);
+    expect(store.email.threads()[0]!.state).toBe('building');
+
     mailbox.reply(last(), BOSS, 'Now add a high-contrast theme too.');
     answers = [{ plan: 'Add a high-contrast theme.' }];
+    sent = mailbox.sent.length;
     await channel.poll();
+    expect(mailbox.sent).toHaveLength(sent + 1);
     expect(last().text).toContain('Add a high-contrast theme.');
     const thread = store.email.threads()[0]!;
-    expect(store.requests.require(thread.requestId!).text).toContain('Now add a high-contrast theme too.');
-    expect(store.requests.list()).toHaveLength(2);
+    const followUp = store.requests.require(thread.requestId!);
+    expect(followUp.text).toMatch(/^A follow-up by email[\s\S]*Already built earlier, not to redo/);
+    expect(followUp.text).toContain('Now add a high-contrast theme too.');
+    expect(followUp.text).not.toContain('Please add a dark mode.');
+  });
+
+  it('gives up waiting on a hung clarifier and tries again', async () => {
+    mailbox.deliver({ from: BOSS, text: 'Add a sitemap.' });
+    answers = ['hang'];
+    await channel.poll();
+    expect(logs.join('\n')).toContain('timed out');
+    await channel.poll();
+    expect(last().text).toContain('The plan is approved');
+  });
+
+  it('a reply with nothing new in it is ignored', async () => {
+    await building();
+    const before = store.email.messages(1).length;
+    mailbox.reply(last(), BOSS, 'On Sat, Oct 25, 2026 at 9:00 AM Loop <loop@example.com> wrote:\n> Hi');
+    await channel.poll();
+    expect(store.email.messages(1)).toHaveLength(before);
   });
 });
 

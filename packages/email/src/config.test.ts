@@ -31,6 +31,11 @@ describe('loadEmailConfig', () => {
     ).toThrow(
       /EMAIL_ADDRESS is not an email address.*EMAIL_APP_PASSWORD is not set.*"nobody".*"@".*EMAIL_POLL_SECONDS/,
     );
+    expect(() =>
+      loadEmailConfig(
+        env({ EMAIL_ADDRESS: 'a@b.co', EMAIL_APP_PASSWORD: 'x', EMAIL_ALLOWLIST: '@gmail.com' }),
+      ),
+    ).toThrow(/anyone can have an address there/);
     expect(() => loadEmailConfig(env({ EMAIL_ADDRESS: 'a@b.co', EMAIL_APP_PASSWORD: 'x' }))).toThrow(
       /EMAIL_ALLOWLIST is empty/,
     );

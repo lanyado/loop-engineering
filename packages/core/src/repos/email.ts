@@ -18,6 +18,7 @@ export interface NewEmailMessage {
   text: string;
   questionId?: number | null;
   prId?: number | null;
+  requestId?: number | null;
 }
 
 /** How far an inbox was read (IMAP): the last UID seen, while the mailbox keeps its UIDVALIDITY. */
@@ -45,6 +46,7 @@ interface MessageRow {
   text: string;
   question_id: number | null;
   pr_id: number | null;
+  request_id: number | null;
   created_at: string;
 }
 
@@ -67,6 +69,7 @@ const toMessage = (r: MessageRow): EmailMessage => ({
   text: r.text,
   questionId: r.question_id,
   prId: r.pr_id,
+  requestId: r.request_id,
   createdAt: r.created_at,
 });
 
@@ -135,8 +138,8 @@ export class EmailRepo {
     this.requireThread(input.threadId);
     const info = this.db
       .prepare(
-        `INSERT INTO email_messages (thread_id, message_id, direction, text, question_id, pr_id, created_at)
-         VALUES (@threadId, @messageId, @direction, @text, @questionId, @prId, @createdAt)`,
+        `INSERT INTO email_messages (thread_id, message_id, direction, text, question_id, pr_id, request_id, created_at)
+         VALUES (@threadId, @messageId, @direction, @text, @questionId, @prId, @requestId, @createdAt)`,
       )
       .run({
         threadId: input.threadId,
@@ -145,6 +148,7 @@ export class EmailRepo {
         text: input.text,
         questionId: input.questionId ?? null,
         prId: input.prId ?? null,
+        requestId: input.requestId ?? null,
         createdAt: isoNow(this.clock),
       });
     updateById(this.db, 'email_threads', 'email thread', input.threadId, { updated_at: isoNow(this.clock) });
@@ -168,6 +172,11 @@ export class EmailRepo {
       .prepare<[string], MessageRow>('SELECT * FROM email_messages WHERE message_id = ?')
       .get(messageId);
     return row && toMessage(row);
+  }
+
+  /** Links a mail to the request it started. */
+  setMessageRequest(id: number, requestId: number): void {
+    updateById(this.db, 'email_messages', 'email message', id, { request_id: requestId });
   }
 
   /** The mail that asked this question, if it was emailed. */

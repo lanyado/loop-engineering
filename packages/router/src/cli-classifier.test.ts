@@ -268,10 +268,20 @@ describe('clarifying an emailed task', () => {
   ];
 
   it('asks for questions or the plan, with the mails fenced as data; mustPlan leaves only the plan', () => {
-    const prompt = buildClarifyPrompt(mails, false, 'T');
+    const prompt = buildClarifyPrompt(mails, { mustPlan: false }, 'T');
     expect(prompt).toContain('<T>\n[Requester]\nAdd a dark mode.');
     expect(prompt).toContain('{"questions": ["...", "..."]} or {"plan": "..."}');
-    expect(buildClarifyPrompt(mails, true, 'T')).toContain('Answer with JSON only: {"plan": "..."}');
+    expect(buildClarifyPrompt(mails, { mustPlan: true }, 'T')).toContain(
+      'Answer with JSON only: {"plan": "..."}',
+    );
+  });
+
+  it('in a new round, shows what was built and allows "nothing"', () => {
+    const prompt = buildClarifyPrompt(mails, { mustPlan: false, earlier: 'Dark mode toggle.' }, 'T');
+    expect(prompt).toContain('<T-built>\nDark mode toggle.\n</T-built>');
+    expect(prompt).toContain('or {"nothing": true}');
+    expect(buildClarifyPrompt(mails, { mustPlan: false }, 'T')).not.toContain('nothing');
+    expect(cleanClarification({ nothing: true })).toEqual({ nothing: true });
   });
 
   it('cleans the answer: a plan wins, at most five non-empty questions, else nothing', () => {
@@ -287,11 +297,13 @@ describe('clarifying an emailed task', () => {
     const reply = (json: unknown) =>
       fakeRun(() => ({ code: 0, stdout: claudeEnvelope(JSON.stringify(json)), stderr: '' })).run;
     const signal = new AbortController().signal;
-    expect(await classifier(reply({ questions: ['Which pages?'] })).clarify(mails, false, signal)).toEqual({
+    expect(
+      await classifier(reply({ questions: ['Which pages?'] })).clarify(mails, { mustPlan: false }, signal),
+    ).toEqual({
       questions: ['Which pages?'],
     });
     await expect(
-      classifier(reply({ questions: ['Which pages?'] })).clarify(mails, true, signal),
-    ).rejects.toThrow(/neither questions nor a plan/);
+      classifier(reply({ questions: ['Which pages?'] })).clarify(mails, { mustPlan: true }, signal),
+    ).rejects.toThrow(/no answer it may give here/);
   });
 });

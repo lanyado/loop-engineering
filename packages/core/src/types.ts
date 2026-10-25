@@ -398,5 +398,7 @@ export interface EmailMessage {
   questionId: number | null;
   /** An outgoing release note for this PR. */
   prId: number | null;
+  /** The request it started: the plan's (outgoing), or a reply passed to a session (incoming). */
+  requestId: number | null;
   createdAt: Iso;
 }

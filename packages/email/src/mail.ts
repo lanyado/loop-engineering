@@ -48,29 +48,56 @@ export interface MailCursor {
   lastUid: number;
 }
 
-/** Lines that open a quoted earlier mail: "On <date>, <name> wrote:" (in any language), "From:", "-----Original". */
-const QUOTE_HEADER = [
-  /^On .+wrote:\s*$/i,
-  /^.*<[^<>\s]+@[^<>\s]+>.*:\s*$/,
-  /^-{2,}\s*(Original Message|Forwarded message)/i,
-  /^_{5,}\s*$/,
-  /^From:\s.+/i,
-];
+/** Direction marks some clients put around names and addresses (Gmail in right-to-left languages). */
+const BIDI = /[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 
-/** The new text of a reply: everything above the quoted mail and the ">" lines. */
+/** Whether lines i..i+n-1, read as one, are a quote's opening line ("On <date> ... wrote:" and the like). */
+function attribution(lines: string[], i: number, n: number): boolean {
+  if (i + n > lines.length || lines.slice(i, i + n).some((l) => l.trim() === '')) return false;
+  const joined = lines
+    .slice(i, i + n)
+    .join(' ')
+    .replace(BIDI, '')
+    .trim();
+  // In English, or in any language: a date and an address, ending with a colon.
+  return (
+    /^on\s.*\d.*wrote:$/i.test(joined) ||
+    (/\d/.test(joined) && /<\s*[^<>\s]+@[^<>\s]+\s*>/.test(joined) && /:$/.test(joined))
+  );
+}
+
+/** Whether line `i` opens a quoted earlier mail (clients wrap that line, so up to three are read). */
+function opensQuote(lines: string[], i: number): boolean {
+  const line = lines[i]!.replace(BIDI, '').trim();
+  if (/^-{2,}\s*(original message|forwarded message)/i.test(line) || /^_{5,}$/.test(line)) return true;
+  // Outlook: a "From:" line followed by its "Sent:"/"Date:"/"To:"/"Subject:" lines.
+  if (/^from:\s/i.test(line))
+    return lines
+      .slice(i + 1, i + 4)
+      .some((l) => /^(sent|date|to|subject):\s/i.test(l.replace(BIDI, '').trim()));
+  // Line i opens it only when the attribution needs it (not when it already starts on the next line).
+  for (let n = 1; n <= 3; n++) if (attribution(lines, i, n) && !attribution(lines, i + 1, n - 1)) return true;
+  return false;
+}
+
+/**
+ * The new text of a reply: what is above the quoted mail, without ">" lines. A reply written under
+ * the quote (nothing above it) is the unquoted text below instead.
+ */
 export function replyText(text: string): string {
   const lines = text.replace(/\r\n/g, '\n').split('\n');
-  const kept: string[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
-    // Gmail wraps a long "On ..., ... <a@b> wrote:" over two lines.
-    const joined = `${line} ${lines[i + 1] ?? ''}`;
-    if (QUOTE_HEADER.some((re) => re.test(line)) || (/^On\s/i.test(line) && /wrote:\s*$/i.test(joined)))
-      break;
-    if (/^\s*>/.test(line)) continue;
-    kept.push(line);
-  }
-  return kept.join('\n').trim();
+  const quoted = (l: string) => /^\s*>/.test(l);
+  const start = lines.findIndex((_, i) => opensQuote(lines, i));
+  const above = (start < 0 ? lines : lines.slice(0, start))
+    .filter((l) => !quoted(l))
+    .join('\n')
+    .trim();
+  if (above || start < 0) return above;
+  return lines
+    .filter((l, i) => !quoted(l) && !opensQuote(lines, i) && i > start)
+    .join('\n')
+    .replace(/^.*wrote:\s*$/im, '')
+    .trim();
 }
 
 /** "@example.com" (a domain) or an exact address, lower case; the allowlist's entries. */
@@ -80,17 +107,28 @@ export function allowed(address: string, allowlist: readonly string[]): boolean 
 }
 
 /**
- * Whether the receiving server (Gmail writes Authentication-Results) vouched for the sender: DMARC
- * passed, or a DKIM signature of the From domain passed. A forged From fails both.
+ * Whether Gmail vouched for the sender. Only the topmost Authentication-Results counts (Gmail adds
+ * it on receipt; any below it came with the mail), only when Gmail wrote it, and only for the From
+ * domain: DMARC passed for it, or a DKIM signature aligned with it passed. Comments are dropped
+ * first, since they can carry text the sender chose (an envelope address, say).
  */
-export function senderAuthenticated(authenticationResults: string[], from: string): boolean {
-  const domain = from.split('@')[1]?.toLowerCase() ?? '';
-  return authenticationResults.some((header) => {
-    const h = header.toLowerCase();
-    if (/\bdmarc=pass\b/.test(h)) return true;
-    return [...h.matchAll(/\bdkim=pass\b[^;]*?header\.(?:i|d)=@?([^\s;]+)/g)].some(
-      (m) => m[1] === domain || m[1]!.endsWith(`.${domain}`),
-    );
+export function senderAuthenticated(topResults: string | undefined, from: string): boolean {
+  const domain = from.split('@')[1]?.toLowerCase();
+  if (!topResults || !domain) return false;
+  let h = topResults.toLowerCase();
+  for (let prev = ''; prev !== h;) [prev, h] = [h, h.replace(/\([^()]*\)/g, ' ')];
+  const [authserv, ...results] = h.split(';');
+  if (authserv?.trim() !== 'mx.google.com') return false;
+  const aligned = (d: string) => d === domain || domain.endsWith(`.${d}`);
+  return results.some((result) => {
+    const r = result.trim();
+    const prop = (name: string) => new RegExp(`(?:^|\\s)${name.replace('.', '\\.')}=([^\\s;]+)`).exec(r)?.[1];
+    if (/^dmarc=pass\b/.test(r)) return prop('header.from') === domain;
+    if (/^dkim=pass\b/.test(r)) {
+      const d = prop('header.d') ?? prop('header.i')?.replace(/^.*@/, '');
+      return d !== undefined && aligned(d);
+    }
+    return false;
   });
 }
 
@@ -110,6 +148,10 @@ export async function parseMail(
 ): Promise<IncomingMail> {
   const parsed = await simpleParser(source, { skipHtmlToText: false, skipImageLinks: true });
   const from = firstAddress(parsed.from);
+  const lines = (key: string) =>
+    parsed.headerLines.filter((l) => l.key === key).map((l) => l.line.slice(l.line.indexOf(':') + 1));
+  // Two From headers: which one a client shows is not certain, so the mail is not trusted.
+  const oneFrom = lines('from').length === 1;
   const header = (name: string) => parsed.headers.get(name);
   const precedence = headerText(header('precedence'));
   const autoSubmitted = headerText(header('auto-submitted')) || 'no';
@@ -122,7 +164,7 @@ export async function parseMail(
     subject: parsed.subject ?? '',
     text: parsed.text ?? '',
     threadId,
-    authenticated: senderAuthenticated(headerList(header('authentication-results')), from),
+    authenticated: oneFrom && senderAuthenticated(lines('authentication-results')[0], from),
     automatic:
       autoSubmitted !== 'no' ||
       ['bulk', 'junk', 'list', 'auto_reply'].includes(precedence) ||

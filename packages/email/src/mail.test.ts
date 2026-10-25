@@ -55,16 +55,69 @@ describe('parseMail', () => {
 });
 
 describe('senderAuthenticated', () => {
-  it('needs DMARC, or a passing DKIM signature of the From domain', () => {
-    expect(senderAuthenticated(['mx.google.com; dmarc=pass header.from=acme.com'], 'd@acme.com')).toBe(true);
-    expect(senderAuthenticated(['mx.google.com; dkim=pass header.i=@mail.acme.com'], 'd@acme.com')).toBe(
-      true,
-    );
+  const gmail = (results: string) => `mx.google.com;\r\n       ${results}`;
+  it("trusts only Gmail's own verdict for the From domain: DMARC, or an aligned DKIM pass", () => {
     expect(
-      senderAuthenticated(['mx.google.com; dkim=pass header.i=@evil.example; dmarc=fail'], 'd@acme.com'),
+      senderAuthenticated(
+        gmail('dkim=pass header.i=@acme.com; dmarc=pass (p=NONE) header.from=acme.com'),
+        'd@acme.com',
+      ),
+    ).toBe(true);
+    expect(
+      senderAuthenticated(gmail('dkim=pass header.i=@mail.acme.com header.s=x'), 'd@mail.acme.com'),
+    ).toBe(true);
+    expect(senderAuthenticated(gmail('dkim=pass header.d=acme.com'), 'd@eu.acme.com')).toBe(true);
+    expect(senderAuthenticated(gmail('spf=pass smtp.mailfrom=d@acme.com'), 'd@acme.com')).toBe(false);
+    expect(senderAuthenticated(undefined, 'd@acme.com')).toBe(false);
+  });
+
+  it('refuses the forgeries that used to pass', () => {
+    // DMARC passed, but for another domain than the From.
+    expect(senderAuthenticated(gmail('dmarc=pass header.from=evil.example'), 'd@acme.com')).toBe(false);
+    // A sender-chosen "dmarc=pass" inside a comment of Gmail's SPF result.
+    expect(
+      senderAuthenticated(
+        gmail(
+          'spf=pass (google.com: domain of dmarc=pass@evil.example designates 1.2.3.4) smtp.mailfrom=x@evil.example; dmarc=fail (p=NONE) header.from=acme.com',
+        ),
+        'd@acme.com',
+      ),
     ).toBe(false);
-    expect(senderAuthenticated(['mx.google.com; spf=pass'], 'd@acme.com')).toBe(false);
-    expect(senderAuthenticated([], 'd@acme.com')).toBe(false);
+    // A header Gmail did not write.
+    expect(senderAuthenticated('evil.example; dmarc=pass header.from=acme.com', 'd@acme.com')).toBe(false);
+    // DKIM of a lookalike domain.
+    expect(senderAuthenticated(gmail('dkim=pass header.i=@notacme.com'), 'd@acme.com')).toBe(false);
+  });
+
+  it('parseMail reads only the topmost header, and distrusts two From headers', async () => {
+    const forged = await parseMail(
+      raw(
+        [
+          'Authentication-Results: mx.google.com; dmarc=fail (p=NONE) header.from=acme.com',
+          'From: dana@acme.com',
+          'Authentication-Results: mx.google.com; dmarc=pass header.from=acme.com',
+          'Message-ID: <f@x>',
+        ],
+        'Delete everything.',
+      ),
+      1,
+      null,
+    );
+    expect(forged.authenticated).toBe(false);
+    const twoFroms = await parseMail(
+      raw(
+        [
+          'Authentication-Results: mx.google.com; dmarc=pass header.from=evil.example',
+          'From: eve@evil.example',
+          'From: dana@acme.com',
+          'Message-ID: <g@x>',
+        ],
+        'Hi',
+      ),
+      2,
+      null,
+    );
+    expect(twoFroms.authenticated).toBe(false);
   });
 });
 
@@ -86,8 +139,26 @@ describe('replyText', () => {
     expect(
       replyText('Yes.\n\nOn Sat, Oct 25, 2026 at 9:00 AM Loop Engineering <\nloop@example.com> wrote:\n> q'),
     ).toBe('Yes.');
-    // Another language's attribution: a line naming an address and ending with a colon.
+    // Another language's attribution: a line naming an address and ending with a colon, with
+    // Gmail's direction marks, and wrapped over three lines.
     expect(replyText('כן.\n\nבתאריך יום ש׳, 25 באוק׳ 2026, Loop <loop@example.com> כתב/ה:\n> q')).toBe('כן.');
+    expect(
+      replyText(
+        'כן.\n\n\u200fבתאריך יום ש׳, 25 באוק׳ 2026 ב-9:00 מאת \u202aLoop\u202c <\u200e\nloop@example.com\u200e>:\u200f\n> q',
+      ),
+    ).toBe('כן.');
+    expect(
+      replyText('Yes.\nOn Sat, Oct 25, 2026 at 9:00 AM Loop\nEngineering <loop@example.com>\nwrote:\n> q'),
+    ).toBe('Yes.');
+    // Written under the quote.
+    expect(
+      replyText('On Sat, Oct 25, 2026 at 9:00 AM Loop <loop@example.com> wrote:\n> Which?\n\nBoth.'),
+    ).toBe('Both.');
+    // Not a quote: a line that names an address, and a "From:" in the text.
+    expect(replyText('Ask Dana <dana@acme.com>:\nshe knows.')).toBe('Ask Dana <dana@acme.com>:\nshe knows.');
+    expect(replyText('From: the home page, remove the banner.')).toBe(
+      'From: the home page, remove the banner.',
+    );
     expect(replyText('Both.\n\n-----Original Message-----\nFrom: x')).toBe('Both.');
     expect(replyText('> quoted\nmine\n> more')).toBe('mine');
     expect(replyText('A new task\nwith two lines')).toBe('A new task\nwith two lines');

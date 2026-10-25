@@ -19,6 +19,7 @@ import {
   cleanPlan,
   cleanTitle,
   type ClarifyMail,
+  type ClarifyOptions,
   type Clarification,
   type Plan,
 } from './prompt.js';
@@ -75,10 +76,14 @@ export class CliClassifier implements Classifier {
   }
 
   /** For an emailed task: questions for the requester, or the plan (see buildClarifyPrompt). */
-  async clarify(mails: ClarifyMail[], mustPlan: boolean, signal: AbortSignal): Promise<Clarification> {
-    const answer = cleanClarification(await this.ask(buildClarifyPrompt(mails, mustPlan), signal));
-    if (!answer || (mustPlan && !('plan' in answer)))
-      throw new ClassifierError('the clarifier answered with neither questions nor a plan');
+  async clarify(mails: ClarifyMail[], options: ClarifyOptions, signal: AbortSignal): Promise<Clarification> {
+    const answer = cleanClarification(await this.ask(buildClarifyPrompt(mails, options), signal));
+    const allowed =
+      answer !== null &&
+      ('plan' in answer ||
+        ('questions' in answer && !options.mustPlan) ||
+        ('nothing' in answer && Boolean(options.earlier)));
+    if (!allowed) throw new ClassifierError('the clarifier gave no answer it may give here');
     return answer;
   }
 

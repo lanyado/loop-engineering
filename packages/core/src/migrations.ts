@@ -582,7 +582,8 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX email_threads_by_request ON email_threads(request_id) WHERE request_id IS NOT NULL;
       CREATE INDEX email_threads_by_mail_thread ON email_threads(mail_thread_id) WHERE mail_thread_id IS NOT NULL;
 
-      -- Every mail in a thread, both ways; an outgoing one may carry a question or a PR's release note.
+      -- Every mail in a thread, both ways. An outgoing one may ask a question or announce a PR; one
+      -- that started work (a plan, or a reply passed to a session) names the request it created.
       CREATE TABLE email_messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         thread_id INTEGER NOT NULL REFERENCES email_threads(id) ON DELETE CASCADE,
@@ -591,6 +592,7 @@ export const MIGRATIONS: readonly Migration[] = [
         text TEXT NOT NULL,
         question_id INTEGER REFERENCES questions(id) ON DELETE SET NULL,
         pr_id INTEGER REFERENCES pull_requests(id) ON DELETE SET NULL,
+        request_id INTEGER REFERENCES requests(id) ON DELETE SET NULL,
         created_at TEXT NOT NULL
       );
       CREATE INDEX email_messages_by_thread ON email_messages(thread_id);

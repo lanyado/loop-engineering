@@ -34,6 +34,9 @@ export class GmailMailbox implements Mailbox {
       auth: { user: this.address, pass: this.password },
       logger: false,
     });
+    // imapflow reports a dropped socket or a timeout as an 'error' event; unheard, it would end the
+    // process. The command waiting on the connection fails too, and that failure is what counts.
+    imap.on('error', (err: Error) => this.log(`[email] IMAP connection: ${err.message}`));
     await imap.connect().catch((err: Error & { authenticationFailed?: boolean }) => {
       throw err.authenticationFailed
         ? new Error(

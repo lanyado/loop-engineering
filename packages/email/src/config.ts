@@ -16,6 +16,25 @@ export class EmailConfigError extends Error {
 }
 
 const ADDRESS = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+/** Domains anyone can get an address at: "@gmail.com" would let the whole world send tasks. */
+const PUBLIC_DOMAINS = new Set([
+  'gmail.com',
+  'googlemail.com',
+  'outlook.com',
+  'hotmail.com',
+  'live.com',
+  'msn.com',
+  'yahoo.com',
+  'icloud.com',
+  'me.com',
+  'aol.com',
+  'proton.me',
+  'protonmail.com',
+  'gmx.com',
+  'mail.com',
+  'yandex.com',
+  'zoho.com',
+]);
 
 /**
  * Reads the email channel's settings from the environment. With no EMAIL_ADDRESS it is disabled.
@@ -42,6 +61,10 @@ export function loadEmailConfig(env: NodeJS.ProcessEnv = process.env): EmailConf
   for (const entry of allowlist)
     if (!(entry.startsWith('@') ? ADDRESS.test(`x${entry}`) : ADDRESS.test(entry)))
       problems.push(`EMAIL_ALLOWLIST has "${entry}": use an address or @domain`);
+    else if (entry.startsWith('@') && PUBLIC_DOMAINS.has(entry.slice(1)))
+      problems.push(
+        `EMAIL_ALLOWLIST has "${entry}": anyone can have an address there, so list the addresses`,
+      );
   const pollText = read('EMAIL_POLL_SECONDS') || '60';
   const pollSeconds = Number(pollText);
   if (!Number.isInteger(pollSeconds) || pollSeconds < 15 || pollSeconds > 3600)

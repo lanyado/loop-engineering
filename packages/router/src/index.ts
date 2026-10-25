@@ -16,6 +16,7 @@ export {
   cleanClarification,
   MAX_CLARIFYING_QUESTIONS,
   type ClarifyMail,
+  type ClarifyOptions,
   type Clarification,
   cleanParts,
   cleanPlan,
