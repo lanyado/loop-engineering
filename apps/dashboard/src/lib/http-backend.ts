@@ -1,6 +1,6 @@
 import type * as z from 'zod';
 import { BackendError, type Backend } from './backend';
-import { responses, type PipelineUpdate } from './schemas';
+import { responses, type PipelineUpdate, type Rigor } from './schemas';
 
 export interface HttpBackendOptions {
   /** e.g. https://loop.example.com (no trailing /api). */
@@ -66,6 +66,10 @@ export class HttpBackend implements Backend {
 
   async openTerminal(sessionId: number) {
     await this.send('POST', `/sessions/${sessionId}/terminal`, {}, responses.terminal);
+  }
+
+  async setRigor(sessionId: number, rigor: Rigor) {
+    await this.send('PATCH', `/sessions/${sessionId}`, { rigor }, responses.rigor);
   }
 
   async endSession(sessionId: number) {

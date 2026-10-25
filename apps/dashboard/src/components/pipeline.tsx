@@ -5,6 +5,7 @@ import { shows, type RowDetail } from '../lib/layout';
 import type { PullRequest, Question, TreeSession } from '../lib/schemas';
 import { EndSessionButton } from './end-session-button';
 import { QuestionCard } from './question-card';
+import { RigorDial } from './rigor-dial';
 import { SkipCheck } from './skip-check';
 import {
   DetailsButton,
@@ -251,6 +252,7 @@ function Node({
   chip,
   testId = 'node',
   stage,
+  off = false,
   children,
 }: {
   kind: keyof typeof ICON_PATHS;
@@ -262,15 +264,18 @@ function Node({
   chip?: ReactNode;
   testId?: string;
   stage?: string;
+  /** The session's rigor does not run this check: drawn dimmed. */
+  off?: boolean;
   children?: ReactNode;
 }) {
   const shown = questions.length > 0 ? 'waiting' : state;
   return (
     <div
-      className={`node node-${shown} node-${kind}`}
+      className={`node node-${shown} node-${kind}${off ? ' node-off' : ''}`}
       data-testid={testId}
       data-stage={stage ?? kind}
       data-state={shown}
+      data-off={off || undefined}
     >
       <span className="node-icon">
         <Icon kind={kind} />
@@ -300,7 +305,9 @@ const edgeInto = (state: NodeState): NodeState =>
 const nodeDetail = (node: StageNode): string =>
   node.questions.length > 0
     ? 'waiting on you'
-    : (node.problem ?? (node.skipped ? 'skipped' : STATE_WORDS[node.state]));
+    : node.off
+      ? 'off'
+      : (node.problem ?? (node.skipped ? 'skipped' : STATE_WORDS[node.state]));
 
 /** The deploy node also carries where the lane ended: shipped, merged, or how it stopped. */
 function deployDetail(node: StageNode, lane: Lane): string {
@@ -324,10 +331,14 @@ function guardianDetail(node: StageNode, lane: Lane): string {
   return nodeDetail(node);
 }
 
-/** Stages whose agent job has a terminal (its log): review, tests, QA and custom stages, once they have run. */
+/**
+ * Stages whose agent job has a terminal (its log): review, tests, QA and custom stages, once they have
+ * run. Not a check the session's rigor turned off: the loop passes over it without a job.
+ */
 const JOB_STAGES = new Set<NodeStage>(['review', 'tests', 'qa']);
 function stageTerminal(lane: Lane, node: StageNode): TerminalTarget | null {
-  if (!lane.pr || !(node.custom || JOB_STAGES.has(node.stage)) || node.state === 'todo') return null;
+  if (!lane.pr || !(node.custom || JOB_STAGES.has(node.stage)) || node.state === 'todo' || node.off)
+    return null;
   return { kind: 'stage', prId: lane.pr.id, stage: node.stage };
 }
 
@@ -374,12 +385,15 @@ export interface RowEdit {
 function LaneView({
   lane,
   first,
+  rigor,
   part,
   edit,
   readOnly,
 }: {
   lane: Lane;
   first: boolean;
+  /** The session's rigor (Light has its own round cap). */
+  rigor: string;
   part: RowEdit['part'];
   edit: RowEdit | undefined;
   readOnly: boolean;
@@ -398,6 +412,7 @@ function LaneView({
           kind={node.icon}
           stage={node.stage}
           state={node.state}
+          off={node.off}
           title={node.label}
           detail={
             detail ??
@@ -448,7 +463,7 @@ function LaneView({
             >
               {pr.repo}#{pr.number}
             </a>
-            {pr.outcome === null && <span className="muted">{roundLabel(pr.round)}</span>}
+            {pr.outcome === null && <span className="muted">{roundLabel(pr.round, rigor)}</span>}
             {part(
               'prMetrics',
               <span className="muted lane-metrics" data-testid="pr-metrics">
@@ -572,7 +587,7 @@ export function PipelineRow({
                   <a className="mono" href={f.pr.url} target="_blank" rel="noreferrer">
                     {f.pr.repo}#{f.pr.number}
                   </a>{' '}
-                  · {f.label} ({roundLabel(f.pr.round)}) ·{' '}
+                  · {f.label} ({roundLabel(f.pr.round, session.rigor)}) ·{' '}
                   {f.sentAt ? 'the builder is fixing it, nothing to do' : 'being sent to the builder'}
                 </p>
                 {f.items.length > 0 && (
@@ -590,23 +605,35 @@ export function PipelineRow({
     >
       <div className="canvas" data-testid="pipeline" data-session-id={session.id}>
         <div className="session-header" data-testid="session-header">
-          <h3 className="session-title" data-testid="session-title">
-            {session.title}
-          </h3>
-          <div className="session-meta">
-            <span data-testid="session-header-status">
-              {humanize(session.status)}
-              {pause && ` · ${pause}`}
-            </span>
-            {part('runtime', <span className="muted">{running}</span>)}
-            {session.subagents.length > 0 &&
-              part(
-                'subagents',
-                <span className="muted" data-testid="subagent-count">
-                  {session.subagents.length} subagent{session.subagents.length === 1 ? '' : 's'}
-                </span>,
-              )}
+          <div className="session-heading">
+            <h3 className="session-title" data-testid="session-title">
+              {session.title}
+            </h3>
+            <div className="session-meta">
+              <span data-testid="session-header-status">
+                {humanize(session.status)}
+                {pause && ` · ${pause}`}
+              </span>
+              {part('runtime', <span className="muted">{running}</span>)}
+              {session.subagents.length > 0 &&
+                part(
+                  'subagents',
+                  <span className="muted" data-testid="subagent-count">
+                    {session.subagents.length} subagent{session.subagents.length === 1 ? '' : 's'}
+                  </span>,
+                )}
+            </div>
           </div>
+          {/* Folder projects have no PRs, so nothing for the dial to set. */}
+          {!folder && (
+            <RigorDial
+              sessionId={session.id}
+              title={session.title}
+              rigor={session.rigor}
+              readOnly={readOnly}
+              preview={edit !== undefined}
+            />
+          )}
         </div>
         <div className="flow">
           <Node
@@ -654,6 +681,7 @@ export function PipelineRow({
                     key={lane.pr?.id ?? 'none'}
                     lane={lane}
                     first={i === 0}
+                    rigor={session.rigor}
                     part={part}
                     edit={edit}
                     readOnly={readOnly}

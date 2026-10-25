@@ -514,3 +514,64 @@ test('a check node offers Skip behind a confirmation pop-up; demo data cannot be
   await expect(dialog).toHaveCount(0);
   await expect(skip).toBeFocused();
 });
+
+test('a rigor dial sits above each git session pipeline, and the lane dims what its level does not run', async ({
+  page,
+}, info) => {
+  await open(page);
+  const row = (title: string) => page.getByTestId('session-row').filter({ hasText: title });
+
+  const checkout = row('Apple Pay checkout');
+  const dial = checkout.getByTestId('rigor-dial');
+  await expect(dial).toHaveAttribute('data-rigor', 'thorough');
+  await expect(dial.getByRole('radiogroup')).toHaveAccessibleName('Rigor for Apple Pay checkout');
+  await expect(dial.getByRole('radio', { name: 'Thorough', exact: true })).toHaveAttribute(
+    'aria-checked',
+    'true',
+  );
+  // The caption, plus (for screen readers; a tooltip on the dial) the demo's read-only note.
+  await expect(dial.getByTestId('rigor-caption')).toHaveText(
+    'Thorough: every check, QA on every PR, tests for every change Demo data is read-only.',
+  );
+  await expect(dial.getByRole('radiogroup')).toHaveAttribute('title', 'Demo data is read-only.');
+  await expect(checkout.locator('[data-off]')).toHaveCount(0);
+  // Demo data: every stop is disabled.
+  for (const radio of await dial.getByRole('radio').all()) await expect(radio).toBeDisabled();
+
+  // Light: QA is off (dimmed, no Skip), tests and review run; two rounds at most.
+  const rss = row('RSS feed + dark mode');
+  await expect(rss.getByTestId('rigor-dial')).toHaveAttribute('data-rigor', 'light');
+  const qa = rss.locator('[data-stage="qa"]');
+  await expect(qa).toHaveAttribute('data-off', 'true');
+  await expect(qa).toContainText('off');
+  await expect(qa.getByTestId('skip-check')).toHaveCount(0);
+  expect(Number(await qa.evaluate((el) => getComputedStyle(el).opacity))).toBeLessThan(1);
+  await expect(rss.locator('[data-stage="tests"]')).not.toHaveAttribute('data-off', 'true');
+  await expect(rss).toContainText('round 2/2');
+
+  // Fast: every check off.
+  const cdn = row('Image CDN migration');
+  await expect(cdn.getByTestId('rigor-dial')).toHaveAttribute('data-rigor', 'fast');
+  for (const stage of ['tests', 'review', 'qa'])
+    await expect(cdn.locator(`[data-pr-number="41"] [data-stage="${stage}"]`)).toHaveAttribute(
+      'data-off',
+      'true',
+    );
+
+  // Standard draws the pipeline as it is; a folder project has no PRs and no dial.
+  await expect(row('Search relevance').getByTestId('rigor-dial')).toHaveAttribute('data-rigor', 'standard');
+  await expect(row('Search relevance').locator('[data-off]')).toHaveCount(0);
+  await expect(page.locator('[data-project="resume"]').getByTestId('rigor-dial')).toHaveCount(0);
+
+  // It fits a phone: inside the window, and the page does not scroll sideways.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectNoHorizontalScroll(page);
+  const box = await dial.boundingBox();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+  await snap(page, info, 'rigor');
+
+  // The editor's preview draws it, inert.
+  await page.goto('/edit');
+  await expect(page.getByTestId('rigor-dial').first()).toHaveAttribute('inert', '');
+});

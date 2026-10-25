@@ -14,6 +14,8 @@ import {
   type PullRequestPatch,
   type Question,
   type Repo,
+  DEFAULT_RIGOR,
+  type Rigor,
   type Session,
   type Store,
 } from '@loop-engineering/core';
@@ -71,6 +73,15 @@ import {
   type StageRuns,
 } from './stages.js';
 import { runsOn } from './changes.js';
+import {
+  qaAlways,
+  reviewerNote,
+  rigorChecks,
+  rigorMaxRounds,
+  rigorName,
+  testerNote,
+  THOROUGH_QA_REASON,
+} from './rigor.js';
 import {
   loopState,
   nextCheck,
@@ -279,6 +290,8 @@ interface Ctx {
   project: Project;
   repo: Repo;
   ref: RepoRef;
+  /** The rigor of the PR's session, read fresh for every step (standard without a session). */
+  rigor: Rigor;
 }
 
 type JobOutcome<T> =
@@ -286,6 +299,10 @@ type JobOutcome<T> =
   | { ok: false; progressed: boolean };
 
 const APPROVAL_OPTIONS = ['Merge', 'Hold', 'Close'] as const;
+
+/** A stage's instructions with the session's rigor note after them (none at Standard). */
+const withNote = (instructions: string, note: string): string =>
+  note ? `${instructions.trim()}\n\n${note}` : instructions;
 const TAKE_OVER = 'Take over';
 const DEPLOY_OPTIONS = ['Keep waiting', 'Mark deployed', 'Revert'] as const;
 const REVERT_OPTIONS = ['Retry', "I'll handle it"] as const;
@@ -596,7 +613,8 @@ export class LoopEngine {
       );
       return false;
     }
-    const c: Ctx = { pr, s, project, repo, ref: repoRef(repo) };
+    const session = pr.sessionId === null ? undefined : this.deps.store.sessions.get(pr.sessionId);
+    const c: Ctx = { pr, s, project, repo, ref: repoRef(repo), rigor: session?.rigor ?? DEFAULT_RIGOR };
     // Fail closed: while pipeline.json cannot be read, the loop does nothing (no merge, deploy watch,
     // revert or cleanup), since it cannot know what the user wants.
     const broken = this.pipeline().error;
@@ -716,8 +734,9 @@ export class LoopEngine {
     );
     if (!job.ok) return job.progressed;
     const v = job.verdict;
-    // QA is slow: it runs only when the tester asks for it AND the diff touches UI files.
-    if (v.qaNeeded && !(await this.changes(c, 'ui-changes'))) {
+    // QA is slow: it runs only when the tester asks for it AND the diff touches UI files (at rigor
+    // Thorough it runs anyway, see nextCheck).
+    if (v.qaNeeded && !qaAlways(c.rigor) && !(await this.changes(c, 'ui-changes'))) {
       this.log(
         `PR ${c.pr.repo}#${c.pr.number}: the tester asked for QA, but the diff changes no UI files; skipping QA`,
       );
@@ -761,8 +780,10 @@ export class LoopEngine {
 
   private async qaStep(c: Ctx, gh: GhPr): Promise<boolean> {
     if (c.s.feedback) return this.awaitFix(c, gh);
-    // No tester ran before QA to judge whether it is needed: QA runs when the diff touches UI files.
-    if (!testsBeforeQa(this.checksOf(c))) {
+    if (qaAlways(c.rigor)) {
+      if (!c.s.qaReason) this.save(c, {}, { qaReason: THOROUGH_QA_REASON });
+    } else if (!testsBeforeQa(this.checksOf(c))) {
+      // No tester ran before QA to judge whether it is needed: QA runs when the diff touches UI files.
       if (!(await this.changes(c, 'ui-changes'))) {
         this.log(`PR ${c.pr.repo}#${c.pr.number}: the diff changes no UI files; skipping QA`);
         return this.afterCheck(c, gh, { qaSha: gh.headRefOid }, {});
@@ -825,19 +846,23 @@ export class LoopEngine {
     return this.stages.pipeline();
   }
 
-  /** "passed its checks", naming the ones the human skipped: what the merge question says. */
+  /**
+   * "passed its checks", naming the ones the human skipped and the session's rigor when it is not
+   * Standard: what the merge question says.
+   */
   private passedText(c: Ctx): string {
-    const { checks } = this.pipeline();
+    const checks = rigorChecks(c.rigor, this.pipeline().checks);
     const skipped = (c.s.skip ?? []).filter((id) => checks.includes(id));
     const names = skipped.map((id) => this.stages.stage(id)?.title ?? id).join(', ');
-    if (checks.length === 0) return 'has no checks before merge';
-    if (skipped.length === checks.length) return `ran no checks (you skipped ${names})`;
-    return skipped.length > 0 ? `passed its checks (you skipped ${names})` : 'passed its checks';
+    const level = c.rigor === 'standard' ? '' : ` at rigor ${rigorName(c.rigor)}`;
+    if (checks.length === 0) return `has no checks before merge${level}`;
+    if (skipped.length === checks.length) return `ran no checks${level} (you skipped ${names})`;
+    return `passed its checks${level}${skipped.length > 0 ? ` (you skipped ${names})` : ''}`;
   }
 
-  /** The PR gets a code review: the pipeline has it and the human did not skip it. */
+  /** The PR gets a code review: the pipeline has it, its rigor keeps it and the human did not skip it. */
   private reviews(c: Ctx): boolean {
-    return this.pipeline().checks.includes('review') && !c.s.skip?.includes('review');
+    return this.checksOf(c).includes('review');
   }
 
   /** Whether the PR's diff makes a check with this `runs` setting run (no diff is fetched for "always"). */
@@ -845,14 +870,14 @@ export class LoopEngine {
     return runs === 'always' || runsOn(runs, await this.deps.github.diff(c.ref, c.pr.number));
   }
 
-  /** The checks this PR runs: the pipeline's, without the ones the human skipped for it. */
+  /** The checks this PR runs: the pipeline's that its session's rigor keeps, without the ones the human skipped for it. */
   private checksOf(c: Ctx): string[] {
     const skipped = c.s.skip ?? [];
-    return this.pipeline().checks.filter((id) => !skipped.includes(id));
+    return rigorChecks(c.rigor, this.pipeline().checks).filter((id) => !skipped.includes(id));
   }
 
   private nextCheck(c: Ctx, head: string): string | null {
-    return nextCheck(c.s, head, this.checksOf(c));
+    return nextCheck(c.s, head, this.checksOf(c), qaAlways(c.rigor));
   }
 
   /** The loop cannot move this PR on until `why` is fixed: say so once, and record it on the PR. */
@@ -886,11 +911,14 @@ export class LoopEngine {
   }
 
   /**
-   * Merging waits for the human: auto-merge is off, only a free model reviewed this head, or the
-   * pipeline has no code review at all.
+   * Merging waits for the human: auto-merge is off, only a free model reviewed this head, or the PR
+   * gets no code review. At rigor Fast nothing but auto-merge (and CI) stands before the merge: the
+   * human chose that for the session.
    */
   private needsHuman(c: Ctx): boolean {
-    return !c.project.autoMerge || c.s.reviewedBy === 'opencode' || !this.reviews(c);
+    if (!c.project.autoMerge) return true;
+    if (c.rigor === 'fast') return false;
+    return c.s.reviewedBy === 'opencode' || !this.reviews(c);
   }
 
   private toMerge(c: Ctx, state: Partial<LoopState>, usage: MetricsDelta): boolean {
@@ -919,7 +947,7 @@ export class LoopEngine {
         context: `${gh.title}\n${gh.url}\nHead ${head}. ${
           !c.project.autoMerge
             ? `Auto-merge is off for ${c.project.name}.`
-            : !this.pipeline().checks.includes('review')
+            : !rigorChecks(c.rigor, this.pipeline().checks).includes('review')
               ? 'The pipeline has no code review, so it is not merged automatically.'
               : !this.reviews(c)
                 ? 'Its code review was skipped, so it is not merged automatically.'
@@ -1714,7 +1742,7 @@ export class LoopEngine {
       case 'review':
         return {
           prompt: reviewPrompt(context, limit),
-          systemPrompt: reviewSystem(prompt('review')),
+          systemPrompt: reviewSystem(withNote(prompt('review'), reviewerNote(c.rigor))),
           rights: REVIEW_RIGHTS,
         };
       case 'tests':
@@ -1722,7 +1750,7 @@ export class LoopEngine {
           prompt: testPrompt(
             { ...context, testsAddedBefore: Boolean(c.s.testsAdded) },
             limit,
-            prompt('tests'),
+            withNote(prompt('tests'), testerNote(c.rigor, Boolean(c.s.testsAdded))),
           ),
           systemPrompt: TEST_SYSTEM,
           rights: TEST_RIGHTS,
@@ -1901,7 +1929,8 @@ export class LoopEngine {
   // ---------------------------------------------------------------- helpers
 
   private maxRounds(c: Ctx): number {
-    return c.s.maxRounds ?? this.config.maxRounds;
+    const base = this.config.maxRounds;
+    return rigorMaxRounds(c.rigor, c.s.maxRounds ?? base, base);
   }
 
   private pendingQuestion(c: Ctx, kind: QuestionKind): Question | undefined {

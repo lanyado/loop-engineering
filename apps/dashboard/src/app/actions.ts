@@ -18,6 +18,7 @@ import {
   answerInput,
   editsInput,
   endSessionInput,
+  rigorInput,
   skipCheckInput,
   hideProjectInput,
   stageTerminalInput,
@@ -152,6 +153,14 @@ export async function endSession(sessionId: number): Promise<ActionResult> {
   return write(endSessionInput, { sessionId }, async (d, backend) => {
     await backend.endSession(d.sessionId);
     return 'Session ended.';
+  });
+}
+
+/** The rigor dial above a session's pipeline. */
+export async function setRigor(sessionId: number, rigor: string): Promise<ActionResult> {
+  return write(rigorInput, { sessionId, rigor }, async (d, backend) => {
+    await backend.setRigor(d.sessionId, d.rigor);
+    return undefined;
   });
 }
 

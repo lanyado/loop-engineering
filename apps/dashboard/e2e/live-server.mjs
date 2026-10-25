@@ -75,6 +75,8 @@ function seed(server) {
     provider: 'opencode',
     branch: 'loop/rss',
   });
+  // The rigor dial at Fast: its lane draws every check off.
+  store.sessions.update(rss.id, { rigor: 'fast' });
   // A past Claude Code conversation, as the importer stores it.
   store.sessions.importEnded({
     projectId: blog.id,

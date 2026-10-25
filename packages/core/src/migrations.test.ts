@@ -340,6 +340,33 @@ describe('migrations', () => {
     db.close();
   });
 
+  it('migration 21 gives existing sessions the standard rigor and refuses unknown levels', () => {
+    const db = new Database(':memory:');
+    migrate(
+      db,
+      MIGRATIONS.filter((m) => m.version < 21),
+    );
+    db.exec(`
+      INSERT INTO projects (name, created_at) VALUES ('p', 't');
+      INSERT INTO sessions (project_id, title, model, branch, created_at) VALUES (1, 'live', 'opus', 'b', 't');
+      INSERT INTO sessions (project_id, title, status, model, branch, created_at, ended_at)
+        VALUES (1, 'done', 'ended', 'opus', 'b2', 't', 't');
+    `);
+    expect(
+      migrate(
+        db,
+        MIGRATIONS.filter((m) => m.version <= 21),
+      ),
+    ).toEqual([21]);
+    expect(db.prepare('SELECT id, title, status, rigor FROM sessions ORDER BY id').all()).toEqual([
+      { id: 1, title: 'live', status: 'active', rigor: 'standard' },
+      { id: 2, title: 'done', status: 'ended', rigor: 'standard' },
+    ]);
+    db.exec(`UPDATE sessions SET rigor = 'thorough' WHERE id = 1`);
+    expect(() => db.exec(`UPDATE sessions SET rigor = 'yolo' WHERE id = 1`)).toThrow(/CHECK/);
+    db.close();
+  });
+
   it('migration 15 drops cloud and calendar/travel data: old pause reasons become manual, nothing is deleted', () => {
     const db = new Database(':memory:');
     db.pragma('foreign_keys = ON');

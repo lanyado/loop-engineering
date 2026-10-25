@@ -22,6 +22,7 @@ interface Ids {
   blog: number;
   checkout: number;
   search: number;
+  rss: number;
   question: number;
   approval: number;
 }
@@ -630,4 +631,48 @@ test('a check is skipped for one PR from a pop-up on its node, and brought back 
   await page.getByTestId('skip-confirm').click();
   await expect(qa.getByTestId('skip-check')).toHaveText('Skip');
   await expect(qa).not.toContainText('skipped');
+});
+
+test('the rigor dial saves a level, and the lane under it runs those checks again', async ({
+  page,
+}, info) => {
+  await open(page);
+  const row = page
+    .locator('[data-testid="project"][data-project="blog"]')
+    .getByTestId('session-row')
+    .filter({ hasText: 'RSS feed' });
+  const dial = row.getByTestId('rigor-dial');
+  const lane = row.locator('[data-testid="lane"][data-pr-number="44"]');
+  const stored = async () => {
+    const { projects } = await api<{
+      projects: { name: string; sessions: { id: number; rigor: string }[] }[];
+    }>('/tree');
+    return projects.find((p) => p.name === 'blog')?.sessions.find((s) => s.id === ids.rss)?.rigor;
+  };
+  await expect(dial).toHaveAttribute('data-rigor', 'fast');
+  await expect(dial.getByTestId('rigor-caption')).toContainText('Fast: no checks');
+  await expect(lane.locator('[data-off]')).toHaveCount(3);
+  await expect(lane.locator('[data-stage="qa"]')).toContainText('off');
+
+  await dial.getByRole('radio', { name: 'Thorough', exact: true }).click();
+  await expect(dial).toHaveAttribute('data-rigor', 'thorough');
+  await expect(lane.locator('[data-off]')).toHaveCount(0);
+  await expect.poll(stored).toBe('thorough');
+  await page.reload();
+  await expect(dial).toHaveAttribute('data-rigor', 'thorough');
+  await expect(dial.getByRole('radio', { name: 'Thorough', exact: true })).toHaveAttribute(
+    'aria-checked',
+    'true',
+  );
+  await expect(lane.locator('[data-off]')).toHaveCount(0);
+
+  // The keyboard moves along the dial like any radio group, and each step is saved.
+  await dial.getByRole('radio', { name: 'Thorough', exact: true }).focus();
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowLeft');
+  await expect(dial).toHaveAttribute('data-rigor', 'light');
+  await expect(dial.getByRole('radio', { name: 'Light', exact: true })).toBeFocused();
+  await expect.poll(stored).toBe('light');
+  await expect(lane.locator('[data-off]')).toHaveCount(1);
+  await snap(page, info, 'rigor');
 });

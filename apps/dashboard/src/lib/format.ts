@@ -1,6 +1,8 @@
 /** Display helpers shared by server and client components. Pure functions, unit tested. */
 
 export const REVIEW_ROUND_CAP = 5;
+/** Rigor Light's cap (packages/loop/src/rigor.ts, LIGHT_MAX_ROUNDS). */
+export const LIGHT_ROUND_CAP = 2;
 
 /** Colour of a usage meter: calm, then amber from 70%, red from 90%. */
 export function usageTone(usedPercentage: number): 'active' | 'waiting' | 'bad' {
@@ -9,8 +11,8 @@ export function usageTone(usedPercentage: number): 'active' | 'waiting' | 'bad' 
   return 'active';
 }
 
-export function roundLabel(round: number): string {
-  return `round ${round}/${REVIEW_ROUND_CAP}`;
+export function roundLabel(round: number, rigor = 'standard'): string {
+  return `round ${round}/${rigor === 'light' ? LIGHT_ROUND_CAP : REVIEW_ROUND_CAP}`;
 }
 
 const PAUSE_LABELS: Record<string, string> = {

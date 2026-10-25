@@ -44,3 +44,4 @@ Hierarchy: Projects → Sessions → Subagents.
 - 2026-10-18: dashboard and server are local-only (127.0.0.1) for now; the Vercel preview was deleted. Moving sessions to Claude Code cloud and an always-on server are deferred.
 - Kept: searchable history, per-session MCP tokens, free-model fallback.
 - 2026-10-25: an email channel (Gmail): an allowlisted sender mails a task, the loop replies with clarifying questions if needed, then the plan as approved, carries the agents' questions on the same thread, and writes there when the new version is in production.
+- 2026-10-25: each session has a rigor dial (Fast, Light, Standard, Thorough) above its pipeline that trades safety against time and money for its PRs: Fast runs no checks and merges on CI when auto-merge is on, Light only tests and review (2 rounds), Standard the pipeline as it is, Thorough every check with QA on every PR. Details in docs/reference.md.
