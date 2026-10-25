@@ -602,6 +602,14 @@ test('with motion on, a drag moves each item once and lands where it is dropped'
   expect(new Set(wrapped).size).toBe(wrapped.length); // never back to an order it had
   expect(weekly.y).toBeGreaterThan(brand.y); // it did start on the second line
   await expect(editor).toBeVisible();
+  // A small drag along the second line, and a slow sweep across it, leave the order alone; dropped on
+  // the right half of the first line, it goes last there (third), and never swaps back on the way.
+  const second = await centre('.topbar-items > [data-item="claude"]');
+  const along = await drag('.topbar-items', 'claude', { x: second.x + 10, y: second.y }, top);
+  expect(along).toEqual(['weekly brand fiveHour claude']);
+  const wide = await centre('.topbar-items > [data-item="fiveHour"]');
+  const across = await drag('.topbar-items', 'claude', { x: wide.x + wide.x / 3, y: wide.y }, top);
+  expect(new Set(across).size).toBe(across.length);
   await page.setViewportSize({ width: 1280, height: 800 });
 
   // Escape mid-drag puts it back.

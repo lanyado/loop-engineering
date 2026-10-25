@@ -44,14 +44,11 @@ interface Drag {
   missed: boolean;
   /** The release was Escape (or the like): it goes back to where it started. */
   cancelled: boolean;
-  /** The place it just left and where the pointer was then: it goes back only once the pointer moves on. */
-  left: { index: number; pointer: { x: number; y: number } } | null;
+  /** Each item's middle in the row when it lifted, in list order: where the places are while it is carried. */
+  slots: { x: number; y: number; h: number }[];
   hold?: ReturnType<typeof setTimeout>;
   stop: () => void;
 }
-
-/** How far the pointer moves before an item may return to the place it just left. */
-const BOUNCE_PX = 12;
 
 const calm = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -73,22 +70,23 @@ function middle(el: HTMLElement, area: HTMLElement) {
 }
 
 /**
- * Where the carried item belongs: after every other item that comes before the pointer, reading the
- * row (or its wrapped lines) as laid out. Positions are the layout's, so an item still sliding away
- * never pulls it back, and items of different widths cannot swap back and forth.
+ * Where the carried item belongs, read off the row as it was when the item lifted (like iOS): the
+ * places do not move while it is carried, so a reorder that makes a wrapped row reflow cannot change
+ * the answer, and the item never swaps back and forth. It goes after every place before the pointer,
+ * reading line by line; its own place counts, so past it the item moves one fewer.
  */
 function placeFor(d: Drag): number {
   const box = d.area.getBoundingClientRect();
   const p = { x: d.pointer.x - box.left, y: d.pointer.y - box.top };
-  const others = [...d.area.querySelectorAll<HTMLElement>('[data-order]')]
-    .filter((el) => el !== d.el)
-    .map((el) => middle(el, d.area));
-  if (others.length === 0) return 0;
-  // The line the pointer is on: the nearest line's middle (a single row has one line).
-  const lineOf = (y: number) => others.reduce((a, b) => (Math.abs(b.y - y) < Math.abs(a.y - y) ? b : a)).y;
-  const line = lineOf(p.y);
-  // Items whose middles are within half a height of each other share a line.
-  return others.filter((o) => o.y < line - o.h / 2 || (Math.abs(o.y - line) <= o.h / 2 && o.x < p.x)).length;
+  const { slots } = d;
+  if (slots.length === 0) return d.index;
+  // The line the pointer is on: the nearest place's line (a single row has one).
+  const line = slots.reduce((a, b) => (Math.abs(b.y - p.y) < Math.abs(a.y - p.y) ? b : a)).y;
+  // Places whose middles are within half a height of each other share a line.
+  const before = slots.filter(
+    (s) => s.y < line - s.h / 2 || (Math.abs(s.y - line) <= s.h / 2 && s.x < p.x),
+  ).length;
+  return Math.min(before > d.startIndex ? before - 1 : before, slots.length - 1);
 }
 
 /**
@@ -116,15 +114,14 @@ export function useReorder<T>(items: readonly T[], onChange: (items: T[]) => voi
         const [dx, dy] = [r.left - now.left, r.top - now.top];
         if (dx || dy) el.animate([{ translate: `${dx}px ${dy}px` }, { translate: '0 0' }], SLIDE);
       }
-    // Placing again only for a move that came while rendering: a reorder that changes how the row
-    // wraps must not set off another one on its own.
+    // Placing again only for a move that came while rendering: a reorder alone never sets off another.
     const d = drag.current;
     if (d?.lifted) {
       follow(d);
       if (d.missed) retarget(d);
     } else if (landing.current) {
       const l = landing.current;
-      if (l.missed) retarget(l, l.cancelled ? l.startIndex : placeFor(l), l.cancelled);
+      if (l.missed) retarget(l, l.cancelled ? l.startIndex : placeFor(l));
       if (!before.current) land();
     }
   });
@@ -148,30 +145,22 @@ export function useReorder<T>(items: readonly T[], onChange: (items: T[]) => voi
     d.el.style.translate = `${d.pointer.x - d.grab.x - box.left - m.x}px ${d.pointer.y - d.grab.y - box.top - m.y}px`;
   }
 
-  /**
-   * Moves the carried item to `to` (where the pointer is). While a reorder is still rendering it is
-   * noted and done after. It never goes straight back to the place it just left until the pointer
-   * has moved on (`force` for a cancel): a wrapped row can reflow so that both places look right.
-   */
-  function retarget(d: Drag, to = placeFor(d), force = false) {
+  /** Moves the carried item to `to` (where the pointer is); while a reorder is still rendering, after it. */
+  function retarget(d: Drag, to = placeFor(d)) {
     if (before.current) {
       d.missed = true;
       return;
     }
     d.missed = false;
-    if (to === d.index) return;
-    const { left } = d;
-    const still = left && Math.hypot(d.pointer.x - left.pointer.x, d.pointer.y - left.pointer.y) < BOUNCE_PX;
-    if (!force && left?.index === to && still) return;
-    if (reorder(d.index, to, d.area)) {
-      d.left = { index: d.index, pointer: { ...d.pointer } };
-      d.index = to;
-    }
+    if (reorder(d.index, to, d.area)) d.index = to;
   }
 
   function lift(d: Drag) {
     const r = d.el.getBoundingClientRect();
     d.grab = { x: d.start.x - (r.left + r.width / 2), y: d.start.y - (r.top + r.height / 2) };
+    d.slots = [...d.area.querySelectorAll<HTMLElement>('[data-order]')]
+      .sort((a, b) => Number(a.dataset.order) - Number(b.dataset.order))
+      .map((el) => middle(el, d.area));
     d.lifted = true;
     d.el.classList.add('lifted');
     if (d.pointerType !== 'mouse') navigator.vibrate?.(10);
@@ -205,7 +194,7 @@ export function useReorder<T>(items: readonly T[], onChange: (items: T[]) => voi
     if (!d.lifted) return;
     landing.current = d;
     d.cancelled = cancel;
-    retarget(d, cancel ? d.startIndex : placeFor(d), cancel);
+    retarget(d, cancel ? d.startIndex : placeFor(d));
     // With a reorder on its way, the layout effect lands it once the list has rendered.
     if (!before.current) land();
     // The click that ends a drag must not also open the item.
@@ -287,7 +276,7 @@ export function useReorder<T>(items: readonly T[], onChange: (items: T[]) => voi
         lifted: false,
         missed: false,
         cancelled: false,
-        left: null,
+        slots: [],
         stop: () => {
           clearTimeout(d.hold);
           for (const [type, fn] of listeners) window.removeEventListener(type, fn as EventListener);
