@@ -141,6 +141,7 @@ export class QuestionService {
           (q.status === 'pending' ||
             (q.deliveredAt === null && q.answeredAt !== null && q.answeredAt >= since)) &&
           q.subagentId === (input.subagentId ?? null) &&
+          q.origin === (input.origin ?? 'system') &&
           q.text === input.text &&
           q.recommendedOption === input.recommendedOption &&
           JSON.stringify(q.options) === options,

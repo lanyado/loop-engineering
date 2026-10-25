@@ -9,7 +9,9 @@ export interface NewEmailThread {
   mailThreadId?: string | null;
 }
 
-export type EmailThreadPatch = Partial<Pick<EmailThread, 'state' | 'requestId' | 'mailThreadId'>>;
+export type EmailThreadPatch = Partial<
+  Pick<EmailThread, 'state' | 'requestId' | 'mailThreadId' | 'roundAfter'>
+>;
 
 export interface NewEmailMessage {
   threadId: number;
@@ -34,6 +36,7 @@ interface ThreadRow {
   state: EmailThreadState;
   request_id: number | null;
   mail_thread_id: string | null;
+  round_after: number;
   created_at: string;
   updated_at: string;
 }
@@ -57,6 +60,7 @@ const toThread = (r: ThreadRow): EmailThread => ({
   state: r.state,
   requestId: r.request_id,
   mailThreadId: r.mail_thread_id,
+  roundAfter: r.round_after,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });
@@ -129,6 +133,7 @@ export class EmailRepo {
       state: patch.state,
       request_id: patch.requestId,
       mail_thread_id: patch.mailThreadId,
+      round_after: patch.roundAfter,
       updated_at: isoNow(this.clock),
     });
     return this.requireThread(id);
@@ -172,6 +177,11 @@ export class EmailRepo {
       .prepare<[string], MessageRow>('SELECT * FROM email_messages WHERE message_id = ?')
       .get(messageId);
     return row && toMessage(row);
+  }
+
+  /** Links an incoming mail to the question it answered. */
+  setMessageQuestion(id: number, questionId: number): void {
+    updateById(this.db, 'email_messages', 'email message', id, { question_id: questionId });
   }
 
   /** Links a mail to the request it started. */

@@ -552,13 +552,16 @@ export const MIGRATIONS: readonly Migration[] = [
         answered_at TEXT,
         context TEXT,
         delivered_at TEXT,
-        request_id INTEGER REFERENCES requests(id) ON DELETE SET NULL
+        request_id INTEGER REFERENCES requests(id) ON DELETE SET NULL,
+        origin TEXT NOT NULL DEFAULT 'system' CHECK (origin IN ('agent', 'router', 'system'))
       );
+      -- Who asked the questions already there is not known, but a routing question names its request.
       INSERT INTO questions_new
         (id, session_id, subagent_id, text, options, recommended_option, status, answer, answered_via,
-         created_at, deadline, answered_at, context, delivered_at, request_id)
+         created_at, deadline, answered_at, context, delivered_at, request_id, origin)
       SELECT id, session_id, subagent_id, text, options, recommended_option, status, answer, answered_via,
-             created_at, deadline, answered_at, context, delivered_at, request_id
+             created_at, deadline, answered_at, context, delivered_at, request_id,
+             CASE WHEN request_id IS NULL THEN 'system' ELSE 'router' END
       FROM questions;
       DELETE FROM sqlite_sequence WHERE name = 'questions_new';
       INSERT INTO sqlite_sequence (name, seq) SELECT 'questions_new', seq FROM sqlite_sequence WHERE name = 'questions';
@@ -575,6 +578,8 @@ export const MIGRATIONS: readonly Migration[] = [
         subject TEXT NOT NULL,
         state TEXT NOT NULL DEFAULT 'clarifying' CHECK (state IN ('clarifying', 'building')),
         request_id INTEGER REFERENCES requests(id) ON DELETE SET NULL,
+        -- The last mail an earlier round already dealt with: a new round reads only what came after.
+        round_after INTEGER NOT NULL DEFAULT 0,
         mail_thread_id TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL

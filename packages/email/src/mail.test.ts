@@ -85,6 +85,31 @@ describe('senderAuthenticated', () => {
     ).toBe(false);
     // A header Gmail did not write.
     expect(senderAuthenticated('evil.example; dmarc=pass header.from=acme.com', 'd@acme.com')).toBe(false);
+    // A quoted envelope address holding a fake result, and an escaped parenthesis.
+    expect(
+      senderAuthenticated(
+        gmail(
+          'spf=pass smtp.mailfrom="a) ; dmarc=pass header.from=acme.com ("@evil.example; dmarc=fail header.from=acme.com',
+        ),
+        'd@acme.com',
+      ),
+    ).toBe(false);
+    expect(
+      senderAuthenticated(
+        gmail('spf=pass smtp.mailfrom="x;dmarc=pass header.from=acme.com y"@evil.example'),
+        'd@acme.com',
+      ),
+    ).toBe(false);
+    expect(
+      senderAuthenticated(gmail('spf=pass (a\\) ; dmarc=pass header.from=acme.com (b)'), 'd@acme.com'),
+    ).toBe(false);
+    // Two DMARC verdicts.
+    expect(
+      senderAuthenticated(
+        gmail('dmarc=fail header.from=acme.com; dmarc=pass header.from=acme.com'),
+        'd@acme.com',
+      ),
+    ).toBe(false);
     // DKIM of a lookalike domain.
     expect(senderAuthenticated(gmail('dkim=pass header.i=@notacme.com'), 'd@acme.com')).toBe(false);
   });

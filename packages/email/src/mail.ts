@@ -115,10 +115,18 @@ export function allowed(address: string, allowlist: readonly string[]): boolean 
 export function senderAuthenticated(topResults: string | undefined, from: string): boolean {
   const domain = from.split('@')[1]?.toLowerCase();
   if (!topResults || !domain) return false;
-  let h = topResults.toLowerCase();
+  // Quoted strings and escapes go first (a quoted address can hold ";", "(" or "dmarc=pass"), then
+  // comments; anything still unbalanced is not a header to trust.
+  let h = topResults
+    .toLowerCase()
+    .replace(/"(?:[^"\\]|\\.)*"/g, ' ')
+    .replace(/\\./g, ' ');
   for (let prev = ''; prev !== h;) [prev, h] = [h, h.replace(/\([^()]*\)/g, ' ')];
+  if (/["()\\]/.test(h)) return false;
   const [authserv, ...results] = h.split(';');
   if (authserv?.trim() !== 'mx.google.com') return false;
+  // One DMARC verdict per mail: two mean one was smuggled in.
+  if (results.filter((r) => /^\s*dmarc=/.test(r)).length > 1) return false;
   const aligned = (d: string) => d === domain || domain.endsWith(`.${d}`);
   return results.some((result) => {
     const r = result.trim();

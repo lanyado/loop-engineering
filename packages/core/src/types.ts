@@ -47,6 +47,13 @@ export const SUBAGENT_STATUSES = ['running', 'waiting', 'done', 'failed'] as con
 export type SubagentStatus = (typeof SUBAGENT_STATUSES)[number];
 
 export const QUESTION_STATUSES = ['pending', 'answered', 'defaulted'] as const;
+/**
+ * Who asked: an agent through ask_human, the router about a task, or the system itself (the PR
+ * loop's merge/deploy decisions, the Guardian, the server). Only agents' and the router's questions
+ * may go to a requester by email; the system's stay with the owner.
+ */
+export const QUESTION_ORIGINS = ['agent', 'router', 'system'] as const;
+export type QuestionOrigin = (typeof QUESTION_ORIGINS)[number];
 export type QuestionStatus = (typeof QUESTION_STATUSES)[number];
 
 export const ANSWER_CHANNELS = ['telegram', 'dashboard', 'email', 'timeout'] as const;
@@ -223,6 +230,7 @@ export interface Question {
   deliveredAt: Iso | null;
   /** The request a routing question is about (the router's questions); null for agent questions. */
   requestId: number | null;
+  origin: QuestionOrigin;
 }
 
 /**
@@ -382,6 +390,8 @@ export interface EmailThread {
   requestId: number | null;
   /** The mail provider's own thread id (Gmail's X-GM-THRID), when it has one. */
   mailThreadId: string | null;
+  /** The last mail an earlier round dealt with (a plan, a reply passed on, a thank-you): 0 at first. */
+  roundAfter: number;
   createdAt: Iso;
   updatedAt: Iso;
 }

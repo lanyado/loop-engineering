@@ -202,6 +202,7 @@ describe('while the work runs', () => {
     const { question } = questions.ask({
       sessionId: session.id,
       text: 'Which default theme?',
+      origin: 'agent',
       context: 'Most users are on light.',
       options: ['Light', 'Dark'],
       recommendedOption: 'Light',
@@ -240,7 +241,7 @@ describe('while the work runs', () => {
     await channel.poll();
     mailbox.reply(last(), BOSS, 'One more thing.');
     await channel.poll();
-    expect(last().text).toContain('still finishing');
+    expect(last().text).toContain('still being set up');
     expect(store.requests.list()).toHaveLength(1);
   });
 
@@ -249,6 +250,7 @@ describe('while the work runs', () => {
     const { question } = questions.ask({
       sessionId: session.id,
       text: 'Ship it?',
+      origin: 'agent',
       options: ['Yes', 'No'],
       recommendedOption: 'Yes',
     });
@@ -278,6 +280,7 @@ describe('while the work runs', () => {
     const { question } = questions.ask({
       sessionId: session.id,
       text: 'Which theme?',
+      origin: 'agent',
       options: ['Light', 'Dark'],
       recommendedOption: 'Light',
     });
@@ -386,6 +389,61 @@ describe('while the work runs', () => {
     expect(followUp.text).toMatch(/^A follow-up by email[\s\S]*Already built earlier, not to redo/);
     expect(followUp.text).toContain('Now add a high-contrast theme too.');
     expect(followUp.text).not.toContain('Please add a dark mode.');
+  });
+
+  it('a superseded PR-loop question is never emailed and never holds up a new round', async () => {
+    const { session } = await building();
+    // The system's questions (the PR loop's, the Guardian's) count for nothing here, recorded on a PR or not.
+    questions.ask({
+      sessionId: session.id,
+      text: 'Merge web#7? (round 1)',
+      options: ['Merge', 'Hold'],
+      recommendedOption: 'Hold',
+    });
+    await flush();
+    await channel.poll();
+    expect(mailbox.sent.some((m) => m.text.includes('Merge web#7?'))).toBe(false);
+    store.sessions.update(session.id, { status: 'ended' });
+    mailbox.reply(last(), BOSS, 'Now a contact page.');
+    answers = [{ plan: 'Add a contact page.' }];
+    await channel.poll();
+    expect(last().text).toContain('Add a contact page.');
+  });
+
+  it("a reply between routing and the session starting waits; a new round doesn't repeat what was built", async () => {
+    mailbox.deliver({ from: BOSS, subject: 'Dark mode', text: 'Please add a dark mode.' });
+    await channel.poll();
+    const [request] = store.requests.list();
+    const project = store.projects.create({ name: 'shop' });
+    store.requests.assignProject(request!.id, project.id); // routed, its session not started yet
+    mailbox.reply(last(), BOSS, 'One more thing.');
+    await channel.poll();
+    expect(last().text).toContain('still being set up');
+    expect(store.requests.list()).toHaveLength(1);
+
+    const session = store.sessions.create({ projectId: project.id, title: 's', model: 'opus', branch: 'b' });
+    store.requests.assignSession(request!.id, session.id);
+    mailbox.reply(last(), BOSS, 'Also show the logo in white.'); // passed to the session
+    await channel.poll();
+    const { question } = questions.ask({
+      sessionId: session.id,
+      text: 'Which white?',
+      options: ['#fff', '#eee'],
+      recommendedOption: '#fff',
+      origin: 'agent',
+    });
+    await flush();
+    mailbox.reply(last(), BOSS, '1');
+    await channel.poll();
+    expect(store.questions.require(question.id).answer).toBe('#fff');
+    store.sessions.update(session.id, { status: 'ended' });
+    mailbox.reply(last(), BOSS, 'Now a contact page.');
+    answers = [{ plan: 'Add a contact page.' }];
+    await channel.poll();
+    const round = seen.at(-1)!;
+    expect(round.mails).toEqual([{ from: 'requester', text: 'Now a contact page.' }]);
+    expect(round.earlier).toContain('Also show the logo in white.');
+    expect(round.earlier).toContain('The plan is approved');
   });
 
   it('gives up waiting on a hung clarifier and tries again', async () => {

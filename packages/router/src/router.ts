@@ -391,6 +391,7 @@ export class Router {
     const { question } = questions.ask({
       sessionId: ensureRouterSession(store).id,
       requestId: request.id,
+      origin: 'router',
       text: `Route request #${request.id}${again}: which project and session should it go to?\n\n${excerpt}`,
       context: `From ${request.source}. Not routed automatically: ${why}.`,
       options,
@@ -419,6 +420,7 @@ export class Router {
     const { question } = questions.ask({
       sessionId: ensureRouterSession(store).id,
       requestId: request.id,
+      origin: 'router',
       text: `${PLAN_QUESTION_MARKER} Request #${request.id}: ${text}\n\n${excerpt}`,
       context: `From ${request.source}. The planner needs this before it can plan the request.`,
       options: [PLAN_DECIDE_ALONE],
@@ -725,6 +727,7 @@ export class Router {
     const { question } = questions.ask({
       sessionId: ensureRouterSession(store).id,
       requestId: request.id,
+      origin: 'router',
       text:
         `Request #${request.id} for the folder project ${project.name} could not be delivered. Try again where? ` +
         `Cancel (the default, if no one answers) drops this request.\n\n${excerptOf(request)}`,
@@ -761,6 +764,7 @@ export class Router {
     const { question } = questions.ask({
       sessionId: ensureRouterSession(store).id,
       requestId: request.id,
+      origin: 'router',
       text:
         `Request #${request.id} is for the folder project ${project.name}, whose session '${open.title}' ` +
         `(#${open.id}) you paused. Resume it and hand it the request, end it and start a fresh session, ` +

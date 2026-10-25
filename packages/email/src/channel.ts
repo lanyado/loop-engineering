@@ -102,7 +102,8 @@ export class EmailChannel implements QuestionChannel {
     this.abort.abort();
     if (this.timer) clearTimeout(this.timer);
     this.detach?.();
-    await this.running;
+    // A round stuck past the abort (a mailbox that never answers) must not hold up the server's stop.
+    await Promise.race([this.running, new Promise((resolve) => setTimeout(resolve, 5_000).unref())]);
     await this.o.mailbox.close();
   }
 
@@ -136,10 +137,9 @@ export class EmailChannel implements QuestionChannel {
     }
     store.email.setCursor(mailbox.address, cursor);
     for (const thread of store.email.threads({ state: 'clarifying' })) await this.clarify(thread);
-    for (const thread of store.email.threads({ state: 'building' })) {
-      await this.sendQuestions(thread);
-      await this.sendReleaseNotes(thread);
-    }
+    for (const thread of store.email.threads({ state: 'building' })) await this.sendQuestions(thread);
+    // Clarifying threads too: a PR of an earlier round can ship while a new round asks its questions.
+    for (const thread of store.email.threads()) await this.sendReleaseNotes(thread);
   }
 
   // ------------------------------------------------------------------ incoming mail
@@ -210,6 +210,7 @@ export class EmailChannel implements QuestionChannel {
     const { store, questions, requests } = this.o;
     const question = this.questionAnswered(thread, mail, message.text);
     if (question) {
+      store.email.setMessageQuestion(message.id, question.id);
       questions.answer(question.id, answerFor(question, message.text), 'email');
       return;
     }
@@ -230,10 +231,17 @@ export class EmailChannel implements QuestionChannel {
       store.email.updateThread(thread.id, { state: 'clarifying' });
       return;
     }
-    await this.reply(
-      thread,
-      "The work on this is still finishing (being checked, merged or deployed). I'll write here when it's in production; reply after that to ask for anything new.",
-    );
+    const note = this.starting(thread)
+      ? 'The work on this is still being set up. Please send this again once it has started.'
+      : "The work on this is still finishing (being checked, merged or deployed). I'll write here when it's in production; reply after that to ask for anything new.";
+    // Said once an hour at most, however many replies come in meanwhile.
+    const since = store.clock.now().getTime() - HOUR;
+    const said = store.email
+      .messages(thread.id)
+      .some((m) => m.text === note && Date.parse(m.createdAt) > since);
+    if (!said) await this.reply(thread, note);
+    // The note asks for it again later: a new round does not read it.
+    store.email.updateThread(thread.id, { roundAfter: message.id });
   }
 
   /**
@@ -265,9 +273,17 @@ export class EmailChannel implements QuestionChannel {
     const { store, clarifier } = this.o;
     const all = store.email.messages(thread.id);
     if (all.at(-1)?.direction !== 'in') return;
-    const startedAt = all.findLastIndex((m) => m.direction === 'out' && m.requestId !== null);
-    const earlier = startedAt < 0 ? null : all[startedAt]!.text;
-    const mails = all.slice(startedAt + 1);
+    // What earlier rounds started (each plan, each reply passed to a session): context, not new asks.
+    const started = all.filter((m) => m.requestId !== null);
+    const earlier = started.length === 0 ? null : started.map((m) => m.text).join('\n\n---\n\n');
+    // This round: the requester's new mails and the questions asked about them, nothing already dealt with.
+    const mails = all.filter(
+      (m) =>
+        m.id > thread.roundAfter &&
+        m.questionId === null &&
+        m.requestId === null &&
+        (m.direction === 'in' || m.text.startsWith(QUESTIONS_INTRO)),
+    );
     const conversation = mails.map(
       (m) => ({ from: m.direction === 'in' ? 'requester' : 'loop', text: m.text }) as const,
     );
@@ -280,8 +296,16 @@ export class EmailChannel implements QuestionChannel {
         { mustPlan: rounds >= QUESTION_ROUNDS, earlier },
         AbortSignal.any([this.abort.signal, timeout]),
       );
-      if (!answer || !('questions' in answer || 'plan' in answer || ('nothing' in answer && earlier)))
-        throw new Error('the clarifier answered with nothing usable');
+      const usable =
+        answer !== null &&
+        typeof answer === 'object' &&
+        (('questions' in answer &&
+          Array.isArray(answer.questions) &&
+          answer.questions.length > 0 &&
+          answer.questions.every((q) => typeof q === 'string')) ||
+          ('plan' in answer && typeof answer.plan === 'string' && answer.plan.trim() !== '') ||
+          ('nothing' in answer && earlier !== null));
+      if (!usable) throw new Error('the clarifier answered with nothing usable');
     } catch (err) {
       if (this.abort.signal.aborted) return;
       const tries = (this.clarifyFailures.get(thread.id) ?? 0) + 1;
@@ -293,7 +317,7 @@ export class EmailChannel implements QuestionChannel {
     if (answer && 'nothing' in answer) {
       // A thank-you or the like: no new work, and no reply to it.
       this.clarifyFailures.delete(thread.id);
-      store.email.updateThread(thread.id, { state: 'building' });
+      store.email.updateThread(thread.id, { state: 'building', roundAfter: all.at(-1)!.id });
       return;
     }
     if (answer && 'questions' in answer) {
@@ -314,7 +338,7 @@ export class EmailChannel implements QuestionChannel {
         source: 'email',
       });
       store.email.setMessageRequest(sent.id, request.id);
-      store.email.updateThread(thread.id, { state: 'building', requestId: request.id });
+      store.email.updateThread(thread.id, { state: 'building', requestId: request.id, roundAfter: sent.id });
       this.log(`[email] "${thread.subject}" became request ${request.id}`);
     });
     this.clarifyFailures.delete(thread.id);
@@ -351,32 +375,43 @@ export class EmailChannel implements QuestionChannel {
   }
 
   /**
-   * All of the thread's work is over: no session open, no PR still in the loop or being deployed,
-   * and no question waiting (a request whose routing was cancelled counts as over too).
+   * A request of the thread that has no session yet and may still get one: the router has it, or
+   * is starting its session. Unrouted after ROUTING_MS, its routing was cancelled.
+   */
+  private starting(thread: EmailThread): boolean {
+    const routing = this.o.store.clock.now().getTime() - ROUTING_MS;
+    return this.requestsOf(thread).some(
+      (r) => r.sessionId === null && r.targetSessionId === null && Date.parse(r.createdAt) > routing,
+    );
+  }
+
+  /**
+   * All of the thread's work is over: nothing still starting, no session open, no PR still in the
+   * loop or being deployed, and none of its questions waiting.
    */
   private done(thread: EmailThread): boolean {
     const { store } = this.o;
-    const routing = store.clock.now().getTime() - ROUTING_MS;
-    if (this.requestsOf(thread).some((r) => r.projectId === null && Date.parse(r.createdAt) > routing))
-      return false;
+    if (this.starting(thread)) return false;
     if (this.sessionsOf(thread).some((s) => s.status !== 'ended')) return false;
     if (this.prsOf(thread).some((pr) => pr.outcome === null || pr.stage === 'deploying')) return false;
     return !store.questions.list({ status: 'pending' }).some((q) => this.belongsTo(q, thread));
   }
 
-  /** A question the PR loop asks about a PR (merge, deploy, revert): the owner's, never emailed. */
-  private isLoopDecision(question: Question): boolean {
-    return this.o.store.pullRequests
-      .list()
-      .some((pr) => (pr.loopState as { question?: { id?: number } }).question?.id === question.id);
-  }
-
-  /** An agent's question about the thread's work: asked about its requests, or by its sessions since it began. */
+  /**
+   * A question for the thread's requester: an agent's (ask_human) or the router's, about the
+   * thread's work. The system's questions (the PR loop's merge and deploy decisions, the Guardian,
+   * the server) are the owner's and never count, even when asked in the thread's session.
+   */
   private belongsTo(question: Question, thread: EmailThread): boolean {
+    if (question.origin === 'system') return false;
     const requests = this.requestsOf(thread);
     if (question.requestId !== null && requests.some((r) => r.id === question.requestId)) return true;
     const sessions = new Set(requests.flatMap((r) => [r.sessionId, r.targetSessionId]));
-    return sessions.has(question.sessionId) && question.createdAt >= thread.createdAt;
+    return (
+      question.origin === 'agent' &&
+      sessions.has(question.sessionId) &&
+      question.createdAt >= thread.createdAt
+    );
   }
 
   /** Emails the thread's pending questions it has not asked yet (also a retry after a failed send). */
@@ -384,7 +419,7 @@ export class EmailChannel implements QuestionChannel {
     const { store } = this.o;
     for (const q of store.questions.list({ status: 'pending' })) {
       if (this.asking.has(q.id) || store.email.messageForQuestion(q.id)) continue;
-      if (!this.belongsTo(q, thread) || this.isLoopDecision(q)) continue;
+      if (!this.belongsTo(q, thread)) continue;
       const options = q.options
         .map((o, i) => `${i + 1}. ${o}${o === q.recommendedOption ? ' (recommended)' : ''}`)
         .join('\n');
@@ -419,14 +454,8 @@ export class EmailChannel implements QuestionChannel {
   // ------------------------------------------------------------------ the question bus
 
   onQuestion(question: Question): void {
-    // After the asker's own bookkeeping (the PR loop records its question right after asking), so
-    // its decisions are known before anything is emailed.
-    queueMicrotask(() => {
-      const thread = this.o.store.email
-        .threads({ state: 'building' })
-        .find((t) => this.belongsTo(question, t));
-      if (thread) void this.sendQuestions(thread);
-    });
+    const thread = this.o.store.email.threads({ state: 'building' }).find((t) => this.belongsTo(question, t));
+    if (thread) void this.sendQuestions(thread);
   }
 
   onResolvedElsewhere(event: QuestionResolvedEvent, confirmation: string): void {
