@@ -11,11 +11,16 @@ import {
 } from '@loop-engineering/runner';
 import { extractJson } from './classification.js';
 import {
+  buildClarifyPrompt,
   buildClassifierPrompt,
   buildSplitPrompt,
   buildTitlePrompt,
+  cleanClarification,
   cleanPlan,
   cleanTitle,
+  type ClarifyMail,
+  type ClarifyOptions,
+  type Clarification,
   type Plan,
 } from './prompt.js';
 import type { Classifier, ClassifyInput } from './types.js';
@@ -68,6 +73,18 @@ export class CliClassifier implements Classifier {
   /** The independent parts of a task (fewer than two means one task), or a real question for the human. */
   async plan(text: string, signal: AbortSignal): Promise<Plan> {
     return cleanPlan(await this.ask(buildSplitPrompt(text), signal));
+  }
+
+  /** For an emailed task: questions for the requester, or the plan (see buildClarifyPrompt). */
+  async clarify(mails: ClarifyMail[], options: ClarifyOptions, signal: AbortSignal): Promise<Clarification> {
+    const answer = cleanClarification(await this.ask(buildClarifyPrompt(mails, options), signal));
+    const allowed =
+      answer !== null &&
+      ('plan' in answer ||
+        ('questions' in answer && !options.mustPlan) ||
+        ('nothing' in answer && Boolean(options.earlier)));
+    if (!allowed) throw new ClassifierError('the clarifier gave no answer it may give here');
+    return answer;
   }
 
   /** One JSON answer to `prompt`: Claude first, OpenCode while Claude is out of usage or off. */

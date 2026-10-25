@@ -10,8 +10,14 @@ export {
   type Decoded,
 } from './options.js';
 export {
+  buildClarifyPrompt,
   buildClassifierPrompt,
   buildSplitPrompt,
+  cleanClarification,
+  MAX_CLARIFYING_QUESTIONS,
+  type ClarifyMail,
+  type ClarifyOptions,
+  type Clarification,
   cleanParts,
   cleanPlan,
   CLASSIFICATION_SCHEMA,

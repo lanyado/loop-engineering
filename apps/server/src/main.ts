@@ -1,4 +1,5 @@
 import { FileStageLibrary } from '@loop-engineering/loop';
+import { EmailConfigError, loadEmailConfig } from '@loop-engineering/email';
 import { loadTelegramConfig, TelegramConfigError } from '@loop-engineering/telegram';
 import { ConfigError, describeListenError, loadConfig, nonLocalBindWarning } from './config.js';
 import { fromRoot, loadRootEnv, REPO_ROOT } from './env.js';
@@ -6,6 +7,7 @@ import { claudeUsageModule } from './modules/claude-usage.js';
 import { terminalModule } from './modules/terminal.js';
 import { opencodeSubagentsModule } from './modules/opencode-subagents.js';
 import { dashboardApi } from './modules/dashboard-api.js';
+import { emailModule } from './modules/email.js';
 import { loopModuleFromEnv } from './modules/loop.js';
 import { pipelineModule } from './modules/pipeline.js';
 import { routerModule } from './modules/router.js';
@@ -24,15 +26,22 @@ const stages = new FileStageLibrary(fromRoot(process.env.STAGES_DIR?.trim() || '
 
 let config;
 let telegram;
+let email;
 let loop;
 let runner;
 try {
   config = loadConfig();
   telegram = loadTelegramConfig(process.env);
+  email = loadEmailConfig(process.env);
   runner = runnerFromEnv(process.env, config);
   loop = loopModuleFromEnv(process.env, { stages });
 } catch (error) {
-  if (!(error instanceof ConfigError || error instanceof TelegramConfigError)) throw error;
+  if (!(
+    error instanceof ConfigError ||
+    error instanceof TelegramConfigError ||
+    error instanceof EmailConfigError
+  ))
+    throw error;
   console.error(error.message);
   process.exit(1);
 }
@@ -54,6 +63,7 @@ const server = createServer({
     terminalModule(),
     opencodeSubagentsModule(),
     telegramModule({ telegram }),
+    emailModule({ email }),
     routerModule(),
     ...(loop ? [loop] : []),
     historyModule(),

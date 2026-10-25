@@ -9,6 +9,7 @@
     "@hono/node-server": "^2.1.5",
     "@loop-engineering/ask-human": "0.0.0",
     "@loop-engineering/core": "0.0.0",
+    "@loop-engineering/email": "0.0.0",
     "@loop-engineering/history": "0.0.0",
     "@loop-engineering/loop": "0.0.0",
     "@loop-engineering/router": "0.0.0",

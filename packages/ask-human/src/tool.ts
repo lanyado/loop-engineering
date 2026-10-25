@@ -128,6 +128,7 @@ export async function askHuman(
     context: input.context ?? null,
     options: input.options,
     recommendedOption: input.recommended,
+    origin: 'agent',
   });
   const reattached = reused && question.status !== 'pending';
   return toAskHumanOutput(await service.wait(question.id, signal), reattached);

@@ -46,6 +46,7 @@ describe('questions', () => {
       answeredAt: null,
       deliveredAt: null,
       requestId: null,
+      origin: 'system',
     });
   });
 

@@ -1,0 +1,29 @@
+{
+  "name": "@loop-engineering/email",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Email channel (Gmail over IMAP/SMTP): tasks by email, clarifying questions, the plan, questions and release notes on the same thread. FakeMailbox for tests.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@loop-engineering/ask-human": "0.0.0",
+    "@loop-engineering/core": "0.0.0",
+    "imapflow": "2.4.0",
+    "mailparser": "3.9.38",
+    "nodemailer": "10.1.0"
+  },
+  "devDependencies": {
+    "@types/mailparser": "3.9.0",
+    "@types/nodemailer": "8.0.2"
+  }
+}

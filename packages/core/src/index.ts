@@ -26,6 +26,13 @@ export type {
   PullRequestRepo,
 } from './repos/pull-requests.js';
 export type { GuardianFilter, GuardianPatch, GuardianRepo, NewGuardianRun } from './repos/guardian.js';
+export type {
+  EmailCursor,
+  EmailRepo,
+  EmailThreadPatch,
+  NewEmailMessage,
+  NewEmailThread,
+} from './repos/email.js';
 export type { MetricsDelta, MetricsRepo } from './repos/metrics.js';
 export type { SettingsRepo } from './repos/settings.js';
 export {

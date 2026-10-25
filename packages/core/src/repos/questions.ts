@@ -7,6 +7,7 @@ import {
   type AnswerChannel,
   type HumanChannel,
   type Question,
+  type QuestionOrigin,
   type QuestionStatus,
 } from '../types.js';
 import type { SessionRepo } from './sessions.js';
@@ -23,6 +24,8 @@ export interface NewQuestion {
   timeoutMs?: number;
   /** The request a routing question is about. */
   requestId?: number | null;
+  /** Default "system": only agents (ask_human) and the router say otherwise. */
+  origin?: QuestionOrigin;
 }
 
 export interface QuestionFilter {
@@ -59,6 +62,7 @@ interface QuestionRow {
   answered_at: string | null;
   delivered_at: string | null;
   request_id: number | null;
+  origin: QuestionOrigin;
 }
 
 const toQuestion = (r: QuestionRow): Question => ({
@@ -77,6 +81,7 @@ const toQuestion = (r: QuestionRow): Question => ({
   answeredAt: r.answered_at,
   deliveredAt: r.delivered_at,
   requestId: r.request_id,
+  origin: r.origin,
 });
 
 const HUMAN_CHANNELS: readonly string[] = ANSWER_CHANNELS.filter((c) => c !== 'timeout');
@@ -101,8 +106,8 @@ export class QuestionRepo {
     const info = this.db
       .prepare(
         `INSERT INTO questions
-           (session_id, subagent_id, text, context, options, recommended_option, status, created_at, deadline, request_id)
-         VALUES (@sessionId, @subagentId, @text, @context, @options, @recommended, 'pending', @createdAt, @deadline, @requestId)`,
+           (session_id, subagent_id, text, context, options, recommended_option, status, created_at, deadline, request_id, origin)
+         VALUES (@sessionId, @subagentId, @text, @context, @options, @recommended, 'pending', @createdAt, @deadline, @requestId, @origin)`,
       )
       .run({
         sessionId: input.sessionId,
@@ -114,6 +119,7 @@ export class QuestionRepo {
         createdAt: now.toISOString(),
         deadline: deadline.toISOString(),
         requestId: input.requestId ?? null,
+        origin: input.origin ?? 'system',
       });
     return this.require(Number(info.lastInsertRowid));
   }
