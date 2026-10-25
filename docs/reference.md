@@ -17,6 +17,7 @@ npm workspaces, TypeScript (strict, ESM), Node 20.
 | `packages/runner`    | Session runner: Claude CLI / OpenCode in tmux, worktrees, limit fallback  |
 | `packages/ask-human` | `ask_human` MCP tool, question bus, deadline sweeper (M3)                 |
 | `packages/telegram`  | Telegram bot (grammY) with a mock transport for tests (M4)                |
+| `packages/email`     | Email channel: tasks, questions and release notes by Gmail (IMAP/SMTP)    |
 | `packages/router`    | Direct-input routing to marked projects and sessions (M5)                 |
 | `packages/loop`      | PR loop engine: tests, review, QA, merge, deploy watch + revert, cleanup  |
 | `packages/history`   | Transcript ingest and the `search_history` MCP tool (M8)                  |
@@ -113,6 +114,25 @@ What it does:
 - **Nothing else is sent unprompted**: only questions and their confirmations.
 - **Access.** Only private chats with the owner or an allowlisted user. Everyone else, and every group chat, is ignored without a reply; the log notes it at most once per user per 10 minutes, capped at 20 lines per 10 minutes overall.
 - **Restarts.** Which Telegram message belongs to which question is kept in memory. After a restart, taps and replies on older messages still work (the button data and the `Question #<id>` header carry the id), and a question answered elsewhere gets a confirmation that names it instead of an edit. Modules start before the deadline sweeper, so questions that came due while the server was down are announced too.
+
+## Email channel
+
+The server runs the email channel (`packages/email`, `apps/server/src/modules/email.ts`) when `EMAIL_ADDRESS` is set. Without it the server logs `[email] channel off` and runs as before. It reads the inbox and sends over IMAP and SMTP, outbound only, so nothing is exposed.
+
+Setup (once):
+
+1. Use a Gmail account for the loop, best a dedicated one: the loop reads its inbox and writes from it. Turn on 2-Step Verification, then create an app password (Google Account > Security > App passwords).
+2. In `.env`: `EMAIL_ADDRESS` (that account), `EMAIL_APP_PASSWORD` (the 16 letters; spaces are fine) and `EMAIL_ALLOWLIST`, who may send tasks: exact addresses or `@domain`, comma separated. Optional: `EMAIL_POLL_SECONDS` (default 60). A set address with a missing or invalid companion stops the server at start, naming each problem.
+3. Restart. The first read only marks where the inbox ends: mail that arrived before is never treated as a task.
+
+What it does, all on the thread the task started:
+
+- **A task.** Mail from an allowlisted sender starts a thread. A planner (one headless Claude call, sonnet, OpenCode while Claude is out of usage) reads the conversation and either replies with up to 5 numbered questions whose answers change what gets built, or with the plan. Reply with your answers; after two rounds of questions it writes the plan, choosing defaults where something is still open. The plan comes back as approved ("The plan is approved, and the work has started"), and its request (`source: email`, the whole conversation and the plan) goes to the router like any other task. If the planner keeps failing (3 tries, one per poll), the work starts without a plan.
+- **Questions while it is built.** Every `ask_human` question of the thread's sessions, the router's question about its request, and the PR loop's questions about its PRs come to the thread too, with numbered options and the deadline. Reply with a number, an option's words or your own answer. The first answer from any channel wins; when the dashboard or Telegram answered first, or the deadline passed, the thread gets a one-line note.
+- **Other replies** go to the thread's open sessions as a message. If the work has finished (its sessions ended), a reply starts a new round on the same thread: questions or a plan, then a new request.
+- **In production.** Once per PR of the thread's request: "The new version is in production" when its deploy was verified; "merged" where no deploy is watched; "reverted" when its deploy failed.
+- **Safety.** Only allowlisted senders, and only mail the receiving server authenticated: Gmail's `Authentication-Results` must show DMARC passed, or a passing DKIM signature of the sender's domain, so a forged From is ignored. Auto-replies, bounces and the loop's own mail are never answered (its mail carries `Auto-Submitted`). At most 10 new tasks an hour. Mail over 2 MB is skipped, and only the plain text is read (quoted earlier mail is cut off).
+- **State.** Threads, every mail in them (by Message-ID, and Gmail's thread id) and the last IMAP UID read are in SQLite (`email_threads`, `email_messages`, `email_cursors`), so a restart neither loses a conversation nor reads a mail twice.
 
 ### Requests and the router
 
@@ -294,7 +314,7 @@ Start both with `npm start` (after `npm run build`), or each on its own: `npm ru
 - The server refuses to start with a non-loopback `SERVER_HOST` unless `ALLOW_NON_LOCAL_BIND=on`; with it, it starts with a loud warning.
 - CORS: with `CORS_ORIGINS` empty, `/api/*` allows only `http://127.0.0.1:<DASHBOARD_PORT>` and `http://localhost:<DASHBOARD_PORT>` (`DASHBOARD_PORT` default 3737).
 - In `password` mode, the login cookie is `Secure` only over https (or `x-forwarded-proto: https`), so login works on `http://localhost`.
-- Telegram needs no inbound port: long polling only makes outbound requests.
+- Telegram needs no inbound port: long polling only makes outbound requests. The email channel too: it reads IMAP and sends SMTP.
 
 ## The PR loop
 

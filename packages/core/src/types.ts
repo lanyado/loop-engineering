@@ -49,12 +49,12 @@ export type SubagentStatus = (typeof SUBAGENT_STATUSES)[number];
 export const QUESTION_STATUSES = ['pending', 'answered', 'defaulted'] as const;
 export type QuestionStatus = (typeof QUESTION_STATUSES)[number];
 
-export const ANSWER_CHANNELS = ['telegram', 'dashboard', 'timeout'] as const;
+export const ANSWER_CHANNELS = ['telegram', 'dashboard', 'email', 'timeout'] as const;
 export type AnswerChannel = (typeof ANSWER_CHANNELS)[number];
 /** Channels a human can answer through; "timeout" is set only by the store. */
 export type HumanChannel = Exclude<AnswerChannel, 'timeout'>;
 
-export const REQUEST_SOURCES = ['telegram', 'dashboard'] as const;
+export const REQUEST_SOURCES = ['telegram', 'dashboard', 'email'] as const;
 export type RequestSource = (typeof REQUEST_SOURCES)[number];
 
 /**
@@ -237,7 +237,7 @@ export function ownTask(text: string): string {
   return at < 0 ? text : text.slice(0, at);
 }
 
-/** A task the human sent (Telegram or dashboard). The reviewer checks PRs against its text. */
+/** A task the human sent (Telegram, dashboard or email). The reviewer checks PRs against its text. */
 export interface Request {
   id: number;
   /** Project the router picked; null until routed (a Telegram task arrives without one). */
@@ -363,4 +363,40 @@ export interface GuardianRun {
   requestId: number | null;
   createdAt: Iso;
   finishedAt: Iso | null;
+}
+
+/**
+ * An email conversation with a requester (the email channel): clarifying the task, then, once the
+ * plan was sent and its request created, building it (questions and release notes go to it).
+ */
+export const EMAIL_THREAD_STATES = ['clarifying', 'building'] as const;
+export type EmailThreadState = (typeof EMAIL_THREAD_STATES)[number];
+
+export interface EmailThread {
+  id: number;
+  /** The address that started it; every reply goes to it. */
+  sender: string;
+  subject: string;
+  state: EmailThreadState;
+  /** The request created from the plan; null while clarifying. */
+  requestId: number | null;
+  /** The mail provider's own thread id (Gmail's X-GM-THRID), when it has one. */
+  mailThreadId: string | null;
+  createdAt: Iso;
+  updatedAt: Iso;
+}
+
+export interface EmailMessage {
+  id: number;
+  threadId: number;
+  /** Its RFC 5322 Message-ID, as in a reply's In-Reply-To. */
+  messageId: string;
+  direction: 'in' | 'out';
+  /** What it said (an incoming reply without the quoted mail). */
+  text: string;
+  /** An outgoing question. */
+  questionId: number | null;
+  /** An outgoing release note for this PR. */
+  prId: number | null;
+  createdAt: Iso;
 }

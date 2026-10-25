@@ -509,6 +509,101 @@ export const MIGRATIONS: readonly Migration[] = [
     name: "settings: the dashboard's layout",
     sql: `ALTER TABLE settings ADD COLUMN dashboard_layout TEXT NOT NULL DEFAULT '{}';`,
   },
+  {
+    version: 20,
+    name: 'email channel: email threads and messages; "email" as a request source and answer channel',
+    // SQLite cannot alter a CHECK, so requests and questions are rebuilt (as in migration 18) to
+    // allow 'email'. Their columns, order and indexes stay as they were.
+    rebuildsTables: true,
+    sql: `
+      CREATE TABLE requests_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+        session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+        text TEXT NOT NULL,
+        source TEXT NOT NULL CHECK (source IN ('telegram', 'dashboard', 'email')),
+        created_at TEXT NOT NULL,
+        target_session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+        parent_request_id INTEGER REFERENCES requests(id) ON DELETE CASCADE,
+        CHECK (session_id IS NULL OR project_id IS NOT NULL)
+      );
+      INSERT INTO requests_new (id, project_id, session_id, text, source, created_at, target_session_id, parent_request_id)
+      SELECT id, project_id, session_id, text, source, created_at, target_session_id, parent_request_id FROM requests;
+      DELETE FROM sqlite_sequence WHERE name = 'requests_new';
+      INSERT INTO sqlite_sequence (name, seq) SELECT 'requests_new', seq FROM sqlite_sequence WHERE name = 'requests';
+      DROP TABLE requests;
+      ALTER TABLE requests_new RENAME TO requests;
+      CREATE INDEX requests_by_session ON requests(session_id);
+      CREATE INDEX requests_unrouted ON requests(id) WHERE project_id IS NULL;
+      CREATE INDEX requests_by_parent ON requests(parent_request_id) WHERE parent_request_id IS NOT NULL;
+
+      CREATE TABLE questions_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        subagent_id INTEGER REFERENCES subagents(id) ON DELETE SET NULL,
+        text TEXT NOT NULL,
+        options TEXT NOT NULL,
+        recommended_option TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'answered', 'defaulted')),
+        answer TEXT,
+        answered_via TEXT CHECK (answered_via IN ('telegram', 'dashboard', 'email', 'timeout')),
+        created_at TEXT NOT NULL,
+        deadline TEXT NOT NULL,
+        answered_at TEXT,
+        context TEXT,
+        delivered_at TEXT,
+        request_id INTEGER REFERENCES requests(id) ON DELETE SET NULL
+      );
+      INSERT INTO questions_new
+        (id, session_id, subagent_id, text, options, recommended_option, status, answer, answered_via,
+         created_at, deadline, answered_at, context, delivered_at, request_id)
+      SELECT id, session_id, subagent_id, text, options, recommended_option, status, answer, answered_via,
+             created_at, deadline, answered_at, context, delivered_at, request_id
+      FROM questions;
+      DELETE FROM sqlite_sequence WHERE name = 'questions_new';
+      INSERT INTO sqlite_sequence (name, seq) SELECT 'questions_new', seq FROM sqlite_sequence WHERE name = 'questions';
+      DROP TABLE questions;
+      ALTER TABLE questions_new RENAME TO questions;
+      CREATE INDEX questions_by_session ON questions(session_id);
+      CREATE INDEX questions_pending_by_deadline ON questions(deadline) WHERE status = 'pending';
+      CREATE INDEX questions_by_request ON questions(request_id) WHERE request_id IS NOT NULL;
+
+      -- One conversation with a requester: clarifying the task, then (with its request) building it.
+      CREATE TABLE email_threads (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sender TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'clarifying' CHECK (state IN ('clarifying', 'building')),
+        request_id INTEGER REFERENCES requests(id) ON DELETE SET NULL,
+        mail_thread_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX email_threads_by_request ON email_threads(request_id) WHERE request_id IS NOT NULL;
+      CREATE INDEX email_threads_by_mail_thread ON email_threads(mail_thread_id) WHERE mail_thread_id IS NOT NULL;
+
+      -- Every mail in a thread, both ways; an outgoing one may carry a question or a PR's release note.
+      CREATE TABLE email_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        thread_id INTEGER NOT NULL REFERENCES email_threads(id) ON DELETE CASCADE,
+        message_id TEXT NOT NULL UNIQUE,
+        direction TEXT NOT NULL CHECK (direction IN ('in', 'out')),
+        text TEXT NOT NULL,
+        question_id INTEGER REFERENCES questions(id) ON DELETE SET NULL,
+        pr_id INTEGER REFERENCES pull_requests(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX email_messages_by_thread ON email_messages(thread_id);
+      CREATE INDEX email_messages_by_question ON email_messages(question_id) WHERE question_id IS NOT NULL;
+
+      -- How far the inbox was read: the last IMAP UID seen, valid while the mailbox's UIDVALIDITY holds.
+      CREATE TABLE email_cursors (
+        address TEXT PRIMARY KEY,
+        uid_validity INTEGER NOT NULL,
+        last_uid INTEGER NOT NULL
+      );
+    `,
+  },
 ];
 
 /** Applies every migration newer than the database's user_version, each in its own transaction. */

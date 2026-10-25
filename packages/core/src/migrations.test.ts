@@ -297,6 +297,49 @@ describe('migrations', () => {
     db.close();
   });
 
+  it('migration 20 lets requests and answers be by email, keeping requests, questions and their links', () => {
+    const db = new Database(':memory:');
+    db.pragma('foreign_keys = ON');
+    migrate(
+      db,
+      MIGRATIONS.filter((m) => m.version < 20),
+    );
+    db.exec(`
+      INSERT INTO projects (name, created_at) VALUES ('p', 't');
+      INSERT INTO sessions (project_id, title, model, branch, created_at) VALUES (1, 's', 'opus', 'b', 't');
+      INSERT INTO requests (project_id, session_id, text, source, created_at) VALUES (1, 1, 'root', 'telegram', 't');
+      INSERT INTO requests (project_id, text, source, created_at, parent_request_id) VALUES (1, 'part', 'dashboard', 't', 1);
+      INSERT INTO questions (session_id, text, options, recommended_option, status, answer, answered_via, created_at, deadline, request_id)
+        VALUES (1, 'q', '["a"]', 'a', 'answered', 'a', 'telegram', 't', 't', 1);
+      INSERT INTO pull_requests (project_id, repo, number, url, request_id, created_at, updated_at) VALUES (1, 'web', 7, 'u', 2, 't', 't');
+    `);
+    expect(
+      migrate(
+        db,
+        MIGRATIONS.filter((m) => m.version <= 20),
+      ),
+    ).toEqual([20]);
+    db.exec(`INSERT INTO requests (text, source, created_at) VALUES ('mailed', 'email', 't');
+             UPDATE questions SET answered_via = 'email' WHERE id = 1;`);
+    expect(db.prepare('SELECT id, source, parent_request_id FROM requests ORDER BY id').all()).toEqual([
+      { id: 1, source: 'telegram', parent_request_id: null },
+      { id: 2, source: 'dashboard', parent_request_id: 1 },
+      { id: 3, source: 'email', parent_request_id: null },
+    ]);
+    expect(db.prepare('SELECT request_id, answered_via FROM questions').all()).toEqual([
+      { request_id: 1, answered_via: 'email' },
+    ]);
+    expect(db.prepare('SELECT request_id FROM pull_requests').all()).toEqual([{ request_id: 2 }]);
+    expect(() => db.exec(`INSERT INTO requests (text, source, created_at) VALUES ('x', 'fax', 't')`)).toThrow(
+      /CHECK/,
+    );
+    // Deleting a request still clears what pointed at it.
+    db.exec('DELETE FROM requests WHERE id = 1');
+    expect(db.prepare('SELECT request_id FROM questions').all()).toEqual([{ request_id: null }]);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM requests').get()).toEqual({ n: 1 });
+    db.close();
+  });
+
   it('migration 15 drops cloud and calendar/travel data: old pause reasons become manual, nothing is deleted', () => {
     const db = new Database(':memory:');
     db.pragma('foreign_keys = ON');

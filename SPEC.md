@@ -43,3 +43,4 @@ Hierarchy: Projects → Sessions → Subagents.
 - 2026-10-18: removed the calendar connection, the pause during video calls, and the travel handoff to Claude Code cloud. The code is not part of this repository.
 - 2026-10-18: dashboard and server are local-only (127.0.0.1) for now; the Vercel preview was deleted. Moving sessions to Claude Code cloud and an always-on server are deferred.
 - Kept: searchable history, per-session MCP tokens, free-model fallback.
+- 2026-10-25: an email channel (Gmail): an allowlisted sender mails a task, the loop replies with clarifying questions if needed, then the plan as approved, carries the agents' questions on the same thread, and writes there when the new version is in production.

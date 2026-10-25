@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { systemClock, type Clock } from './clock.js';
 import { migrate } from './migrations.js';
+import { EmailRepo } from './repos/email.js';
 import { GuardianRepo } from './repos/guardian.js';
 import { HistoryRepo } from './repos/history.js';
 import { MetricsRepo } from './repos/metrics.js';
@@ -31,6 +32,7 @@ export interface Store {
   readonly metrics: MetricsRepo;
   readonly history: HistoryRepo;
   readonly guardianRuns: GuardianRepo;
+  readonly email: EmailRepo;
   /** Runs fn in one transaction; rolls back if it throws. Nested calls become savepoints. */
   transaction<T>(fn: () => T): T;
   close(): void;
@@ -68,6 +70,7 @@ export function openStore(options: StoreOptions = {}): Store {
     metrics: new MetricsRepo(db),
     history: new HistoryRepo(db, clock, projects, sessions),
     guardianRuns: new GuardianRepo(db, clock, projects),
+    email: new EmailRepo(db, clock),
     transaction: (fn) => db.transaction(fn)(),
     close: () => db.close(),
   };

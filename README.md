@@ -40,12 +40,12 @@ Then press **+ Session** on the project, type what you want done, and watch the 
 
 ## Settings
 
-| What                                                                   | Where                                             |
-| ---------------------------------------------------------------------- | ------------------------------------------------- |
-| Top bar items, pipeline stages and their prompts, row details          | Dashboard, the pencil in the top bar              |
-| Session model, fallback model, Claude Code / OpenCode on or off        | Dashboard, the gear in the top bar                |
-| Auto-merge, direct input, permission mode, order, hiding (per project) | Dashboard, the slider icon on a project           |
-| PR loop, Telegram, ports, worktrees folder, job limits, providers      | `.env` in the repo root, then restart `npm start` |
+| What                                                                     | Where                                             |
+| ------------------------------------------------------------------------ | ------------------------------------------------- |
+| Top bar items, pipeline stages and their prompts, row details            | Dashboard, the pencil in the top bar              |
+| Session model, fallback model, Claude Code / OpenCode on or off          | Dashboard, the gear in the top bar                |
+| Auto-merge, direct input, permission mode, order, hiding (per project)   | Dashboard, the slider icon on a project           |
+| PR loop, Telegram, email, ports, worktrees folder, job limits, providers | `.env` in the repo root, then restart `npm start` |
 
 These are the `.env` values you're most likely to change. Everything else has a sensible default and is documented in [`.env.example`](.env.example).
 
@@ -62,6 +62,8 @@ These are the `.env` values you're most likely to change. Everything else has a 
 ## Optional extras
 
 **Telegram.** Create a bot with [@BotFather](https://t.me/BotFather) (`/newbot`), put its token in `TELEGRAM_BOT_TOKEN`, and set `TELEGRAM_OWNER_ID` to your numeric id from [@userinfobot](https://t.me/userinfobot). Then open your bot and press **Start**. It uses long polling, so nothing is exposed.
+
+**Email.** Send tasks by email and answer by reply: set `EMAIL_ADDRESS` (a Gmail account for the loop), `EMAIL_APP_PASSWORD` (a Google app password) and `EMAIL_ALLOWLIST` (who may send tasks). The loop replies with clarifying questions if it needs them, then the approved plan, asks its questions on the same thread, and writes there when the new version is in production. See [the reference](docs/reference.md#email-channel).
 
 **The PR loop.** Run `gh auth login`, set `LOOP_ENGINE=on`, and restart. Every PR a session opens then gets tests, a code review by a separate agent (up to 5 rounds), QA when the change needs it, and a merge when auto-merge is on for that project, or your approval when it's off. After the merge, the loop watches the deploy and reverts it if it fails (for repos with a `vercelProject` set; see [the reference](docs/reference.md#the-pr-loop)).
 
