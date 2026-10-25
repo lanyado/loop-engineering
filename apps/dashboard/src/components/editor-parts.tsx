@@ -40,9 +40,18 @@ interface Drag {
   /** Pointer minus the item's centre when it lifted, so it stays where it was grabbed. */
   grab: { x: number; y: number };
   lifted: boolean;
+  /** A move (or the release) came while the last reorder was rendering: placed again once it has. */
+  missed: boolean;
+  /** The release was Escape (or the like): it goes back to where it started. */
+  cancelled: boolean;
+  /** The place it just left and where the pointer was then: it goes back only once the pointer moves on. */
+  left: { index: number; pointer: { x: number; y: number } } | null;
   hold?: ReturnType<typeof setTimeout>;
   stop: () => void;
 }
+
+/** How far the pointer moves before an item may return to the place it just left. */
+const BOUNCE_PX = 12;
 
 const calm = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -107,11 +116,17 @@ export function useReorder<T>(items: readonly T[], onChange: (items: T[]) => voi
         const [dx, dy] = [r.left - now.left, r.top - now.top];
         if (dx || dy) el.animate([{ translate: `${dx}px ${dy}px` }, { translate: '0 0' }], SLIDE);
       }
+    // Placing again only for a move that came while rendering: a reorder that changes how the row
+    // wraps must not set off another one on its own.
     const d = drag.current;
     if (d?.lifted) {
       follow(d);
-      retarget(d); // moves that came while the last reorder rendered
-    } else if (landing.current) land();
+      if (d.missed) retarget(d);
+    } else if (landing.current) {
+      const l = landing.current;
+      if (l.missed) retarget(l, l.cancelled ? l.startIndex : placeFor(l), l.cancelled);
+      if (!before.current) land();
+    }
   });
   // A drag cut short by the editor closing leaves no listeners behind.
   useEffect(() => () => drag.current?.stop(), []);
@@ -133,10 +148,25 @@ export function useReorder<T>(items: readonly T[], onChange: (items: T[]) => voi
     d.el.style.translate = `${d.pointer.x - d.grab.x - box.left - m.x}px ${d.pointer.y - d.grab.y - box.top - m.y}px`;
   }
 
-  /** Moves the carried item to where the pointer is, unless a reorder is still rendering. */
-  function retarget(d: Drag, to = placeFor(d)) {
-    if (before.current || to === d.index) return;
-    if (reorder(d.index, to, d.area)) d.index = to;
+  /**
+   * Moves the carried item to `to` (where the pointer is). While a reorder is still rendering it is
+   * noted and done after. It never goes straight back to the place it just left until the pointer
+   * has moved on (`force` for a cancel): a wrapped row can reflow so that both places look right.
+   */
+  function retarget(d: Drag, to = placeFor(d), force = false) {
+    if (before.current) {
+      d.missed = true;
+      return;
+    }
+    d.missed = false;
+    if (to === d.index) return;
+    const { left } = d;
+    const still = left && Math.hypot(d.pointer.x - left.pointer.x, d.pointer.y - left.pointer.y) < BOUNCE_PX;
+    if (!force && left?.index === to && still) return;
+    if (reorder(d.index, to, d.area)) {
+      d.left = { index: d.index, pointer: { ...d.pointer } };
+      d.index = to;
+    }
   }
 
   function lift(d: Drag) {
@@ -174,7 +204,8 @@ export function useReorder<T>(items: readonly T[], onChange: (items: T[]) => voi
     d.stop();
     if (!d.lifted) return;
     landing.current = d;
-    retarget(d, cancel ? d.startIndex : placeFor(d));
+    d.cancelled = cancel;
+    retarget(d, cancel ? d.startIndex : placeFor(d), cancel);
     // With a reorder on its way, the layout effect lands it once the list has rendered.
     if (!before.current) land();
     // The click that ends a drag must not also open the item.
@@ -229,7 +260,9 @@ export function useReorder<T>(items: readonly T[], onChange: (items: T[]) => voi
       reorder(i, to, button.closest('[data-sort-area]'));
     },
     onPointerDown: (e) => {
-      if (drag.current || landing.current || (e.pointerType === 'mouse' && e.button !== 0)) return;
+      // A ctrl-click is the context menu on a Mac, not a drag.
+      if (drag.current || landing.current || (e.pointerType === 'mouse' && (e.button !== 0 || e.ctrlKey)))
+        return;
       if ((e.target as Element).closest('.wiggle-remove, .wiggle-move')) return;
       const el = e.currentTarget;
       const area = el.closest<HTMLElement>('[data-sort-area]') ?? el.parentElement!;
@@ -252,6 +285,9 @@ export function useReorder<T>(items: readonly T[], onChange: (items: T[]) => voi
         pointer: at,
         grab: { x: 0, y: 0 },
         lifted: false,
+        missed: false,
+        cancelled: false,
+        left: null,
         stop: () => {
           clearTimeout(d.hold);
           for (const [type, fn] of listeners) window.removeEventListener(type, fn as EventListener);

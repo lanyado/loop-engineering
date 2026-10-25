@@ -593,6 +593,17 @@ test('with motion on, a drag moves each item once and lands where it is dropped'
   ]);
   await expect(page.getByTestId('stage-sheet')).toHaveCount(0);
 
+  // On a phone the top bar wraps onto two lines: a drag across the lines lands once, without a loop.
+  await page.setViewportSize({ width: 390, height: 800 });
+  const weekly = await centre('.topbar-items > [data-item="weekly"]');
+  const brand = await centre('.topbar-items > [data-item="brand"]');
+  const wrapped = await drag('.topbar-items', 'weekly', { x: brand.x - 10, y: brand.y }, top);
+  expect(wrapped.at(-1)).toBe('weekly brand fiveHour claude');
+  expect(new Set(wrapped).size).toBe(wrapped.length); // never back to an order it had
+  expect(weekly.y).toBeGreaterThan(brand.y); // it did start on the second line
+  await expect(editor).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 800 });
+
   // Escape mid-drag puts it back.
   const b = (await editor.locator('.lane-step > [data-item="qa"]').boundingBox())!;
   await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
