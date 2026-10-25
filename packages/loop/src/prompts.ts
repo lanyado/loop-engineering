@@ -395,20 +395,6 @@ export function parseQa(text: string): QaVerdict | null {
   return { passed: false, failures, report };
 }
 
-/** UI file types: a diff that touches none of them has nothing for a browser to check. */
-const UI_FILE = /\.(tsx|jsx|vue|svelte|astro|html?|css|scss|sass|less)$/i;
-/** Plain .js/.mjs counts too when it sits where pages and their scripts live. */
-const UI_DIR = /(^|\/)(components|pages|app|public|static|styles|games|site|web|views|layouts)\//i;
-const TEST_FILE = /(^|\/)(tests?|__tests__|e2e)\/|\.(test|spec)\.[cm]?[jt]sx?$/i;
-
-/** Whether a unified diff changes any UI file (test files never count). */
-export function touchesUi(diff: string): boolean {
-  const files = [...diff.matchAll(/^diff --git a\/(\S+) b\/(\S+)$/gm)].map((m) => m[2]!);
-  return files.some(
-    (f) => !TEST_FILE.test(f) && (UI_FILE.test(f) || (UI_DIR.test(f) && /\.[cm]?js$/i.test(f))),
-  );
-}
-
 export interface ConflictVerdict {
   resolved: boolean;
   report: string;

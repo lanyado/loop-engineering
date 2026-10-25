@@ -208,6 +208,25 @@ describe('custom stages', () => {
     expect(h.pr().outcome).toBe('merged');
   });
 
+  it('a stage runs only on the kind of change its runs setting names', async () => {
+    const deps: Stage = { ...security, id: 'deps', title: 'Dependency audit', runs: 'dependency-changes' };
+    for (const [files, kinds] of [
+      [['app.ts'], ['review']],
+      [
+        ['app.ts', 'web/package-lock.json'],
+        ['check-deps', 'review'],
+      ],
+    ]) {
+      const h = harness(library({ checks: ['deps', 'review'] }, [deps]));
+      h.github.diffFiles = files!;
+      h.launcher.on('check-deps', checkPass()).on('review', clean());
+      await h.builderWithPr();
+      await h.engine.tick();
+      expect([files, h.launcher.kinds()]).toEqual([files, kinds]);
+      expect(h.pr().outcome).toBe('merged');
+    }
+  });
+
   it('a browser stage gets the browser and a shell, never edits', async () => {
     const visual: Stage = {
       ...security,

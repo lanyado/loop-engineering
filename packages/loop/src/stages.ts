@@ -15,7 +15,18 @@ export const BUILTIN_CHECKS = ['tests', 'review', 'qa'] as const;
 export type BuiltinCheck = (typeof BUILTIN_CHECKS)[number];
 export const STAGE_ACCESS = ['read', 'shell', 'browser'] as const;
 export type StageAccess = (typeof STAGE_ACCESS)[number];
-export const STAGE_RUNS = ['always', 'ui-changes'] as const;
+/** When a check runs: on every PR, or only when the diff changes that kind of file (see changes.ts). */
+export const STAGE_RUNS = [
+  'always',
+  'code-changes',
+  'ui-changes',
+  'server-changes',
+  'test-changes',
+  'docs-changes',
+  'dependency-changes',
+  'database-changes',
+  'infra-changes',
+] as const;
 export type StageRuns = (typeof STAGE_RUNS)[number];
 export const STAGE_ICONS = [
   'tests',

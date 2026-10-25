@@ -119,12 +119,12 @@ describe('HttpBackend against the real server', () => {
     });
   });
 
-  it("reads the pipeline, and the demo's reserved stage ids are the server's", async () => {
+  it("reads the pipeline, and the demo's choices (reserved ids, runs) are the server's", async () => {
     const view = await backend.pipeline();
     expect(view.pipeline.checks).toEqual(['tests', 'review', 'qa']);
-    expect([...demoData(new Date()).pipeline.choices.reserved].sort()).toEqual(
-      [...view.choices.reserved].sort(),
-    );
+    const { choices } = demoData(new Date()).pipeline;
+    expect([...choices.reserved].sort()).toEqual([...view.choices.reserved].sort());
+    expect(choices.runs).toEqual(view.choices.runs);
   });
 
   it("reads a PR's pending loop question and sends a message to one session", async () => {

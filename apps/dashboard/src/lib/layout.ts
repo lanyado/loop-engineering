@@ -76,6 +76,42 @@ export function move<T>(list: readonly T[], from: number, to: number): T[] {
   return next;
 }
 
+/**
+ * `items` with the `missing` ones put back where `reference` has them (after the shown items that
+ * come before them there; ones it lacks go last). `at` is where adding an entry inserts it.
+ */
+export function withGhosts<T>(
+  items: readonly T[],
+  missing: readonly T[],
+  reference: readonly T[],
+): { item: T; ghost: boolean; at: number }[] {
+  const rank = (x: T) => {
+    const i = reference.indexOf(x);
+    return i < 0 ? reference.length : i;
+  };
+  const ghosts = [...missing]
+    .sort((a, b) => rank(a) - rank(b))
+    .map((item) => {
+      const before = items.flatMap((x, i) => (rank(x) < rank(item) ? [i + 1] : []));
+      return {
+        item,
+        ghost: true,
+        at: rank(item) === reference.length ? items.length : Math.max(0, ...before),
+      };
+    });
+  return [
+    ...items.flatMap((item, i) => [...ghosts.filter((g) => g.at === i), { item, ghost: false, at: i }]),
+    ...ghosts.filter((g) => g.at === items.length),
+  ];
+}
+
+/** `list` with `item` inserted at `at`. */
+export const insert = <T>(list: readonly T[], item: T, at: number): T[] => [
+  ...list.slice(0, at),
+  item,
+  ...list.slice(at),
+];
+
 /** `list` with `item` taken out if it is in, added at the end if not. */
 export const toggle = <T>(list: readonly T[], item: T): T[] =>
   list.includes(item) ? list.filter((x) => x !== item) : [...list, item];

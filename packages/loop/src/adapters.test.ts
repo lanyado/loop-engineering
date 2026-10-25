@@ -12,14 +12,7 @@ import {
 } from './agent.js';
 import { GhCli, GhDeployments, productionEnvironments, repoRef } from './gh.js';
 import type { AgentJob } from './ports.js';
-import {
-  extractFencedJson,
-  parseReview,
-  QA_RIGHTS,
-  REVIEW_RIGHTS,
-  TEST_RIGHTS,
-  touchesUi,
-} from './prompts.js';
+import { extractFencedJson, parseReview, QA_RIGHTS, REVIEW_RIGHTS, TEST_RIGHTS } from './prompts.js';
 
 interface Call {
   bin: string;
@@ -426,26 +419,5 @@ describe('verdicts', () => {
       blocking: [],
       report: 'Fine.',
     });
-  });
-});
-
-describe('touchesUi', () => {
-  const diff = (...files: string[]) => files.map((f) => `diff --git a/${f} b/${f}\n+x\n`).join('');
-  it('counts pages, components and styles, never tests or backend code', () => {
-    for (const f of [
-      'apps/dashboard/src/components/pipeline.tsx',
-      'styles.css',
-      'he/index.html',
-      'games/coin-run/world.js',
-    ])
-      expect([f, touchesUi(diff('README.md', f))]).toEqual([f, true]);
-    for (const f of [
-      'packages/loop/src/engine.ts',
-      'apps/dashboard/src/lib/board.test.ts',
-      'tests/e2e/home.spec.ts',
-      'scripts/build.mjs',
-      'README.md',
-    ])
-      expect([f, touchesUi(diff(f))]).toEqual([f, false]);
   });
 });

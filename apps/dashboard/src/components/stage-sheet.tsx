@@ -24,7 +24,14 @@ const ACCESS_WORDS: Record<string, string> = {
 };
 const RUNS_WORDS: Record<string, string> = {
   always: 'On every PR',
+  'code-changes': 'When code changes (not only docs)',
   'ui-changes': 'Only when UI files change',
+  'server-changes': 'Only when server code changes',
+  'test-changes': 'Only when tests change',
+  'docs-changes': 'Only when docs change',
+  'dependency-changes': 'Only when dependencies change',
+  'database-changes': 'Only when database files change',
+  'infra-changes': 'Only when CI or deploy files change',
 };
 
 /** A stage id from its title: "Security review" → "security-review". */
@@ -152,7 +159,7 @@ export function StageSheet({
             rows={8}
             maxLength={4000}
             required={!(stage.builtin && !stage.overridden && !f.prompt)}
-            placeholder={stage.builtin ? 'The built-in prompt (restored when you Approve).' : undefined}
+            placeholder={stage.builtin ? 'The built-in prompt (restored when you Save).' : undefined}
             onChange={(e) => set({ prompt: e.target.value })}
             data-testid="stage-prompt"
           />
