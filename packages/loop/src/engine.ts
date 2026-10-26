@@ -1686,7 +1686,8 @@ export class LoopEngine {
     } catch (err) {
       if (this.stopped) return { ok: false, progressed: false };
       // The human skipped the check while its job ran (pokePr): no attempt spent; the PR moves on now.
-      if (err instanceof CheckSkipped) return { ok: false, progressed: this.save(c, {}, {}, usage) };
+      if (err instanceof CheckSkipped)
+        return { ok: false, progressed: this.save(c, {}, FRESH_ATTEMPTS, usage) };
       return failed(err);
     }
     add(result);
@@ -1716,7 +1717,7 @@ export class LoopEngine {
     finish: (result: AgentJobResult, path: string) => Promise<void>,
   ): Promise<AgentJobResult> {
     const { workspace, launcher } = this.deps;
-    // Registered before the queue, so a skip also stops a job still waiting for its turn.
+    // Registered before the queue, so a skip lands as soon as the job gets its slot (a queued job cannot be dequeued).
     const controller = new AbortController();
     const mine = { kind: job.kind, controller };
     this.running.set(c.pr.id, mine);
