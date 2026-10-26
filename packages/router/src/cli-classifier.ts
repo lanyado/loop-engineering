@@ -11,16 +11,11 @@ import {
 } from '@loop-engineering/runner';
 import { extractJson } from './classification.js';
 import {
-  buildClarifyPrompt,
   buildClassifierPrompt,
   buildSplitPrompt,
   buildTitlePrompt,
-  cleanClarification,
   cleanPlan,
   cleanTitle,
-  type ClarifyMail,
-  type ClarifyOptions,
-  type Clarification,
   type Plan,
 } from './prompt.js';
 import type { Classifier, ClassifyInput } from './types.js';
@@ -61,34 +56,25 @@ export class CliClassifier implements Classifier {
   }
 
   async classify(input: ClassifyInput, signal: AbortSignal): Promise<unknown> {
-    return this.ask(buildClassifierPrompt(input), signal);
+    return this.askJson(buildClassifierPrompt(input), signal);
   }
 
   /** A short session title for a task, in the task's language; null when the answer has none. */
   async title(text: string, signal: AbortSignal): Promise<string | null> {
-    const answer = (await this.ask(buildTitlePrompt(text), signal)) as { title?: unknown } | null;
+    const answer = (await this.askJson(buildTitlePrompt(text), signal)) as { title?: unknown } | null;
     return cleanTitle(answer?.title);
   }
 
   /** The independent parts of a task (fewer than two means one task), or a real question for the human. */
   async plan(text: string, signal: AbortSignal): Promise<Plan> {
-    return cleanPlan(await this.ask(buildSplitPrompt(text), signal));
+    return cleanPlan(await this.askJson(buildSplitPrompt(text), signal));
   }
 
-  /** For an emailed task: questions for the requester, or the plan (see buildClarifyPrompt). */
-  async clarify(mails: ClarifyMail[], options: ClarifyOptions, signal: AbortSignal): Promise<Clarification> {
-    const answer = cleanClarification(await this.ask(buildClarifyPrompt(mails, options), signal));
-    const allowed =
-      answer !== null &&
-      ('plan' in answer ||
-        ('questions' in answer && !options.mustPlan) ||
-        ('nothing' in answer && Boolean(options.earlier)));
-    if (!allowed) throw new ClassifierError('the clarifier gave no answer it may give here');
-    return answer;
-  }
-
-  /** One JSON answer to `prompt`: Claude first, OpenCode while Claude is out of usage or off. */
-  private async ask(prompt: string, signal: AbortSignal): Promise<unknown> {
+  /**
+   * One JSON answer to `prompt` (unvalidated): Claude first, OpenCode while Claude is out of usage or
+   * off. Public so add-ins can make their own small calls the same way.
+   */
+  async askJson(prompt: string, signal: AbortSignal): Promise<unknown> {
     const now = this.options.clock.now().getTime();
     const on = this.options.providers?.() ?? { claude: true, opencode: true };
     if (on.claude && now >= this.limitedUntil) {

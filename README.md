@@ -1,9 +1,9 @@
 # Loop Engineering
 
-Give it a task, and it runs a Claude Code session on your repo in the background. It asks you questions when it needs you (in the dashboard or on Telegram), and takes each pull request through tests, code review, QA, merge and deploy.
+Give it a task, and it runs a Claude Code session on your repo in the background. It asks you questions in the dashboard when it needs you, and takes each pull request through tests, code review, QA, merge and deploy.
 
 - **Sessions** run the Claude Code CLI in tmux, one git worktree per session. When Claude hits its usage limit, they can move to a free OpenCode model.
-- **Questions** come to the dashboard and Telegram as one-tap options with a default answer. If you don't reply in time, the default wins.
+- **Questions** come to the dashboard as one-tap options with a default answer. If you don't reply in time, the default wins.
 - **The PR loop** (optional) tests, reviews, QA-checks and merges every PR a session opens, sends failures back to the agent, and, for repos with a Vercel project set, reverts a deploy that fails.
 - **The dashboard** shows every project as a live pipeline, along with your Claude usage limits.
 
@@ -40,32 +40,29 @@ Then press **+ Session** on the project, type what you want done, and watch the 
 
 ## Settings
 
-| What                                                                     | Where                                             |
-| ------------------------------------------------------------------------ | ------------------------------------------------- |
-| Top bar items, pipeline stages and their prompts, row details            | Dashboard, the pencil in the top bar              |
-| Session model, fallback model, Claude Code / OpenCode on or off          | Dashboard, the gear in the top bar                |
-| Auto-merge, direct input, permission mode, order, hiding (per project)   | Dashboard, the slider icon on a project           |
-| PR loop, Telegram, email, ports, worktrees folder, job limits, providers | `.env` in the repo root, then restart `npm start` |
+| What                                                                   | Where                                             |
+| ---------------------------------------------------------------------- | ------------------------------------------------- |
+| Top bar items, pipeline stages and their prompts, row details          | Dashboard, the pencil in the top bar              |
+| Session model, fallback model, Claude Code / OpenCode on or off        | Dashboard, the gear in the top bar                |
+| Auto-merge, direct input, permission mode, order, hiding (per project) | Dashboard, the slider icon on a project           |
+| PR loop, ports, worktrees folder, job limits, providers                | `.env` in the repo root, then restart `npm start` |
 
 These are the `.env` values you're most likely to change. Everything else has a sensible default and is documented in [`.env.example`](.env.example).
 
-| Variable                                  | What it does                                                                          |
-| ----------------------------------------- | ------------------------------------------------------------------------------------- |
-| `LOOP_ENGINE=on`                          | Turns on the PR loop. It merges and reverts for real, so turn on auto-merge with care |
-| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_OWNER_ID` | Questions on your phone (see below)                                                   |
-| `WORKTREES_ROOT`                          | Where session worktrees go (setup sets `~/loop-worktrees`)                            |
-| `CLAUDE_LIMIT=opencode`                   | At Claude's usage limit, switch to OpenCode instead of waiting                        |
-| `SERVER_PORT`, `DASHBOARD_PORT`           | Ports, 8787 and 3737 by default (change `SERVER_URL` along with `SERVER_PORT`)        |
+| Variable                        | What it does                                                                          |
+| ------------------------------- | ------------------------------------------------------------------------------------- |
+| `LOOP_ENGINE=on`                | Turns on the PR loop. It merges and reverts for real, so turn on auto-merge with care |
+| `WORKTREES_ROOT`                | Where session worktrees go (setup sets `~/loop-worktrees`)                            |
+| `CLAUDE_LIMIT=opencode`         | At Claude's usage limit, switch to OpenCode instead of waiting                        |
+| `SERVER_PORT`, `DASHBOARD_PORT` | Ports, 8787 and 3737 by default (change `SERVER_URL` along with `SERVER_PORT`)        |
 
 `npm run setup` never overwrites a value you've set, so it's safe to run again after an update.
 
 ## Optional extras
 
-**Telegram.** Create a bot with [@BotFather](https://t.me/BotFather) (`/newbot`), put its token in `TELEGRAM_BOT_TOKEN`, and set `TELEGRAM_OWNER_ID` to your numeric id from [@userinfobot](https://t.me/userinfobot). Then open your bot and press **Start**. It uses long polling, so nothing is exposed.
-
-**Email.** Send tasks by email and answer by reply: set `EMAIL_ADDRESS` (a Gmail account for the loop), `EMAIL_APP_PASSWORD` (a Google app password) and `EMAIL_ALLOWLIST` (who may send tasks). The loop replies with clarifying questions if it needs them, then the approved plan, asks its questions on the same thread, and writes there when the new version is in production. See [the reference](docs/reference.md#email-channel).
-
 **The PR loop.** Run `gh auth login`, set `LOOP_ENGINE=on`, and restart. Every PR a session opens then gets tests, a code review by a separate agent (up to 5 rounds), QA when the change needs it, and a merge when auto-merge is on for that project, or your approval when it's off. After the merge, the loop watches the deploy and reverts it if it fails (for repos with a `vercelProject` set; see [the reference](docs/reference.md#the-pr-loop)).
+
+**Your own add-ins.** Extra channels or integrations you keep to yourself go in a `local/` folder in the repo, which git ignores: the server loads it at start ([how](docs/reference.md#local-add-ins)).
 
 **Rigor, per session.** Above each session's pipeline is a dial from **⚡ Fast** to **🛡 Thorough** that trades safety against time and money in one move. Fast runs none of the checks and merges once CI passes (with auto-merge on; a PR already waiting for your approval stays with you); Light runs only tests and a code review (2 rounds at most, only real bugs block); Standard runs the pipeline as it is (the default); Thorough runs every check, QA on every PR, and asks for tests for every change. The pipeline under the dial dims what that level leaves out, and a change applies from the PR's next step ([details](docs/reference.md#rigor-per-session)).
 

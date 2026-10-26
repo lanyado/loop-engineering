@@ -62,7 +62,7 @@ export type Decoded = { kind: 'cancel' } | { kind: 'route'; choice: RouteChoice 
 
 /**
  * Reads the human's answer to a routing question. It is usually one of the options; a free-text
- * reply (Telegram) is matched to an option ignoring case, then to a project name, which means a new
+ * reply (a chat channel) is matched to an option ignoring case, then to a project name, which means a new
  * session there. Anything else is unknown.
  */
 export function decodeAnswer(answer: string, options: string[], projects: Project[], store: Store): Decoded {

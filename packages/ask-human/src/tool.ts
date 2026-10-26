@@ -68,7 +68,7 @@ export type AskHumanInput = z.infer<typeof askHumanInputSchema>;
 export type AskHumanOutput = z.infer<typeof askHumanOutputSchema>;
 
 const DESCRIPTION = `Ask the human a question and wait for their answer. Use it for decisions you cannot settle from the code or the request: product choices, tradeoffs, anything hard to reverse.
-The question reaches the human on Telegram and the dashboard; the first answer wins. The call blocks until they answer, for at most 15 minutes. With no answer by then it returns your \`recommended\` option with defaulted: true, and you must then say in your work (summary, PR description) that you went with your recommended option, so the human can revisit it.
+The question reaches the human in the dashboard and any other channel that is set up; the first answer wins. The call blocks until they answer, for at most 15 minutes. With no answer by then it returns your \`recommended\` option with defaulted: true, and you must then say in your work (summary, PR description) that you went with your recommended option, so the human can revisit it.
 The human may reply with free text instead of one of the options; follow what they wrote.
 If your connection drops while waiting, ask the identical question again: you get the same question back, with its answer if the human answered while you were away. Once you have received an answer, asking the same question again asks the human anew.`;
 

@@ -31,7 +31,7 @@ export interface AskResult {
  * The one place questions change state. Every state change goes through the store's conditional
  * updates, which let exactly one caller move a question out of "pending"; that caller, and only
  * it, wakes the waiters and emits question.resolved. So each question resolves exactly once even
- * when a Telegram answer, a dashboard answer and the deadline sweep race.
+ * when answers from two channels and the deadline sweep race.
  */
 export class QuestionService {
   private readonly waiters = new Map<number, Set<(question: Question) => void>>();

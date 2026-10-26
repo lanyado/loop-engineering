@@ -112,7 +112,7 @@ export interface Settings {
    * its current one (after the last, back to fallbackModel).
    */
   opencodeBackupModels: string[];
-  /** Telegram user IDs allowed to talk to the bot besides the owner (TELEGRAM_OWNER_ID). */
+  /** Chat user IDs a channel add-in may accept besides the owner; the name stays for stored settings. */
   telegramAllowlist: number[];
   /** Agent CLIs the loop may use; at least one is on. Both on: Claude, with OpenCode as the fallback. */
   claudeEnabled: boolean;
@@ -256,10 +256,10 @@ export function ownTask(text: string): string {
   return at < 0 ? text : text.slice(0, at);
 }
 
-/** A task the human sent (Telegram, dashboard or email). The reviewer checks PRs against its text. */
+/** A task the human sent (from the dashboard or another channel). The reviewer checks PRs against its text. */
 export interface Request {
   id: number;
-  /** Project the router picked; null until routed (a Telegram task arrives without one). */
+  /** Project the router picked; null until routed (a task from a chat channel arrives without one). */
   projectId: number | null;
   /** Session the router delivered it to; null until routed. */
   sessionId: number | null;
@@ -399,7 +399,7 @@ export interface EmailThread {
   state: EmailThreadState;
   /** The request created from the plan; null while clarifying. */
   requestId: number | null;
-  /** The mail provider's own thread id (Gmail's X-GM-THRID), when it has one. */
+  /** The mail provider's own thread id, when it has one. */
   mailThreadId: string | null;
   /** The last mail an earlier round dealt with (a plan, a reply passed on, a thank-you): 0 at first. */
   roundAfter: number;

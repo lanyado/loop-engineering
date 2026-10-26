@@ -2,7 +2,7 @@ import type { HumanChannel, Question } from '@loop-engineering/core';
 import type { QuestionBus, QuestionResolvedEvent, Unsubscribe } from './bus.js';
 
 /**
- * A place the human sees and answers questions (Telegram in M4, the dashboard in M7). A channel
+ * A place the human sees and answers questions (the dashboard, or a channel a local add-in adds). A channel
  * answers through QuestionService.answer(id, text, channel.name); the bus tells it everything else.
  */
 export interface QuestionChannel {

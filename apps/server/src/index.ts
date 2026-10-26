@@ -1,5 +1,7 @@
+export { loadAddins, type AddinEntry } from './addins.js';
 export { claudeUsageModule } from './modules/claude-usage.js';
+export type { ServerConfig } from './config.js';
+export type { ServerContext, ServerModule } from './context.js';
 export { dashboardApi } from './modules/dashboard-api.js';
-export { emailModule } from './modules/email.js';
 export { pipelineModule } from './modules/pipeline.js';
-export { createServer } from './server.js';
+export { createServer, type LoopServer } from './server.js';

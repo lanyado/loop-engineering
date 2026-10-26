@@ -179,7 +179,7 @@ export function ProjectSettings({
       )}
       <Switch
         label="Marked for direct input"
-        hint="New tasks from Telegram or this dashboard can be routed here."
+        hint="New tasks can be routed here."
         checked={value('markedForDirectInput')}
         disabled={readOnly || pending}
         onChange={(v) => toggle('markedForDirectInput', v)}

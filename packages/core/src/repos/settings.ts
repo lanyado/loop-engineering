@@ -51,7 +51,7 @@ export class SettingsRepo {
       throw new ValidationError('sessionModel must not be empty');
     }
     if (patch.telegramAllowlist?.some((id) => !Number.isSafeInteger(id))) {
-      throw new ValidationError('telegramAllowlist must contain integer Telegram user IDs');
+      throw new ValidationError('telegramAllowlist must contain integer user IDs');
     }
     if (patch.opencodeBackupModels?.some((m) => m.trim() === '' || /\s/.test(m.trim()))) {
       throw new ValidationError('opencodeBackupModels must be model names like opencode/big-pickle');

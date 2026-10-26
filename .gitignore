@@ -16,3 +16,6 @@ playwright-report/
 data/*.bak*
 data/stages/
 .claude/settings.local.json
+
+# Private add-ins: never part of this repository (docs/reference.md, "Local add-ins").
+/local/

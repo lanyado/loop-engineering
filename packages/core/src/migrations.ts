@@ -214,7 +214,7 @@ export const MIGRATIONS: readonly Migration[] = [
   {
     version: 5,
     name: 'unrouted requests: requests.project_id nullable',
-    // A task sent from Telegram is stored before the router (M5) picks its project, so a request
+    // A task sent from a chat channel is stored before the router (M5) picks its project, so a request
     // has no project until it is routed. SQLite cannot drop NOT NULL in place, hence the rebuild.
     rebuildsTables: true,
     sql: `

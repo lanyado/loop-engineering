@@ -355,7 +355,7 @@ test('settings sit with their project and in the top bar, disabled in demo mode'
 
   const sheet = await globalSettings(page);
   await expect(sheet.getByTestId('input-fallbackModel')).toHaveValue('opencode/glm-5.3-flash-free');
-  // The Telegram allowlist is managed outside the dashboard now; the sheet has no editor for it.
+  // The chat allowlist is managed outside the dashboard now; the sheet has no editor for it.
   await expect(sheet.getByTestId('allowlist')).toHaveCount(0);
   await expect(sheet.getByRole('button', { name: 'Log out' })).toHaveCount(0);
   await expectNoHorizontalScroll(page);

@@ -35,7 +35,7 @@ function askHuman(where: string): string[] {
   return [
     '## Asking the human',
     '- When you need a decision or information from the human, call the ask_human tool, with short ' +
-      'options and the option you recommend. It reaches them on Telegram and the dashboard. Never ask in plain text.',
+      'options and the option you recommend. It reaches them in the dashboard and any other channel that is set up. Never ask in plain text.',
     `- If the request is ambiguous and there is a sensible default, go with the default and say so in ${where}.`,
   ];
 }

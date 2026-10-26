@@ -6,7 +6,7 @@ import type { ProjectRepo } from './projects.js';
 import type { SessionRepo } from './sessions.js';
 
 export interface NewRequest {
-  /** Omit (or null) for a request the router has not routed yet, e.g. a Telegram task. */
+  /** Omit (or null) for a request the router has not routed yet, e.g. one from a chat channel. */
   projectId?: number | null;
   text: string;
   source: RequestSource;

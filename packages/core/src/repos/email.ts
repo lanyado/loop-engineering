@@ -23,7 +23,7 @@ export interface NewEmailMessage {
   requestId?: number | null;
 }
 
-/** How far an inbox was read (IMAP): the last UID seen, while the mailbox keeps its UIDVALIDITY. */
+/** How far an inbox was read: the last message id seen, while the mailbox keeps the same id space. */
 export interface EmailCursor {
   uidValidity: number;
   lastUid: number;

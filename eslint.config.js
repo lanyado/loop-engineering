@@ -10,6 +10,8 @@ export default tseslint.config(
       '**/node_modules/**',
       '**/coverage/**',
       '.boost/**',
+      // Private add-ins (docs/reference.md "Local add-ins"): their own package, linted by their owner.
+      'local/**',
       '**/.next/**',
       '**/next-env.d.ts',
       '**/test-results/**',

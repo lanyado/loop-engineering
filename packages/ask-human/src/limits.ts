@@ -1,7 +1,7 @@
 /**
- * Size caps that bound what an agent can send a human. They do not make a question fit one
- * Telegram message (4096 characters): question + context + options can exceed it, and splitting or
- * truncating for display is the channel's job (M4). QuestionService enforces the caps for every
+ * Size caps that bound what an agent can send a human. They do not make a question fit one chat
+ * message: question + context + options can exceed it, and splitting or truncating for display is
+ * the channel's job. QuestionService enforces the caps for every
  * caller; the tool schema and the REST API advertise them.
  */
 export const QUESTION_LIMITS = {

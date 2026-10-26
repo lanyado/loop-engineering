@@ -177,9 +177,9 @@ export class QuestionRepo {
   }
 
   /**
-   * Records a human answer. The answer may be one of the options or free text (e.g. a Telegram reply).
+   * Records a human answer. The answer may be one of the options or free text (e.g. a chat reply).
    * Only the first answer is kept, and only before the deadline: each update is conditional on the
-   * question still being pending, so concurrent Telegram/dashboard answers cannot both win. An answer
+   * question still being pending, so concurrent answers from two channels cannot both win. An answer
    * that arrives after the deadline is rejected and the question is defaulted on the spot, so the
    * returned question always shows the real outcome, whether or not expireDue() has run yet;
    * `defaultedNow` tells that case apart from one that was already defaulted.
