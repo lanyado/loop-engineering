@@ -10,15 +10,18 @@ function Ring({ left }: { left: number }) {
   return (
     <svg className="countdown-ring" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
       <circle cx="8" cy="8" r={r} className="countdown-ring-track" />
-      <circle
-        cx="8"
-        cy="8"
-        r={r}
-        className="countdown-ring-left"
-        strokeDasharray={c}
-        strokeDashoffset={c * (1 - left)}
-        suppressHydrationWarning
-      />
+      {/* Round caps would leave a dot at zero, so an empty ring is just the track. */}
+      {left > 0.01 && (
+        <circle
+          cx="8"
+          cy="8"
+          r={r}
+          className="countdown-ring-left"
+          strokeDasharray={c}
+          strokeDashoffset={c * (1 - left)}
+          suppressHydrationWarning
+        />
+      )}
     </svg>
   );
 }
@@ -56,7 +59,7 @@ export function Countdown({
       <span className="countdown-time" suppressHydrationWarning>
         {left > 0 ? `${formatCountdown(left)} left` : 'Defaulting now…'}
       </span>
-      <span className="sr-only">, then it goes with {fallback}</span>
+      {left > 0 && <span className="sr-only">, then it goes with {fallback}</span>}
     </span>
   );
 }

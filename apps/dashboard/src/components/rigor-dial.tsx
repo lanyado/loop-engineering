@@ -154,7 +154,7 @@ export function RigorDial({
             data-testid={`rigor-${level}`}
             // Not `disabled`: in demo mode the group stays reachable by keyboard; choose() ignores it.
             aria-disabled={readOnly || undefined}
-            title={`${NAMES[level]}: ${RIGOR_CAPTIONS[level]}`}
+            title={`${NAMES[level]}: ${RIGOR_CAPTIONS[level]}${readOnly && !preview ? ' (Demo data is read-only.)' : ''}`}
             onClick={() => choose(level)}
           >
             <span className="rigor-name">

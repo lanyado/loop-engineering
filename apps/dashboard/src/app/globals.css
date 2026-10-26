@@ -676,6 +676,11 @@ button.option:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
   color: var(--accent-soft-text);
 }
+.option-tag {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  opacity: 0.75;
+}
 .option-clock {
   width: 14px;
   height: 14px;
@@ -703,13 +708,10 @@ button.option.recommended:disabled {
   min-height: 38px;
   padding: 0 44px 0 var(--s-4);
   border-radius: var(--radius-pill);
-  border-color: transparent;
-  background: var(--surface-2);
   font-size: var(--text-sm);
 }
 .free-text input[type='text']:focus {
   border-color: var(--accent);
-  background: var(--surface);
 }
 .free-text .send {
   position: absolute;
@@ -728,10 +730,17 @@ button.option.recommended:disabled {
     opacity var(--dur) var(--ease),
     transform var(--dur) var(--ease);
 }
+.free-text .send:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: transparent;
+}
 .free-text .send:disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+.free-text .send.empty {
   opacity: 0;
   transform: scale(0.8);
-  pointer-events: none;
 }
 .free-text .send svg {
   width: 15px;
@@ -1470,7 +1479,7 @@ button.icon-button,
 .rigor-meters {
   display: inline-flex;
   gap: 5px;
-  font-size: 0.625rem;
+  font-size: 0.75rem;
   font-weight: 700;
   line-height: 1;
   letter-spacing: -0.5px;

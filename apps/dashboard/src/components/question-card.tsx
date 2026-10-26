@@ -86,7 +86,7 @@ export function QuestionCard({
                 >
                   {recommended && <ClockIcon />}
                   <span>{option}</span>
-                  {recommended && <span className="sr-only"> (default)</span>}
+                  {recommended && <span className="option-tag">· default</span>}
                 </button>
               );
             })}
@@ -109,7 +109,7 @@ export function QuestionCard({
             />
             <button
               type="submit"
-              className="send"
+              className={`send${text.trim() === '' ? ' empty' : ''}`}
               aria-label="Send"
               disabled={disabled || text.trim() === ''}
             >
