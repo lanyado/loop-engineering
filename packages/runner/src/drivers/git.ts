@@ -1,8 +1,13 @@
 import { isAbsolute, resolve } from 'node:path';
 import { exec, ExecError } from './exec.js';
 
+/** An unreachable remote must not stall a session start. */
+const FETCH_TIMEOUT_MS = 30_000;
+
 export interface GitDriver {
-  /** `git worktree add -b <branch> -- <worktreePath> <baseRef>` in the repo checkout at `repoPath`. */
+  /** `git fetch --quiet origin <ref>` in the repo checkout, updating `origin/<ref>`. Rejects when it fails or times out. */
+  fetch(repoPath: string, ref: string): Promise<void>;
+  /** `git worktree add --no-track -b <branch> -- <worktreePath> <baseRef>` in the repo checkout at `repoPath`. */
   addWorktree(repoPath: string, worktreePath: string, branch: string, baseRef: string): Promise<void>;
   removeWorktree(repoPath: string, worktreePath: string, options?: { force?: boolean }): Promise<void>;
   branchExists(repoPath: string, branch: string): Promise<boolean>;
@@ -28,8 +33,15 @@ export class RealGitDriver implements GitDriver {
     return (await exec(this.bin, ['-C', cwd, ...args])).stdout;
   }
 
+  async fetch(repoPath: string, ref: string): Promise<void> {
+    await exec(this.bin, ['-C', repoPath, 'fetch', '--quiet', 'origin', '--', ref], undefined, {
+      timeoutMs: FETCH_TIMEOUT_MS,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    });
+  }
+
   async addWorktree(repoPath: string, worktreePath: string, branch: string, baseRef: string): Promise<void> {
-    await this.git(repoPath, ['worktree', 'add', '-b', branch, '--', worktreePath, baseRef]);
+    await this.git(repoPath, ['worktree', 'add', '--no-track', '-b', branch, '--', worktreePath, baseRef]);
   }
 
   async removeWorktree(

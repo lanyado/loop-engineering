@@ -15,6 +15,7 @@ import {
   ValidationError,
   type Effort,
   type PauseReason,
+  type Repo,
   type Project,
   type RequestSource,
   type Session,
@@ -650,6 +651,19 @@ export class SessionRunner {
     return paused;
   }
 
+  /** Origin's fresh tip of the default branch, so a session never starts from stale code; the local branch if the fetch fails. */
+  private async baseRef(repo: Repo): Promise<string> {
+    try {
+      await this.deps.git.fetch(repo.path, repo.defaultBranch);
+      return `origin/${repo.defaultBranch}`;
+    } catch (err) {
+      this.log(
+        `${repo.name}: could not fetch origin/${repo.defaultBranch}, branching from the local ${repo.defaultBranch} (${errorMessage(err)})`,
+      );
+      return repo.defaultBranch;
+    }
+  }
+
   /** `sessionDir` is null for a folder project: the agent runs in its folder, nothing is created there. */
   private async provision(
     project: Project,
@@ -669,7 +683,7 @@ export class SessionRunner {
         for (const repo of project.repos) {
           const path = join(sessionDir, repo.name);
           assertInside(sessionDir, path, 'worktree');
-          await git.addWorktree(repo.path, path, session.branch, repo.defaultBranch);
+          await git.addWorktree(repo.path, path, session.branch, await this.baseRef(repo));
           created.push({ repo: repo.name, path });
         }
         store.sessions.update(session.id, { worktrees: created });
