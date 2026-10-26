@@ -685,6 +685,14 @@ describe('requests', () => {
     clock.advance(60_000);
     store.requests.create({ projectId: project.id, sessionId: a.id, text: 'second', source: 'dashboard' });
     store.requests.create({ projectId: project.id, text: 'unrouted', source: 'dashboard' });
+    // The loop's own fix tasks are not for the Planner.
+    clock.advance(60_000);
+    store.requests.create({
+      projectId: project.id,
+      sessionId: a.id,
+      text: '[loop] Fix deploy failure of PR #3: boom',
+      source: 'dashboard',
+    });
     expect(store.requests.latestBySession()).toEqual(new Map([[a.id, '2026-10-18T09:01:00.000Z']]));
     expect(store.requests.latestBySession().has(b.id)).toBe(false);
   });

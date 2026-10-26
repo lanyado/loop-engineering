@@ -297,6 +297,19 @@ describe('the Planner node', () => {
     // Ended: nothing left to plan. Started before the Planner existed and opened a PR: past it.
     expect(isPlanning(session(1, 1, { ...unplanned, status: 'ended' }), false)).toBe(false);
     expect(isPlanning(session(1, 1, unplanned), true)).toBe(false);
+    // Subagents running: the builder is clearly working. A folder session has no PR to show it.
+    const sub = {
+      id: 1,
+      sessionId: 1,
+      title: 't',
+      model: 'm',
+      effort: 'high',
+      status: 'running',
+      createdAt: 't',
+    };
+    expect(isPlanning(session(1, 1, { ...unplanned, subagents: [sub] }), false)).toBe(false);
+    expect(isPlanning(session(1, 1, unplanned), false, true)).toBe(false);
+    expect(isPlanning(session(1, 1, { ...unplanned, pendingQuestions: 1 }), false, true)).toBe(true);
   });
 
   it('while planning, the Planner has every question and the Builder has not started', () => {

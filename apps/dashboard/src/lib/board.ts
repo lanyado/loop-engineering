@@ -271,12 +271,16 @@ function builderState(status: string, open: PullRequest[]): BuilderState {
 
 /**
  * The session agent plans each new task, then builds it: it is planning while open with no plan, or
- * with one older than its newest task. A session with no plan that opened a PR already (it started
- * before the Planner existed) is past it.
+ * with one older than its newest task. With no plan ever, a session is past planning once it has
+ * opened a PR or started subagents (it started before the Planner existed, or skipped submit_plan).
+ * A folder session never has a PR, so with no plan it counts as planning only while it asks something.
  */
-export function isPlanning(session: TreeSession, hasPr: boolean): boolean {
+export function isPlanning(session: TreeSession, hasPr: boolean, folder = false): boolean {
   if (session.status === 'ended') return false;
-  if (session.plannedAt === null) return !hasPr;
+  if (session.plannedAt === null) {
+    if (hasPr || session.subagents.length > 0) return false;
+    return !folder || session.pendingQuestions > 0;
+  }
   return session.latestRequestAt !== null && session.latestRequestAt > session.plannedAt;
 }
 
@@ -320,7 +324,7 @@ export function buildBoard(
       const drawn = open.length > 0 ? [...open].sort((a, b) => a.id - b.id) : sessionPrs.slice(0, 1);
       const lanes = drawn.map((pr) => lane(project, view, session.rigor, pr, loopQuestionOf.get(pr.id)));
       if (lanes.length === 0 && project.kind === 'git') lanes.push(lane(project, view, session.rigor, null));
-      const planning = isPlanning(session, sessionPrs.length > 0);
+      const planning = isPlanning(session, sessionPrs.length > 0, project.kind === 'folder');
       // Asked since the newest task came, while planning or before its plan: the Planner asked them.
       const { plannedAt, latestRequestAt } = session;
       const plannerAsks = asks.filter(

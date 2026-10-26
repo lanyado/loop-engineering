@@ -49,6 +49,8 @@ records a short plan with the `submit_plan` tool). Like `guardian.md`, only its 
 never a check, a `data/stages/planner.md` replaces it, and a broken one leaves the built-in
 instructions in use. A change reaches sessions started or resumed after it.
 
+`planner` is a reserved stage id now: a custom stage already named `planner` must be renamed.
+
 `pipeline.json` sets the order of the checks, and whether the loop watches deploys and runs the
 Production Guardian after a merge:
 
