@@ -197,6 +197,44 @@ describe('startSession', () => {
     expect(h.fs.read('/src/api/.git/info/exclude')).toContain('/config/.env');
   });
 
+  it('branches from origin after fetching each repo, and from the local branch when a fetch fails', async () => {
+    const h = harness();
+    const p = h.store.projects.create({
+      name: 'full stack',
+      repos: [
+        { name: 'web', path: '/src/web', remote: 'r', defaultBranch: 'main' },
+        { name: 'api', path: '/src/api', remote: 'r', defaultBranch: 'develop' },
+      ],
+    });
+    h.git.failFetchFor.add('/src/api');
+    const s = await h.runner.startSession(p.id, { text: 'Add search' });
+    expect(h.git.fetched).toEqual([{ repoPath: '/src/web', ref: 'main' }]);
+    const dir = '/wt/full-stack/add-search-sfx1';
+    expect(h.git.bases.get(`${dir}/web`)).toBe('origin/main');
+    expect(h.git.bases.get(`${dir}/api`)).toBe('develop');
+    expect(h.logs).toEqual([
+      expect.stringMatching(/api: could not fetch origin\/develop, branching from the local develop/),
+    ]);
+    expect(s.status).toBe('active');
+  });
+
+  it('fetches every repo of a multi-repo project', async () => {
+    const h = harness();
+    const p = h.store.projects.create({
+      name: 'full stack',
+      repos: [
+        { name: 'web', path: '/src/web', remote: 'r', defaultBranch: 'main' },
+        { name: 'api', path: '/src/api', remote: 'r', defaultBranch: 'develop' },
+      ],
+    });
+    await h.runner.startSession(p.id, { text: 'Add search' });
+    expect(h.git.fetched).toEqual([
+      { repoPath: '/src/web', ref: 'main' },
+      { repoPath: '/src/api', ref: 'develop' },
+    ]);
+    expect(h.logs).toEqual([]);
+  });
+
   it('refuses before creating anything: no token, missing env file, unknown project, existing branch', async () => {
     const h = harness({ env: {} });
     await expect(h.runner.startSession(h.shop.id, REQUEST)).rejects.toThrow(/MCP_TOKEN is not set/);

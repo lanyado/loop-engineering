@@ -17,15 +17,25 @@ export class ExecError extends Error {
 }
 
 /** Runs a binary without a shell, so arguments never need quoting. */
-export function exec(bin: string, args: string[], cwd?: string): Promise<ExecResult> {
+export function exec(
+  bin: string,
+  args: string[],
+  cwd?: string,
+  options: { timeoutMs?: number; env?: NodeJS.ProcessEnv } = {},
+): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
-    execFile(bin, args, { cwd, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) {
-        const code = (err as NodeJS.ErrnoException & { code?: number | string }).code ?? null;
-        reject(new ExecError(`${bin} ${args.join(' ')}`, code, stderr || err.message));
-        return;
-      }
-      resolve({ stdout, stderr });
-    });
+    execFile(
+      bin,
+      args,
+      { cwd, maxBuffer: 16 * 1024 * 1024, timeout: options.timeoutMs, env: options.env },
+      (err, stdout, stderr) => {
+        if (err) {
+          const code = (err as NodeJS.ErrnoException & { code?: number | string }).code ?? null;
+          reject(new ExecError(`${bin} ${args.join(' ')}`, code, stderr || err.message));
+          return;
+        }
+        resolve({ stdout, stderr });
+      },
+    );
   });
 }

@@ -166,7 +166,7 @@ new UsageLimitMonitor(runner, store, { onTrustPrompt }).start(); // every 15 s: 
 const session = await runner.startSession(project.id, { text: 'Add a login page' });
 ```
 
-- Each session gets a branch `loop/<slug>-<id>` and a worktree per repo under `WORKTREES_ROOT/<project>/`.
+- Each session gets a branch `loop/<slug>-<id>` and a worktree per repo under `WORKTREES_ROOT/<project>/`. Before creating each worktree the runner runs `git fetch origin <defaultBranch>` in the repo's checkout (30 s timeout) and branches from `origin/<defaultBranch>` with `--no-track`, so a stale local branch never leaks into a new session. If the fetch fails (offline, no remote, auth) it logs one warning and branches from the local default branch instead.
 - The project's env files and the `opensource-search` skill are written into the worktree, unless the repo tracks that path (then they are skipped with a warning). Both are hidden from `git status` via `info/exclude`.
 - The MCP config (ask_human, tavily, playwright, context7, github) and the OpenCode config are written to `WORKTREES_ROOT/.loop-runner/s<id>/`, never into the repo. A repo's own `.mcp.json` servers are copied in.
 - The model comes from Settings (`sessionModel`, default `opus`), and the permission mode from the project (`permissionMode`, default `auto`).

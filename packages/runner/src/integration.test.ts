@@ -144,7 +144,10 @@ describe.skipIf(!hasTmux())('runner with real tmux (fake agents)', () => {
       expect(await readFile(join(wt, 'config/.env'), 'utf8')).toBe('API_KEY=secret\n');
       expect(await readFile(join(wt, '.env.local'), 'utf8')).toBe('TRACKED=1\n');
       expect(await readFile(join(wt, '.mcp.json'), 'utf8')).toBe(repoMcp);
-      expect(logs).toEqual([expect.stringContaining('the repo tracks that path')]);
+      expect(logs).toEqual([
+        expect.stringContaining('could not fetch origin/main'),
+        expect.stringContaining('the repo tracks that path'),
+      ]);
       expect(await exists(join(wt, '.claude/skills/opensource-search/SKILL.md'))).toBe(true);
       expect((await git(wt, 'rev-parse', '--abbrev-ref', 'HEAD')).stdout.trim()).toBe(s.branch);
       // Tracked files untouched and runner-written files excluded: the fresh worktree is clean.
