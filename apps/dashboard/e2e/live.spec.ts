@@ -127,23 +127,6 @@ test('project toggles and settings save to the server', async ({ page }, info) =
     )
     .toBe(true);
 
-  await shop.getByTestId('toggle-markedForDirectInput').click();
-  await expect
-    .poll(
-      async () =>
-        (await api<{ project: { markedForDirectInput: boolean } }>(`/projects/${ids.shop}`)).project
-          .markedForDirectInput,
-    )
-    .toBe(false);
-
-  await shop.getByTestId('permission-mode').selectOption('acceptEdits');
-  await expect
-    .poll(
-      async () =>
-        (await api<{ project: { permissionMode: string } }>(`/projects/${ids.shop}`)).project.permissionMode,
-    )
-    .toBe('acceptEdits');
-
   const sheet = await globalSettings(page);
   await sheet.getByTestId('input-fallbackModel').fill('opencode/qwen-free');
   await sheet.getByTestId('input-fallbackModel').press('Enter');
@@ -160,7 +143,6 @@ test('project toggles and settings save to the server', async ({ page }, info) =
   await page.reload();
   const reloaded = await projectSettings(page, 'shop');
   await expect(reloaded.getByTestId('toggle-autoMerge')).toBeChecked();
-  await expect(reloaded.getByTestId('toggle-markedForDirectInput')).not.toBeChecked();
   await expectNoHorizontalScroll(page);
   await snap(page, info, 'live-settings');
 });
@@ -356,16 +338,6 @@ test('a folder project shows a Folder chip and its path; auto-merge is n/a', asy
     await expect(settings.getByTestId('folder-path')).toHaveText(folder);
     await expect(settings.getByTestId('autoMerge-na')).toContainText('n/a (no PRs)');
     await expect(settings.getByTestId('toggle-autoMerge')).toHaveCount(0);
-    // Marking it for direct input works like any project.
-    await settings.getByTestId('toggle-markedForDirectInput').click();
-    await expect(settings.getByTestId('toggle-markedForDirectInput')).toBeChecked();
-    await expect
-      .poll(
-        async () =>
-          (await api<{ project: { markedForDirectInput: boolean } }>(`/projects/${created.project.id}`))
-            .project.markedForDirectInput,
-      )
-      .toBe(true);
     await expectNoHorizontalScroll(page);
     await snap(page, info, 'live-settings-folder');
   } finally {

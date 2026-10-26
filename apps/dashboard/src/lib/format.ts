@@ -31,19 +31,6 @@ export function pauseLabel(reason: string | null): string | null {
   return reason === null ? null : (PAUSE_LABELS[reason] ?? humanize(reason));
 }
 
-const PERMISSION_LABELS: Record<string, string> = {
-  auto: 'Auto (classifier approves)',
-  manual: 'Manual (always ask)',
-  acceptEdits: 'Accept edits',
-  plan: 'Plan only',
-  dontAsk: "Don't ask",
-  bypassPermissions: 'Bypass permissions',
-};
-
-export function permissionLabel(mode: string): string {
-  return PERMISSION_LABELS[mode] ?? mode;
-}
-
 export function humanize(value: string): string {
   const text = value.replace(/_/g, ' ');
   return text.charAt(0).toUpperCase() + text.slice(1);

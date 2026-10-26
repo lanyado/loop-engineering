@@ -286,17 +286,8 @@ export const answerInput = z.object({
 });
 export const projectToggleInput = z.object({
   projectId: z.number().int().positive(),
-  field: z.enum(['autoMerge', 'markedForDirectInput']),
+  field: z.enum(['autoMerge']),
   value: z.boolean(),
-});
-/**
- * Core's PERMISSION_MODES minus bypassPermissions: that one can only be set locally, never from the
- * dashboard (the server refuses it too).
- */
-export const SELECTABLE_PERMISSION_MODES = ['auto', 'manual', 'acceptEdits', 'plan', 'dontAsk'] as const;
-export const permissionModeInput = z.object({
-  projectId: z.number().int().positive(),
-  permissionMode: z.enum(SELECTABLE_PERMISSION_MODES),
 });
 export const endSessionInput = z.object({ sessionId: z.number().int().positive() });
 export const rigorInput = z.object({ sessionId: z.number().int().positive(), rigor: z.enum(RIGOR_LEVELS) });

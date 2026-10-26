@@ -37,10 +37,7 @@ export class HttpBackend implements Backend {
     return (await this.get('/tree', responses.tree)).projects;
   }
 
-  async updateProject(
-    id: number,
-    patch: { autoMerge?: boolean; markedForDirectInput?: boolean; permissionMode?: string },
-  ) {
+  async updateProject(id: number, patch: { autoMerge?: boolean }) {
     return (await this.send('PATCH', `/projects/${id}`, patch, responses.project)).project;
   }
 

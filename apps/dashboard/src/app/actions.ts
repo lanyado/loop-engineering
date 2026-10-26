@@ -23,7 +23,6 @@ import {
   hideProjectInput,
   stageTerminalInput,
   newRequestInput,
-  permissionModeInput,
   projectToggleInput,
   sessionMessageInput,
   settingsInput,
@@ -69,18 +68,11 @@ export async function answerQuestion(questionId: number, answer: string): Promis
 
 export async function setProjectToggle(
   projectId: number,
-  field: 'autoMerge' | 'markedForDirectInput',
+  field: 'autoMerge',
   value: boolean,
 ): Promise<ActionResult> {
   return write(projectToggleInput, { projectId, field, value }, async (d, backend) => {
     await backend.updateProject(d.projectId, { [d.field]: d.value });
-    return undefined;
-  });
-}
-
-export async function setPermissionMode(projectId: number, permissionMode: string): Promise<ActionResult> {
-  return write(permissionModeInput, { projectId, permissionMode }, async (d, backend) => {
-    await backend.updateProject(d.projectId, { permissionMode: d.permissionMode });
     return undefined;
   });
 }

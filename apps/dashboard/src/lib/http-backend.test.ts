@@ -198,11 +198,8 @@ describe('HttpBackend against the real server', () => {
 
   it('writes toggles, settings and requests', async () => {
     const [project] = await backend.tree();
-    expect(
-      await backend.updateProject(project!.id, { autoMerge: true, permissionMode: 'plan' }),
-    ).toMatchObject({
+    expect(await backend.updateProject(project!.id, { autoMerge: true })).toMatchObject({
       autoMerge: true,
-      permissionMode: 'plan',
     });
     expect(await backend.updateSettings({ telegramAllowlist: [5, 6], sessionModel: 'sonnet' })).toMatchObject(
       {
