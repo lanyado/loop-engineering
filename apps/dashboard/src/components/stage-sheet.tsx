@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { GUARDIAN_NODE } from '../lib/board';
 import type { Stage, StageChoices } from '../lib/schemas';
 import { Dialog } from './dialog';
 import { Icon } from './pipeline';
@@ -64,6 +65,8 @@ export function StageSheet({
   onClose: () => void;
 }) {
   const [f, setF] = useState<StageFields>(fieldsOf(stage));
+  // The Guardian's instructions: only the prompt is the user's to change.
+  const guardian = stage.id === GUARDIAN_NODE;
   const set = (patch: Partial<StageFields>) => setF((prev) => ({ ...prev, ...patch }));
   const id = isNew ? slug(f.title) : stage.id;
   const problem = !isNew
@@ -81,52 +84,66 @@ export function StageSheet({
         className="stack"
         onSubmit={(e) => {
           e.preventDefault();
-          onSave(id, f);
+          // A built-in's prompt left empty means its own again.
+          if (stage.builtin && !isNew && !f.prompt.trim()) onReset(stage.id);
+          else onSave(id, f);
         }}
       >
         <h2>{isNew ? 'New stage' : stage.title}</h2>
         {stage.error && (
           <p className="warning small">
-            Its file is broken ({stage.error}), so PRs wait at it. Saving here writes a working one.
+            {guardian
+              ? `Its file is broken (${stage.error}), so the Guardian uses its built-in instructions. Saving here writes a working one.`
+              : `Its file is broken (${stage.error}), so PRs wait at it. Saving here writes a working one.`}
           </p>
         )}
-        <label className="field">
-          Name
-          <input
-            type="text"
-            value={f.title}
-            maxLength={60}
-            required
-            onChange={(e) => set({ title: e.target.value })}
-          />
-        </label>
-        <label className="field">
-          Label on the node (10 characters at most)
-          <input
-            type="text"
-            value={f.label}
-            maxLength={10}
-            required
-            onChange={(e) => set({ label: e.target.value })}
-          />
-        </label>
-        <fieldset className="icon-picker">
-          <legend>Icon</legend>
-          {choices.icons.map((icon) => (
-            <label key={icon} className={f.icon === icon ? 'picked' : ''}>
+        {guardian && (
+          <p className="muted small">
+            After each deploy and once a day, the Guardian checks the live site: its API, pages, speed and
+            integrations. Tell it what matters most in your product.
+          </p>
+        )}
+        {!guardian && (
+          <>
+            <label className="field">
+              Name
               <input
-                type="radio"
-                name="icon"
-                className="sr-only"
-                checked={f.icon === icon}
-                onChange={() => set({ icon })}
+                type="text"
+                value={f.title}
+                maxLength={60}
+                required
+                onChange={(e) => set({ title: e.target.value })}
               />
-              <Icon kind={icon} />
-              <span className="sr-only">{icon}</span>
             </label>
-          ))}
-        </fieldset>
-        {stage.builtin ? (
+            <label className="field">
+              Label on the node (10 characters at most)
+              <input
+                type="text"
+                value={f.label}
+                maxLength={10}
+                required
+                onChange={(e) => set({ label: e.target.value })}
+              />
+            </label>
+            <fieldset className="icon-picker">
+              <legend>Icon</legend>
+              {choices.icons.map((icon) => (
+                <label key={icon} className={f.icon === icon ? 'picked' : ''}>
+                  <input
+                    type="radio"
+                    name="icon"
+                    className="sr-only"
+                    checked={f.icon === icon}
+                    onChange={() => set({ icon })}
+                  />
+                  <Icon kind={icon} />
+                  <span className="sr-only">{icon}</span>
+                </label>
+              ))}
+            </fieldset>
+          </>
+        )}
+        {guardian ? null : stage.builtin ? (
           <p className="muted small">A built-in stage: what it may do and when it runs are fixed.</p>
         ) : (
           <>
@@ -153,21 +170,23 @@ export function StageSheet({
           </>
         )}
         <label className="field">
-          What to check
+          {guardian ? 'Instructions' : 'What to check'}
           <textarea
             value={f.prompt}
             rows={8}
             maxLength={4000}
-            required={!(stage.builtin && !stage.overridden && !f.prompt)}
+            required={!stage.builtin}
             placeholder={stage.builtin ? 'The built-in prompt (restored when you Save).' : undefined}
             onChange={(e) => set({ prompt: e.target.value })}
             data-testid="stage-prompt"
           />
         </label>
-        <p className="muted small">
-          The loop adds the PR, the request and the diff, and asks for pass or fail. Failures go back to the
-          builder. No stage can edit files or push.
-        </p>
+        {!guardian && (
+          <p className="muted small">
+            The loop adds the PR, the request and the diff, and asks for pass or fail. Failures go back to the
+            builder. No stage can edit files or push.
+          </p>
+        )}
         {problem && <p className="error small">{problem}</p>}
         {isNew && !problem && <p className="muted small mono">Saved as {id}.md in your stages folder</p>}
         <div className="row-actions">
@@ -177,7 +196,7 @@ export function StageSheet({
           <button type="button" className="ghost" onClick={onClose}>
             Cancel
           </button>
-          {!isNew && stage.builtin && stage.overridden && (
+          {!isNew && stage.builtin && (stage.overridden || stage.error) && (
             <button type="button" className="ghost" onClick={() => onReset(stage.id)}>
               Reset to built-in
             </button>

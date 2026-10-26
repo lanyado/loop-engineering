@@ -483,6 +483,17 @@ export function demoData(now: Date): DemoData {
           builtin: false,
         },
       ],
+      guardian: {
+        ...stage(
+          'guardian',
+          'Production Guardian',
+          'Guardian',
+          'browser',
+          'always',
+          'Weigh what you find by how many users it would stop: a broken flow that most users take matters more than a rough edge few will see.',
+        ),
+        icon: 'shield',
+      },
       // Sample values; a real server sends its own lists.
       choices: {
         icons: [

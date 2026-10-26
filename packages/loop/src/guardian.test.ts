@@ -155,6 +155,8 @@ describe('ProductionGuardian', () => {
       // The agent is told what was deployed and which URL to check.
       expect(h.launcher.jobs[0]!.prompt).toContain(URL);
       expect(h.launcher.jobs[0]!.prompt).toContain('Add Apple Pay');
+      // And the user's instructions for every run (the built-in guardian.md here).
+      expect(h.launcher.jobs[0]!.prompt).toContain(builtinStageLibrary().guardian().prompt);
       expect(h.workspace.live.size).toBe(0);
       expect(loopState(h.store.pullRequests.require(pr.id)).guardian).toMatchObject({
         runId: run!.id,

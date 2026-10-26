@@ -13,6 +13,8 @@ import type { CheckJobKind, PrJobKind } from './ports.js';
 
 export const BUILTIN_CHECKS = ['tests', 'review', 'qa'] as const;
 export type BuiltinCheck = (typeof BUILTIN_CHECKS)[number];
+/** The Production Guardian's instructions: a stage file too (guardian.md), though never a check. */
+export const GUARDIAN_STAGE = 'guardian';
 export const STAGE_ACCESS = ['read', 'shell', 'browser'] as const;
 export type StageAccess = (typeof STAGE_ACCESS)[number];
 /** When a check runs: on every PR, or only when the diff changes that kind of file (see changes.ts). */
@@ -100,23 +102,30 @@ export interface PipelineUpdate {
 
 export interface StageLibrary {
   pipeline(): Pipeline;
+  /** The checks' stages. */
   stages(): Stage[];
   stage(id: string): Stage | undefined;
+  /** The Production Guardian's instructions (guardian.md). */
+  guardian(): Stage;
 }
 
 export interface EditableStageLibrary extends StageLibrary {
   update(change: PipelineUpdate): void;
 }
 
-const BUILTIN_ACCESS: Record<BuiltinCheck, Pick<StageFields, 'access' | 'runs'>> = {
+/** What the built-in stages may do and when they run: fixed by the code, not their files. */
+const BUILTIN_ACCESS: Record<BuiltinCheck | typeof GUARDIAN_STAGE, Pick<StageFields, 'access' | 'runs'>> = {
   tests: { access: 'shell', runs: 'always' },
   review: { access: 'read', runs: 'always' },
   qa: { access: 'browser', runs: 'ui-changes' },
+  guardian: { access: 'browser', runs: 'always' },
 };
 
 export function isBuiltinCheck(id: string): id is BuiltinCheck {
   return (BUILTIN_CHECKS as readonly string[]).includes(id);
 }
+const isBuiltin = (id: string): id is BuiltinCheck | typeof GUARDIAN_STAGE =>
+  isBuiltinCheck(id) || id === GUARDIAN_STAGE;
 
 /** The job a check runs: the built-ins have their own kind, a custom stage "check-<id>". */
 export const checkJobKind = (check: string): PrJobKind => (isBuiltinCheck(check) ? check : `check-${check}`);
@@ -131,9 +140,9 @@ const oneOf = <T extends string>(values: readonly T[], value: string, what: stri
   throw new ValidationError(`${what} must be one of ${values.join(', ')} (got "${value}")`);
 };
 
-/** Checks a stage's fields; built-in checks keep their own access and runs. */
+/** Checks a stage's fields; the built-in stages keep their own access and runs. */
 export function validateStage(id: string, fields: StageFields): StageFields {
-  if (!isStageId(id)) throw badId(id);
+  if (!isStageId(id) && id !== GUARDIAN_STAGE) throw badId(id);
   const title = fields.title.trim();
   const label = fields.label.trim();
   const prompt = fields.prompt.trim();
@@ -151,7 +160,7 @@ export function validateStage(id: string, fields: StageFields): StageFields {
     label,
     prompt,
     icon: oneOf(STAGE_ICONS, fields.icon, `stage ${id}: icon`),
-    ...(isBuiltinCheck(id)
+    ...(isBuiltin(id)
       ? BUILTIN_ACCESS[id]
       : {
           access: oneOf(STAGE_ACCESS, fields.access, `stage ${id}: access`),
@@ -189,7 +198,7 @@ export function parseStageFile(id: string, text: string): StageFields {
 
 export function formatStageFile(id: string, f: StageFields): string {
   const lines = [`title: ${f.title}`, `label: ${f.label}`, `icon: ${f.icon}`];
-  if (!isBuiltinCheck(id)) lines.push(`access: ${f.access}`, `runs: ${f.runs}`);
+  if (!isBuiltin(id)) lines.push(`access: ${f.access}`, `runs: ${f.runs}`);
   return `---\n${lines.join('\n')}\n---\n${f.prompt.trim()}\n`;
 }
 
@@ -233,16 +242,18 @@ function readPipeline(text: string): Pipeline {
 /** The built-in stages folder: packages/loop/stages, from src/ and from dist/ alike. */
 export const BUILTIN_STAGES_DIR = fileURLToPath(new URL('../stages/', import.meta.url));
 
-function readBuiltins(dir: string): { stages: Map<string, Stage>; pipeline: Pipeline } {
-  const stages = new Map<string, Stage>();
-  for (const id of BUILTIN_CHECKS) {
-    const fields = parseStageFile(id, readFileSync(join(dir, `${id}.md`), 'utf8'));
-    stages.set(id, { id, builtin: true, overridden: false, ...fields });
-  }
+function readBuiltins(dir: string): { stages: Map<string, Stage>; guardian: Stage; pipeline: Pipeline } {
+  const read = (id: string): Stage => ({
+    id,
+    builtin: true,
+    overridden: false,
+    ...parseStageFile(id, readFileSync(join(dir, `${id}.md`), 'utf8')),
+  });
+  const stages = new Map<string, Stage>(BUILTIN_CHECKS.map((id) => [id, read(id)]));
   const pipeline = validatePipeline(readPipeline(readFileSync(join(dir, 'pipeline.json'), 'utf8')), (id) =>
     stages.get(id),
   );
-  return { stages, pipeline };
+  return { stages, guardian: read(GUARDIAN_STAGE), pipeline };
 }
 
 let builtins: ReturnType<typeof readBuiltins> | null = null;
@@ -250,10 +261,15 @@ const builtinStages = () => (builtins ??= readBuiltins(BUILTIN_STAGES_DIR));
 
 /** Only the built-in stages and pipeline: today's loop. The engine's default; tests use it. */
 export function builtinStageLibrary(pipeline?: Partial<Pipeline>, extra: Stage[] = []): StageLibrary {
-  const { stages, pipeline: base } = builtinStages();
+  const { stages, guardian, pipeline: base } = builtinStages();
   const all = new Map([...stages, ...extra.map((s) => [s.id, s] as const)]);
   const p = validatePipeline({ ...base, ...pipeline }, (id) => all.get(id));
-  return { pipeline: () => p, stages: () => [...all.values()], stage: (id) => all.get(id) };
+  return {
+    pipeline: () => p,
+    stages: () => [...all.values()],
+    stage: (id) => all.get(id),
+    guardian: () => guardian,
+  };
 }
 
 /** What the board shows for a stage whose file does not parse. */
@@ -285,7 +301,7 @@ const writeAtomic = (path: string, text: string) => {
  */
 export class FileStageLibrary implements EditableStageLibrary {
   private signature = '';
-  private cached: { stages: Map<string, Stage>; pipeline: Pipeline } | null = null;
+  private cached: { stages: Map<string, Stage>; guardian: Stage; pipeline: Pipeline } | null = null;
   private readonly warned = new Set<string>();
 
   constructor(
@@ -305,6 +321,10 @@ export class FileStageLibrary implements EditableStageLibrary {
     return this.load().stages.get(id);
   }
 
+  guardian(): Stage {
+    return this.load().guardian;
+  }
+
   /**
    * Validates the whole change first, then writes each file atomically: new and changed stages, then
    * pipeline.json, then deletions, so a crash halfway never leaves the pipeline naming a stage that
@@ -315,6 +335,10 @@ export class FileStageLibrary implements EditableStageLibrary {
     const next = new Map(current);
     const writes: [string, string | null][] = [];
     for (const [id, fields] of Object.entries(change.stages ?? {})) {
+      if (id === GUARDIAN_STAGE) {
+        writes.push([id, fields === null ? null : formatStageFile(id, validateStage(id, fields))]);
+        continue;
+      }
       if (!isStageId(id)) throw badId(id);
       if (fields === null) {
         if (isBuiltinCheck(id)) next.set(id, builtinStages().stages.get(id)!);
@@ -335,24 +359,29 @@ export class FileStageLibrary implements EditableStageLibrary {
     this.signature = '';
   }
 
-  private load(): { stages: Map<string, Stage>; pipeline: Pipeline } {
+  private load(): { stages: Map<string, Stage>; guardian: Stage; pipeline: Pipeline } {
     const files = this.listFiles();
     const signature = files.map(version).join('|');
     if (this.cached && signature === this.signature) return this.cached;
     const base = builtinStages();
     const stages = new Map(base.stages);
+    let guardian = base.guardian;
     for (const f of files) {
       if (!f.name.endsWith('.md') || f.name === 'README.md') continue;
       const id = f.name.slice(0, -3);
-      const builtin = isBuiltinCheck(id);
+      const builtin = isBuiltin(id);
+      let stage: Stage;
       try {
         const fields = parseStageFile(id, readFileSync(join(this.dir, f.name), 'utf8'));
-        stages.set(id, { id, builtin, overridden: builtin, ...fields });
+        stage = { id, builtin, overridden: builtin, ...fields };
       } catch (err) {
         const error = (err as Error).message;
         this.warnOnce(version(f), `${f.name} is broken: ${error}`);
-        stages.set(id, { ...brokenStage(id), builtin, overridden: builtin, error });
+        stage = { ...brokenStage(id), builtin, overridden: builtin, error };
       }
+      // A broken guardian.md keeps the built-in instructions in use, with its error shown.
+      if (id === GUARDIAN_STAGE) guardian = stage.error ? { ...base.guardian, error: stage.error } : stage;
+      else stages.set(id, stage);
     }
     let pipeline = base.pipeline;
     const file = files.find((f) => f.name === 'pipeline.json');
@@ -365,7 +394,7 @@ export class FileStageLibrary implements EditableStageLibrary {
         pipeline = { ...base.pipeline, error };
       }
     }
-    this.cached = { stages, pipeline };
+    this.cached = { stages, guardian, pipeline };
     this.signature = signature;
     return this.cached;
   }

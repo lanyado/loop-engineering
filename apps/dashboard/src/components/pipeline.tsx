@@ -481,7 +481,7 @@ function LaneView({
           </>
         )}
       </span>
-      <span className="lane-flow">
+      <span className="lane-flow" data-sort-area={edit ? true : undefined}>
         {feedback && back && origin >= 0 && (
           <ReturnPath short={back.short} count={Math.max(feedback.items.length, 1)} from={origin} />
         )}
@@ -651,13 +651,15 @@ export function PipelineRow({
             testId="session-node"
             detail={null}
           >
-            <span className="node-actions" inert={edit !== undefined}>
-              {open && <MessageButton />}
-              {session.status === 'active' && (
-                <TerminalButton target={{ kind: 'session', sessionId: session.id }} readOnly={readOnly} />
-              )}
-              <DetailsButton />
-            </span>
+            {!edit && (
+              <span className="node-actions">
+                {open && <MessageButton />}
+                {session.status === 'active' && (
+                  <TerminalButton target={{ kind: 'session', sessionId: session.id }} readOnly={readOnly} />
+                )}
+                <DetailsButton />
+              </span>
+            )}
           </Node>
           <Edge state="done" />
           <WithTerminal

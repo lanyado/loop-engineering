@@ -200,6 +200,31 @@ describe('FileStageLibrary', () => {
       ).toThrow(/pipeline node's name/);
   });
 
+  it("keeps the Guardian's instructions in guardian.md: built in, overridden, reset, never a check", () => {
+    expect(lib.guardian()).toMatchObject({ id: 'guardian', builtin: true, overridden: false });
+    expect(lib.guardian().prompt).toContain('how many users');
+    expect(lib.stages().map((s) => s.id)).not.toContain('guardian');
+
+    const mine = { ...lib.guardian(), prompt: 'Check the booking flow end to end.' };
+    lib.update({ pipeline: lib.pipeline(), stages: { guardian: mine } });
+    expect(readFileSync(join(dir, 'stages', 'guardian.md'), 'utf8')).toContain('booking flow');
+    expect(readFileSync(join(dir, 'stages', 'guardian.md'), 'utf8')).not.toContain('access:');
+    expect(lib.guardian()).toMatchObject({ prompt: 'Check the booking flow end to end.', overridden: true });
+
+    // A broken file keeps the built-in instructions in use, and says why.
+    write('guardian.md', 'no front matter');
+    expect(lib.guardian()).toMatchObject({ overridden: false });
+    expect(lib.guardian().error).toContain('---');
+    expect(lib.guardian().prompt).toContain('how many users');
+
+    lib.update({ pipeline: lib.pipeline(), stages: { guardian: null } });
+    expect(readdirSync(join(dir, 'stages'))).toEqual(['pipeline.json']);
+    expect(lib.guardian().overridden).toBe(false);
+    expect(() => lib.update({ pipeline: { checks: ['guardian'], deploy: true, guardian: true } })).toThrow(
+      /unknown stage "guardian"/,
+    );
+  });
+
   it('writes, resets and deletes stage files', () => {
     lib.update({
       pipeline: { checks: ['docs', 'review'], deploy: true, guardian: false },

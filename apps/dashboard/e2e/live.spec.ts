@@ -563,10 +563,13 @@ test('the editor applies the layout and the pipeline on Save', async ({ page }, 
   await editor.getByRole('button', { name: 'Remove Weekly limit' }).click();
   await editor.getByRole('button', { name: 'Remove PR cost and tokens' }).click();
   await editor.getByRole('button', { name: 'Move Code review left' }).click();
-  await editor.getByRole('button', { name: 'Add a new stage' }).click();
+  await editor.getByTestId('new-stage').click();
   await page.getByLabel('Name').fill('Docs check');
   await page.getByLabel('Label on the node (10 characters at most)').fill('Docs');
   await page.getByTestId('stage-prompt').fill('Check the README covers the change.');
+  await page.getByTestId('stage-save').click();
+  await editor.getByRole('button', { name: 'Edit Guardian' }).click();
+  await page.getByLabel('Instructions').fill('Check the booking flow end to end.');
   await page.getByTestId('stage-save').click();
   await editor.getByTestId('editor-save').click();
   await page.getByTestId('confirm-yes').click();
@@ -575,12 +578,14 @@ test('the editor applies the layout and the pipeline on Save', async ({ page }, 
 
   // The real board and the real server have it.
   await expect(page.locator('[data-testid="usage-meter"][data-window="Weekly"]')).toHaveCount(0);
-  const { pipeline, stages } = await api<{
+  const { pipeline, stages, guardian } = await api<{
     pipeline: { checks: string[] };
     stages: { id: string; prompt: string }[];
+    guardian: { prompt: string };
   }>('/pipeline');
   expect(pipeline.checks).toEqual(['review', 'tests', 'qa', 'docs-check']);
   expect(stages.find((s) => s.id === 'docs-check')?.prompt).toBe('Check the README covers the change.');
+  expect(guardian.prompt).toBe('Check the booking flow end to end.');
   const lane = page.getByTestId('lane').first();
   await expect(lane.locator('[data-testid="node"]').first()).toHaveAttribute('data-stage', 'review');
   await expect(lane.locator('[data-stage="docs-check"]')).toContainText('Docs');

@@ -56,9 +56,6 @@ const BLANK_STAGE: Stage = {
   overridden: false,
 };
 
-/** The faded tile that makes a new stage: no stage id can look like this. */
-const NEW_STAGE = ':new';
-
 /** A node for something not in the pipeline, drawn faded where it would go. */
 const ghostNode = (stage: string, label: string, icon: string): StageNode => ({
   stage,
@@ -99,6 +96,7 @@ export function Editor({
   };
   const [draft, setDraft] = useState<Draft>(initial);
   const [stages, setStages] = useState<Stage[]>(view.stages);
+  const [guardianStage, setGuardianStage] = useState<Stage>(view.guardian);
   const [sheet, setSheet] = useState<'save' | 'discard' | { stage: Stage; isNew: boolean } | null>(null);
   const [saving, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -111,8 +109,10 @@ export function Editor({
   const setEdit = (id: string, edit: StageFields | null) =>
     setDraft((d) => {
       const rest = Object.fromEntries(Object.entries(d.edits).filter(([key]) => key !== id));
-      const saved = view.stages.find((s) => s.id === id);
-      const fileOnServer = saved !== undefined && (!saved.builtin || saved.overridden);
+      const saved = id === GUARDIAN_NODE ? view.guardian : view.stages.find((s) => s.id === id);
+      // A broken file is on the server too, even where it changes nothing (a built-in's, unread).
+      const fileOnServer =
+        saved !== undefined && (!saved.builtin || saved.overridden || saved.error !== undefined);
       return { ...d, edits: edit === null && !fileOnServer ? rest : { ...rest, [id]: edit } };
     });
   const { checks } = draft.pipeline;
@@ -141,6 +141,12 @@ export function Editor({
 
   const saveStage = (id: string, fields: StageFields) => {
     setSheet(null);
+    if (id === GUARDIAN_NODE) {
+      if (JSON.stringify(fieldsOf(guardianStage)) === JSON.stringify(fields) && !guardianStage.error) return;
+      setGuardianStage((g) => ({ ...g, ...fields, overridden: true, error: undefined }));
+      setEdit(id, fields);
+      return;
+    }
     const existing = stage(id);
     if (existing && JSON.stringify(fieldsOf(existing)) === JSON.stringify(fields) && !existing.error) return;
     setStages((all) =>
@@ -154,16 +160,20 @@ export function Editor({
   /** A built-in's own prompt comes back from the server on Save; until then the sheet says so. */
   const resetStage = (id: string) => {
     setSheet(null);
-    const original = view.stages.find((s) => s.id === id);
-    setStages((all) =>
-      all.map((s) =>
-        s.id !== id
-          ? s
-          : original && !original.overridden
-            ? original
-            : { ...s, prompt: '', overridden: false },
-      ),
-    );
+    const reset = (s: Stage, original: Stage | undefined): Stage =>
+      original && !original.overridden ? original : { ...s, prompt: '', overridden: false };
+    if (id === GUARDIAN_NODE) setGuardianStage((g) => reset(g, view.guardian));
+    else
+      setStages((all) =>
+        all.map((s) =>
+          s.id === id
+            ? reset(
+                s,
+                view.stages.find((v) => v.id === id),
+              )
+            : s,
+        ),
+      );
     setEdit(id, null);
   };
   const deleteStage = (id: string) => {
@@ -174,7 +184,10 @@ export function Editor({
   };
   const openStage = (id: string) =>
     setSheet({
-      stage: stage(id) ?? { ...BLANK_STAGE, id, title: id, label: id.slice(0, 10) },
+      stage:
+        id === GUARDIAN_NODE
+          ? guardianStage
+          : (stage(id) ?? { ...BLANK_STAGE, id, title: id, label: id.slice(0, 10) }),
       isNew: false,
     });
 
@@ -221,9 +234,9 @@ export function Editor({
   };
 
   /**
-   * A lane as the editor draws it: the checks wiggle and reorder; stage files not in the pipeline,
-   * "New stage" and a removed Deploy or Guardian wait faded where they would go (on the first lane,
-   * so a split row offers each once); Approval and Merge are fixed.
+   * A lane as the editor draws it: the checks wiggle and reorder; stage files not in the pipeline and
+   * a removed Deploy or Guardian wait faded where they would go (on the first lane, so a split row
+   * offers each once); tapping Guardian edits its instructions; Approval and Merge are fixed.
    */
   const lane: RowEdit['lane'] = (l, node, first) => {
     const ghost = (n: StageNode, label: string, onAdd: () => void): LaneStep => ({
@@ -254,7 +267,12 @@ export function Editor({
           // A PR already at a step the pipeline no longer runs: shown, and offered back.
           ghost(n, n.label, () => setPipeline({ [optional]: true })).content
         ) : optional ? (
-          <Wiggle item={n.stage} label={n.label} onRemove={() => setPipeline({ [optional]: false })}>
+          <Wiggle
+            item={n.stage}
+            label={n.label}
+            onRemove={() => setPipeline({ [optional]: false })}
+            onOpen={optional === 'guardian' ? () => openStage(GUARDIAN_NODE) : undefined}
+          >
             {node(n)}
           </Wiggle>
         ) : (
@@ -274,9 +292,6 @@ export function Editor({
           : [];
       return n ? [step(n)] : [];
     });
-    const newStage = ghost(ghostNode(NEW_STAGE, 'New stage', 'sparkle'), 'a new stage', () =>
-      setSheet({ stage: BLANK_STAGE, isNew: true }),
-    );
     const has = (id: string) => l.nodes.some((n) => n.stage === id);
     const deployGhost =
       first && !draft.pipeline.deploy && !has('deploying')
@@ -296,7 +311,6 @@ export function Editor({
         : [];
     return [
       ...checkSteps,
-      ...(first ? [newStage] : []),
       ...l.nodes
         .filter((n) => !n.check)
         .flatMap((n) => (n.stage === 'merge' ? [step(n), ...deployGhost] : [step(n)])),
@@ -307,7 +321,7 @@ export function Editor({
   return (
     <div className="app editor" data-testid="editor">
       <header className="topbar editing">
-        <div className="topbar-items" aria-label="Top bar">
+        <div className="topbar-items" aria-label="Top bar" data-sort-area>
           <EditableRow<TopbarItemName>
             items={draft.layout.topbar}
             all={TOPBAR_ITEMS}
@@ -337,38 +351,45 @@ export function Editor({
         </div>
       </header>
 
-      <section className="editor-notes" aria-label="Editing">
-        <p className="muted small">
-          An example project with your layout and pipeline. Tap − to remove, + to add back, drag or use the
-          arrows to reorder, and tap a stage to change what it checks. Save applies it to your dashboard and
-          the PR loop.
-        </p>
-        {brokenPipeline && (
-          <p className="warning small" data-testid="pipeline-error">
-            The PR loop waits: {brokenPipeline}. Save writes the pipeline shown here.
-          </p>
-        )}
-        {stuck.length > 0 && (
-          <p className="warning small" data-testid="stuck-stages">
-            PRs wait at {stuck.join(', ')}: its stage file is missing or broken. Tap it to fix it, or remove
-            it.
-          </p>
-        )}
-        {!checks.includes('review') && (
-          <p className="warning small" data-testid="no-review-warning">
-            Without Code review, every PR waits for your approval, even in projects with auto-merge on.
-          </p>
-        )}
-      </section>
+      {(brokenPipeline || stuck.length > 0 || !checks.includes('review')) && (
+        <section className="editor-notes" aria-label="Warnings">
+          {brokenPipeline && (
+            <p className="warning small" data-testid="pipeline-error">
+              The PR loop waits: {brokenPipeline}. Save writes the pipeline shown here.
+            </p>
+          )}
+          {stuck.length > 0 && (
+            <p className="warning small" data-testid="stuck-stages">
+              PRs wait at {stuck.join(', ')}: its stage file is missing or broken. Tap it to fix it, or remove
+              it.
+            </p>
+          )}
+          {!checks.includes('review') && (
+            <p className="warning small" data-testid="no-review-warning">
+              Without Code review, every PR waits for your approval, even in projects with auto-merge on.
+            </p>
+          )}
+        </section>
+      )}
 
       <main className="content">
         {board.projects.map((p) => (
           <section key={p.project.id} className="project" data-testid="project" data-project={p.project.name}>
-            <header className="project-head" inert>
-              <div className="project-title">
+            <header className="project-head">
+              <div className="project-title" inert>
                 <h2>{p.project.name}</h2>
                 <KindChip project={p.project} />
               </div>
+              <span className="project-buttons">
+                <button
+                  type="button"
+                  className="secondary small"
+                  onClick={() => setSheet({ stage: BLANK_STAGE, isNew: true })}
+                  data-testid="new-stage"
+                >
+                  + New stage
+                </button>
+              </span>
             </header>
             <ul className="rows">
               {p.rows.map((row) => (

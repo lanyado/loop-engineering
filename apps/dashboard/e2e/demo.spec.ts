@@ -420,6 +420,9 @@ test('the pencil edits one example project in place; Save and Discard each ask f
   await page.getByRole('link', { name: 'Edit the dashboard' }).click();
   const editor = page.getByTestId('editor');
   await expect(editor).toBeVisible();
+  // No help text, and the Session node carries none of its buttons here.
+  await expect(editor.getByText('An example project with your layout')).toHaveCount(0);
+  await expect(editor.getByTestId('session-plus')).toHaveCount(0);
   // One example project, and nothing to save yet: Discard just leaves.
   await expect(editor.getByTestId('project')).toHaveCount(1);
   await expect(editor.getByTestId('editor-save')).toBeDisabled();
@@ -457,13 +460,28 @@ test('the pencil edits one example project in place; Save and Discard each ask f
   await expect(steps.nth(1)).toHaveAttribute('data-testid', 'ghost-item');
   await editor.getByRole('button', { name: 'Add Tests' }).click();
   await expect(lane.nth(1)).toHaveAttribute('data-item', 'tests');
+  // Dragging: QA, carried by the mouse onto the first place, lifts, and lands there without opening.
+  const centre = async (item: string) => {
+    const b = (await editor.locator(`.lane-step > [data-item="${item}"]`).boundingBox())!;
+    return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+  };
+  const [qa, first] = [await centre('qa'), await centre('review')];
+  await page.mouse.move(qa.x, qa.y);
+  await page.mouse.down();
+  await page.mouse.move(qa.x - 20, qa.y, { steps: 4 });
+  await expect(editor.locator('[data-item="qa"]')).toHaveClass(/lifted/);
+  await page.mouse.move(first.x, first.y, { steps: 12 });
+  await page.mouse.up();
+  await expect(lane.first()).toHaveAttribute('data-item', 'qa');
+  await expect(editor.locator('.lifted')).toHaveCount(0);
+  await expect(page.getByTestId('stage-sheet')).toHaveCount(0);
 
   // A stage file not in the pipeline waits faded on the lane; "+" adds it.
   await editor.getByRole('button', { name: 'Add Security review' }).click();
   await expect(editor.locator('[data-testid="editable-item"][data-item="security"]')).toHaveCount(1);
 
-  // A new stage, from the faded "New stage" tile, with the wider Runs choices.
-  await editor.getByRole('button', { name: 'Add a new stage' }).click();
+  // A new stage, from the button above the pipeline, with the wider Runs choices.
+  await editor.getByTestId('new-stage').click();
   await page.getByLabel('Name').fill('Docs check');
   await page.getByLabel('Label on the node (10 characters at most)').fill('Docs');
   await page.getByLabel('Runs').selectOption({ label: 'Only when docs change' });
@@ -475,6 +493,15 @@ test('the pencil edits one example project in place; Save and Discard each ask f
   await editor.getByRole('button', { name: 'Edit Security review' }).click();
   await page.getByTestId('stage-delete').click();
   await expect(editor.locator('[data-item="security"]')).toHaveCount(0);
+
+  // Tapping Guardian edits its instructions; only those are offered.
+  await editor.getByRole('button', { name: 'Edit Guardian' }).click();
+  await expect(page.getByLabel('Name')).toHaveCount(0);
+  await page.getByLabel('Instructions').fill('Check the booking flow end to end.');
+  await page.getByTestId('stage-save').click();
+  await editor.getByRole('button', { name: 'Edit Guardian' }).click();
+  await expect(page.getByLabel('Instructions')).toHaveValue('Check the booking flow end to end.');
+  await page.keyboard.press('Escape');
 
   // Removing review warns that every PR will wait for approval; Deploy waits faded after Merge.
   await editor.getByRole('button', { name: 'Remove Code review' }).click();
@@ -499,6 +526,102 @@ test('the pencil edits one example project in place; Save and Discard each ask f
     'data-stage',
     'tests',
   );
+});
+
+test('with motion on, a drag moves each item once and lands where it is dropped', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await open(page);
+  await page.getByRole('link', { name: 'Edit the dashboard' }).click();
+  const editor = page.getByTestId('editor');
+
+  /** Drags `from` to the point `to` in small steps, recording each order the row passes through. */
+  async function drag(
+    row: string,
+    from: string,
+    to: { x: number; y: number },
+    read: () => Promise<string[]>,
+  ) {
+    const b = (await editor.locator(`${row} > [data-item="${from}"]`).boundingBox())!;
+    const start = { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+    const orders = [(await read()).join(' ')];
+    const note = async () => {
+      const now = (await read()).join(' ');
+      if (now !== orders.at(-1)) orders.push(now);
+    };
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    for (let i = 1; i <= 20; i++) {
+      await page.mouse.move(start.x + ((to.x - start.x) * i) / 20, start.y + ((to.y - start.y) * i) / 20);
+      await note();
+    }
+    // Held near where it was dropped, jiggling a little, while the others are still sliding.
+    for (const dx of [4, -4, 4, -4, 0]) {
+      await page.mouse.move(to.x + dx, to.y);
+      await note();
+    }
+    await page.mouse.up();
+    await page.waitForTimeout(400);
+    await note();
+    return orders;
+  }
+  const centre = async (selector: string) => {
+    const b = (await editor.locator(selector).boundingBox())!;
+    return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+  };
+
+  // The top bar: the narrow Claude mark past the wide 5-hour meter's middle.
+  const top = () =>
+    editor
+      .locator('.topbar-items > [data-item]')
+      .evaluateAll((els) => els.map((e) => e.getAttribute('data-item')!));
+  const meter = await centre('.topbar-items > [data-item="fiveHour"]');
+  expect(await drag('.topbar-items', 'claude', { x: meter.x + 40, y: meter.y }, top)).toEqual([
+    'brand claude fiveHour weekly',
+    'brand fiveHour claude weekly',
+  ]);
+
+  // The lane: QA to the first place, past two checks: two moves, and it lands first.
+  const lane = () =>
+    editor
+      .locator('.lane-flow .lane-step > [data-order]')
+      .evaluateAll((els) => els.map((e) => e.getAttribute('data-item')!));
+  const tests = await centre('.lane-step > [data-item="tests"]');
+  expect(await drag('.lane-step', 'qa', { x: tests.x - 30, y: tests.y }, lane)).toEqual([
+    'tests review qa',
+    'tests qa review',
+    'qa tests review',
+  ]);
+  await expect(page.getByTestId('stage-sheet')).toHaveCount(0);
+
+  // On a phone the top bar wraps onto two lines: a drag across the lines lands once, without a loop.
+  await page.setViewportSize({ width: 390, height: 800 });
+  const weekly = await centre('.topbar-items > [data-item="weekly"]');
+  const brand = await centre('.topbar-items > [data-item="brand"]');
+  const wrapped = await drag('.topbar-items', 'weekly', { x: brand.x - 10, y: brand.y }, top);
+  expect(wrapped.at(-1)).toBe('weekly brand fiveHour claude');
+  expect(new Set(wrapped).size).toBe(wrapped.length); // never back to an order it had
+  expect(weekly.y).toBeGreaterThan(brand.y); // it did start on the second line
+  await expect(editor).toBeVisible();
+  // A small drag along the second line, and a slow sweep across it, leave the order alone; dropped on
+  // the right half of the first line, it goes last there (third), and never swaps back on the way.
+  const second = await centre('.topbar-items > [data-item="claude"]');
+  const along = await drag('.topbar-items', 'claude', { x: second.x + 10, y: second.y }, top);
+  expect(along).toEqual(['weekly brand fiveHour claude']);
+  const wide = await centre('.topbar-items > [data-item="fiveHour"]');
+  const across = await drag('.topbar-items', 'claude', { x: wide.x + wide.x / 3, y: wide.y }, top);
+  expect(new Set(across).size).toBe(across.length);
+  await page.setViewportSize({ width: 1280, height: 800 });
+
+  // Escape mid-drag puts it back.
+  const b = (await editor.locator('.lane-step > [data-item="qa"]').boundingBox())!;
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(b.x + b.width / 2 + 120, b.y + b.height / 2, { steps: 10 });
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  await page.waitForTimeout(400);
+  expect(await lane()).toEqual(['qa', 'tests', 'review']);
+  await expect(editor.locator('.lifted')).toHaveCount(0);
 });
 
 test('a check node offers Skip behind a confirmation pop-up; demo data cannot be changed', async ({

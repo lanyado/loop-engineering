@@ -38,6 +38,11 @@ built-in `tests`, `review` and `qa`, `access` and `runs` are fixed.
 A file that doesn't parse is never skipped: PRs wait at that check (the server logs why) until it's
 fixed. While `pipeline.json` can't be read, the loop does nothing at all.
 
+`guardian.md` holds the Production Guardian's own instructions, added to every Guardian run (it
+checks the live site's API, pages, speed and integrations after each deploy and once a day). Only its
+prompt is used, though the file still needs its `---` block; it is never a check. A
+`data/stages/guardian.md` replaces it, and a broken one leaves the built-in instructions in use.
+
 `pipeline.json` sets the order of the checks, and whether the loop watches deploys and runs the
 Production Guardian after a merge:
 
