@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { sessionToken } from '@loop-engineering/core';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
-import { expect, test } from '@playwright/test';
+import { expect, test, type Request } from '@playwright/test';
 import { E2E } from './env';
 import {
   api,
@@ -16,6 +16,10 @@ import {
 } from './helpers';
 
 // The dashboard wired to the real server (e2e/live-server.mjs), reset before every test.
+
+/** A Next.js server action call (a dashboard write), as the browser sends it. */
+const isServerAction = (request: Request) =>
+  request.method() === 'POST' && request.headers()['next-action'] !== undefined;
 
 interface Ids {
   shop: number;
@@ -595,6 +599,13 @@ test('a check is skipped for one PR from a pop-up on its node, and brought back 
   await open(page);
   const lane = page.locator('[data-testid="lane"][data-pr-number="212"]');
   const qa = lane.locator('[data-testid="node"][data-stage="qa"]');
+  // The node flips the moment the owner confirms: the save (a server action) is held until it has.
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route('**/*', async (route) => {
+    if (isServerAction(route.request())) await held;
+    await route.continue();
+  });
   await qa.getByTestId('skip-check').click();
   const dialog = page.getByTestId('skip-dialog');
   await expect(dialog).toContainText('Skip QA for web#212?');
@@ -602,10 +613,32 @@ test('a check is skipped for one PR from a pop-up on its node, and brought back 
   await expect(dialog).toHaveCount(0);
   await expect(qa).toContainText('skipped');
   await expect(qa.getByTestId('skip-check')).toHaveText('Run again');
+  const saved = page.waitForResponse((r) => isServerAction(r.request()));
+  release();
+  await saved;
+  await page.unroute('**/*');
+  await page.reload();
+  await expect(qa).toContainText('skipped');
+  await expect(qa.getByTestId('skip-check')).toHaveText('Run again');
 
   await qa.getByTestId('skip-check').click();
   await expect(page.getByTestId('skip-dialog')).toContainText('Run QA again for web#212?');
   await page.getByTestId('skip-confirm').click();
+  await expect(qa.getByTestId('skip-check')).toHaveText('Skip');
+  await expect(qa).not.toContainText('skipped');
+});
+
+test('a skip the server never gets flips the node back and reopens the pop-up with the error', async ({
+  page,
+}) => {
+  await open(page);
+  const qa = page.locator('[data-testid="lane"][data-pr-number="212"] [data-testid="node"][data-stage="qa"]');
+  await page.route('**/*', (route) => (isServerAction(route.request()) ? route.abort() : route.continue()));
+  await qa.getByTestId('skip-check').click();
+  await page.getByTestId('skip-confirm').click();
+  const dialog = page.getByTestId('skip-dialog');
+  await expect(dialog.getByRole('alert')).not.toBeEmpty();
+  await expect(dialog).toContainText('Skip QA for web#212?');
   await expect(qa.getByTestId('skip-check')).toHaveText('Skip');
   await expect(qa).not.toContainText('skipped');
 });

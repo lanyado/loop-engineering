@@ -25,7 +25,8 @@ import { idParam } from '../ids.js';
  *                   rigor: the checks of the pipeline each rigor level runs, from the loop's policy)
  *   POST /prs/:id/skip  { check, skip } -> { pullRequest }: skips one check of the pipeline for one PR,
  *                   or brings it back (packages/loop/src/skip.ts); 400 for a PR not at a check or a
- *                   check outside the pipeline. Works with the loop off; a running loop acts on it at once.
+ *                   check outside the pipeline. Works with the loop off; a running loop steps that PR at once
+ *                   (a job running the skipped check is stopped, a check brought back starts).
  *   PUT /pipeline   { pipeline, stages?: { [id]: { title, label, icon, access, runs, prompt } | null } }
  *                   -> the same as GET. Writes STAGES_DIR/<id>.md and pipeline.json; null deletes a
  *                   custom stage or resets a built-in one ("guardian" is the Guardian's instructions). Everything is validated before anything is
@@ -57,11 +58,11 @@ const skipBody = z.strictObject({ check: z.string().max(32), skip: z.boolean() }
 
 export function pipelineModule({
   stages,
-  poke = () => undefined,
+  pokePr = () => undefined,
 }: {
   stages: EditableStageLibrary;
-  /** Tells a running PR loop to look again now (a skip changed what it waits for). */
-  poke?: () => void;
+  /** Tells a running PR loop to step this PR now (a skip changed what it waits for). */
+  pokePr?: (prId: number) => void;
 }): ServerModule {
   const choices = {
     icons: STAGE_ICONS,
@@ -90,7 +91,7 @@ export function pipelineModule({
         const id = idParam.safeParse(c.req.param('id'));
         if (!id.success) return c.json({ error: 'the PR id must be a positive whole number' }, 400);
         const pullRequest = skipCheck(ctx.store, stages, id.data, parsed.data.check, parsed.data.skip);
-        poke();
+        pokePr(id.data);
         return c.json({ pullRequest });
       });
       // 30 stages of 4,000 characters, at up to 3 bytes each in UTF-8.

@@ -377,6 +377,10 @@ export class LoopEngine {
   private readonly busy = new Set<number>();
   private readonly inflight = new Set<Promise<void>>();
   private readonly controllers = new Set<AbortController>();
+  /** Each PR's agent job (one per PR, see step), so a skip of its check can stop it. */
+  private readonly running = new Map<number, { kind: PrJobKind; controller: AbortController }>();
+  /** PRs poked while their step ran: stepped again as soon as it ends. */
+  private readonly again = new Set<number>();
   private readonly warned = new Set<string>();
   private timer: TimerHandle | null = null;
   private stopped = false;
@@ -428,6 +432,21 @@ export class LoopEngine {
     this.timers.setTimeout(() => {
       void this.tick().catch((err: unknown) => this.log(`tick failed: ${errorMessage(err)}`));
     }, 0);
+  }
+
+  /**
+   * Steps one PR now, without discovery: the human skipped one of its checks or brought one back.
+   * A job running a check the human no longer wants for it is stopped (no attempt spent); a PR whose
+   * step is running (e.g. waiting for that job) is stepped again as soon as the step ends.
+   */
+  pokePr(prId: number): void {
+    if (this.stopped || !this.timer) return;
+    const pr = this.deps.store.pullRequests.get(prId);
+    const job = this.running.get(prId);
+    if (pr && job && this.droppedNow(pr, jobCheck(job.kind)))
+      job.controller.abort(new CheckSkipped(job.kind));
+    if (this.busy.has(prId)) this.again.add(prId);
+    else void this.step(prId);
   }
 
   /** Discovers new PRs and advances every PR in the loop. Resolves when this tick's steps are done. */
@@ -502,6 +521,7 @@ export class LoopEngine {
     } finally {
       this.inflight.delete(run);
     }
+    if (this.again.delete(prId)) await this.step(prId);
   }
 
   status(): LoopStatus {
@@ -726,7 +746,7 @@ export class LoopEngine {
       // loop until the round cap.
       // At rigor Light the tester writes none; any it wrote anyway are not pushed (a push costs a
       // round). Read now: the level, or a skip, may have changed while the job ran.
-      verdict.passed && !c.s.testsAdded && this.rigorOf(c.pr) !== 'light' && !this.droppedNow(c, 'tests')
+      verdict.passed && !c.s.testsAdded && this.rigorOf(c.pr) !== 'light' && !this.droppedNow(c.pr, 'tests')
         ? this.deps.workspace.commitAndPush(c.repo, path, {
             branch: gh.headRefName,
             baseSha: gh.headRefOid,
@@ -1120,7 +1140,7 @@ export class LoopEngine {
     // the PR is not escalated (the job's usage, failure included, is still recorded); the next step
     // moves the PR on.
     const from = { kind, ...(stage ? { stage } : {}) };
-    if (this.droppedNow(c, feedbackCheck(from))) return this.save(c, {}, FRESH_ATTEMPTS, usage);
+    if (this.droppedNow(c.pr, feedbackCheck(from))) return this.save(c, {}, FRESH_ATTEMPTS, usage);
     if (c.pr.round >= this.maxRounds(c)) {
       return this.escalate(c, `PR #${c.pr.number} hit ${c.pr.round} rounds`, items, false, usage, from);
     }
@@ -1625,7 +1645,7 @@ export class LoopEngine {
     };
     let result: AgentJobResult;
     try {
-      const job = (p: Provider, model = this.modelFor(p)): AgentJob => ({
+      const job = (p: Provider, model = this.modelFor(p)): PrJob => ({
         kind,
         provider: p,
         model,
@@ -1665,6 +1685,9 @@ export class LoopEngine {
       }
     } catch (err) {
       if (this.stopped) return { ok: false, progressed: false };
+      // The human skipped the check while its job ran (pokePr): no attempt spent; the PR moves on now.
+      if (err instanceof CheckSkipped)
+        return { ok: false, progressed: this.save(c, {}, FRESH_ATTEMPTS, usage) };
       return failed(err);
     }
     add(result);
@@ -1690,17 +1713,22 @@ export class LoopEngine {
   private async runAgent(
     c: Ctx,
     gh: GhPr,
-    job: AgentJob,
+    job: PrJob,
     finish: (result: AgentJobResult, path: string) => Promise<void>,
   ): Promise<AgentJobResult> {
     const { workspace, launcher } = this.deps;
-    const release = await this.jobs.acquire();
+    // Registered before the queue, so a skip lands as soon as the job gets its slot (a queued job cannot be dequeued).
     const controller = new AbortController();
-    this.controllers.add(controller);
+    const mine = { kind: job.kind, controller };
+    this.running.set(c.pr.id, mine);
+    let release: (() => void) | null = null;
     let path: string | null = null;
     let timer: TimerHandle | null = null;
     try {
+      release = await this.jobs.acquire();
+      this.controllers.add(controller);
       if (this.stopped) throw new Error('the loop is stopping');
+      controller.signal.throwIfAborted();
       // A checkout owned by the loop at the exact head, never the builder's worktree.
       path = await workspace.checkout({
         repo: c.repo,
@@ -1709,10 +1737,16 @@ export class LoopEngine {
         name: `pr${c.pr.id}-${job.kind}`,
         envFiles: c.project.envFiles,
       });
+      controller.signal.throwIfAborted();
       const aborted = new Promise<never>((_, reject) => {
         controller.signal.addEventListener(
           'abort',
-          () => reject(new Error(`the ${job.kind} job timed out or was stopped`)),
+          () =>
+            reject(
+              controller.signal.reason instanceof CheckSkipped
+                ? controller.signal.reason
+                : new Error(`the ${job.kind} job timed out or was stopped`),
+            ),
           { once: true },
         );
       });
@@ -1730,8 +1764,9 @@ export class LoopEngine {
     } finally {
       if (timer) this.timers.clearTimeout(timer);
       this.controllers.delete(controller);
+      if (this.running.get(c.pr.id) === mine) this.running.delete(c.pr.id);
       if (path) await workspace.remove(c.repo, path).catch(() => undefined);
-      release();
+      release?.();
     }
   }
 
@@ -1903,7 +1938,7 @@ export class LoopEngine {
     usage: MetricsDelta,
     backoff: Partial<LoopState> = {},
   ): JobOutcome<never> | null {
-    if (!this.droppedNow(c, jobCheck(kind))) return null;
+    if (!this.droppedNow(c.pr, jobCheck(kind))) return null;
     return { ok: false, progressed: this.save(c, {}, { ...FRESH_ATTEMPTS, ...backoff }, usage) };
   }
 
@@ -1950,11 +1985,11 @@ export class LoopEngine {
    * level that does not run it. Read fresh from the PR row and the session, because it is asked once
    * a job has run, and either may have changed meanwhile.
    */
-  private droppedNow(c: Ctx, check: string | undefined): boolean {
+  private droppedNow(pr: PullRequest, check: string | undefined): boolean {
     if (check === undefined) return false;
-    if (isSkipped(loopState(this.deps.store.pullRequests.require(c.pr.id)), check)) return true;
+    if (isSkipped(loopState(this.deps.store.pullRequests.require(pr.id)), check)) return true;
     const { checks } = this.pipeline();
-    return checks.includes(check) && !rigorChecks(this.rigorOf(c.pr), checks).includes(check);
+    return checks.includes(check) && !rigorChecks(this.rigorOf(pr), checks).includes(check);
   }
 
   private maxRounds(c: Ctx): number {
@@ -2052,6 +2087,16 @@ export class LoopEngine {
 
   private iso(): string {
     return this.deps.store.clock.now().toISOString();
+  }
+}
+
+/** An agent job for a PR (the Guardian's runs elsewhere). */
+type PrJob = AgentJob & { kind: PrJobKind };
+
+/** Why pokePr stopped a job: the human skipped its check. Not a failed attempt. */
+class CheckSkipped extends Error {
+  constructor(kind: PrJobKind) {
+    super(`the ${kind} job was stopped: its check was skipped`);
   }
 }
 

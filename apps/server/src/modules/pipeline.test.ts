@@ -30,15 +30,19 @@ const security = {
 
 describe('the pipeline API', () => {
   let dir: string;
-  let pokes: number;
+  let pokes: number[];
   let server: ReturnType<typeof createServer>;
   let store: ReturnType<typeof openStore>;
   beforeEach(async () => {
     dir = mkdtempSync(join(tmpdir(), 'pipeline-'));
     store = openStore({ clock: new FakeClock('2026-10-24T09:00:00.000Z') });
-    pokes = 0;
+    pokes = [];
     const stages = new FileStageLibrary(join(dir, 'stages'), () => undefined);
-    server = createServer({ config, store, modules: [pipelineModule({ stages, poke: () => void pokes++ })] });
+    server = createServer({
+      config,
+      store,
+      modules: [pipelineModule({ stages, pokePr: (id) => void pokes.push(id) })],
+    });
     await server.start();
   });
   afterEach(async () => {
@@ -145,7 +149,7 @@ describe('the pipeline API', () => {
     }
   });
 
-  it('POST /prs/:id/skip skips a check for one PR and pokes the loop; refuses bad requests', async () => {
+  it('POST /prs/:id/skip skips a check for one PR and pokes the loop for that PR; refuses bad requests', async () => {
     const shop = store.projects.create({
       name: 'shop',
       repos: [
@@ -156,7 +160,7 @@ describe('the pipeline API', () => {
     const skip = (id: number, body: unknown) => call('POST', body, TOKEN, `/api/prs/${id}/skip`);
     expect((await skip(pr.id, { check: 'tests', skip: true })).status).toBe(200);
     expect(loopState(store.pullRequests.require(pr.id)).skip).toEqual(['tests']);
-    expect(pokes).toBe(1);
+    expect(pokes).toEqual([pr.id]);
     expect((await skip(pr.id, { check: 'tests' })).status).toBe(400);
     expect((await skip(pr.id, { check: 'merge', skip: true })).status).toBe(400);
     expect((await skip(999, { check: 'tests', skip: true })).status).toBe(404);
