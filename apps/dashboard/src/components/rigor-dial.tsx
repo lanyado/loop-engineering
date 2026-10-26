@@ -1,6 +1,6 @@
 'use client';
 
-import { useOptimistic, useRef, useState, useTransition, type KeyboardEvent } from 'react';
+import { useOptimistic, useRef, useState, useTransition, type KeyboardEvent, type ReactNode } from 'react';
 import { setRigor } from '../app/actions';
 import { RIGOR_LEVELS, type Rigor } from '../lib/schemas';
 
@@ -19,22 +19,31 @@ export const RIGOR_CAPTIONS: Record<Rigor, string> = {
   thorough: 'every check, QA on every PR, tests for every change',
 };
 
-/** What a level costs, how fast it ships and how deeply it checks, out of 4 each: one move trades them. */
-const METERS: Record<Rigor, { cost: number; speed: number; depth: number }> = {
-  fast: { cost: 1, speed: 4, depth: 1 },
-  light: { cost: 2, speed: 3, depth: 2 },
-  standard: { cost: 3, speed: 2, depth: 3 },
-  thorough: { cost: 4, speed: 1, depth: 4 },
+/** How fast a level ships (out of 5) and how deeply it checks (out of 4): one move trades them. */
+const METERS: Record<Rigor, { speed: number; depth: number }> = {
+  fast: { speed: 4, depth: 1 },
+  light: { speed: 3, depth: 2 },
+  standard: { speed: 2, depth: 3 },
+  thorough: { speed: 1, depth: 4 },
 };
 
-/** "$$ ⚡⚡⚡ 🔍🔍": money, speed and how deeply it is checked, under the level's name. */
+/** Bolts for speed, dots for how deeply it is checked, under the level's name. */
 function Meters({ level }: { level: Rigor }) {
-  const { cost, speed, depth } = METERS[level];
+  const { speed, depth } = METERS[level];
   return (
     <span className="rigor-meters" aria-hidden="true">
-      <span className="rigor-cost">{'$'.repeat(cost)}</span>
-      <span>{'⚡'.repeat(speed)}</span>
-      <span>{'🔍'.repeat(depth)}</span>
+      <span className="rigor-bolts">
+        {[0, 1, 2, 3, 4].map((i) => (
+          <svg key={i} viewBox="0 0 10 14" className={i < speed ? 'on' : undefined} focusable="false">
+            <path d="M6.5 0 0 8h4.2L3.5 14 10 6H5.8L6.5 0Z" />
+          </svg>
+        ))}
+      </span>
+      <span className="rigor-dots">
+        {[0, 1, 2, 3].map((i) => (
+          <i key={i} className={i < depth ? 'on' : undefined} />
+        ))}
+      </span>
     </span>
   );
 }
@@ -48,8 +57,24 @@ function moveFrom(key: string, from: number, last: number): number | null {
   return null;
 }
 
+const ICONS: Record<Rigor, ReactNode> = {
+  fast: <path d="M13 2.5 4.5 13.5h6.5L10 21.5l8.5-11H12l1-8Z" />,
+  light: (
+    <>
+      <path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.5 19 2c1 2 2 4.2 2 8 0 5.5-4.8 10-10 10Z" />
+      <path d="M2 21c0-3 1.9-5.4 5.1-6C9.5 14.5 12 13 13 12" />
+    </>
+  ),
+  standard: <path d="m12 2.8 2.8 5.8 6.4.9-4.6 4.5 1.1 6.3L12 17.3l-5.7 3 1.1-6.3-4.6-4.5 6.4-.9L12 2.8Z" />,
+  thorough: (
+    <>
+      <circle cx="10.5" cy="10.5" r="7" />
+      <path d="m21 21-5.5-5.5" />
+    </>
+  ),
+};
+
 function LevelIcon({ level }: { level: Rigor }) {
-  if (level !== 'fast' && level !== 'thorough') return null;
   return (
     <svg
       className="rigor-icon"
@@ -62,14 +87,7 @@ function LevelIcon({ level }: { level: Rigor }) {
       aria-hidden="true"
       focusable="false"
     >
-      {level === 'fast' ? (
-        <path d="M13 3 5 13.5h6L10 21l8-10.5h-6L13 3Z" />
-      ) : (
-        <>
-          <path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6l-7-3Z" />
-          <path d="m9 12 2 2 4-4" />
-        </>
-      )}
+      {ICONS[level]}
     </svg>
   );
 }
