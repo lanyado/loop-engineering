@@ -97,12 +97,6 @@ export function StageSheet({
               : `Its file is broken (${stage.error}), so PRs wait at it. Saving here writes a working one.`}
           </p>
         )}
-        {guardian && (
-          <p className="muted small">
-            After each deploy and once a day, the Guardian checks the live site: its API, pages, speed and
-            integrations. Tell it what matters most in your product.
-          </p>
-        )}
         {!guardian && (
           <>
             <label className="field">
@@ -143,9 +137,7 @@ export function StageSheet({
             </fieldset>
           </>
         )}
-        {guardian ? null : stage.builtin ? (
-          <p className="muted small">A built-in stage: what it may do and when it runs are fixed.</p>
-        ) : (
+        {guardian || stage.builtin ? null : (
           <>
             <label className="field">
               It may
@@ -181,12 +173,6 @@ export function StageSheet({
             data-testid="stage-prompt"
           />
         </label>
-        {!guardian && (
-          <p className="muted small">
-            The loop adds the PR, the request and the diff, and asks for pass or fail. Failures go back to the
-            builder. No stage can edit files or push.
-          </p>
-        )}
         {problem && <p className="error small">{problem}</p>}
         {isNew && !problem && <p className="muted small mono">Saved as {id}.md in your stages folder</p>}
         <div className="row-actions">

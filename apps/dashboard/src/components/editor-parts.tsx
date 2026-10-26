@@ -473,9 +473,6 @@ export function ConfirmDialog({
           ? 'Your dashboard gets this layout, and the PR loop uses this pipeline from its next step.'
           : 'Your dashboard and the PR loop stay as they were.'}
       </p>
-      {save && readOnly && (
-        <p className="warning small">Demo data is read-only: connect a server to apply changes.</p>
-      )}
       {error && (
         <p className="error small" role="alert">
           {error}

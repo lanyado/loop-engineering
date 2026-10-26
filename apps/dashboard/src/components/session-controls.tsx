@@ -66,7 +66,6 @@ export function Composer({
         <button type="button" className="ghost" onClick={onClose}>
           Close
         </button>
-        {readOnly && <span className="muted small">Demo data is read-only.</span>}
         {result && (
           <span className={`small ${result.ok ? 'ok' : 'error'}`} role={result.ok ? 'status' : 'alert'}>
             {result.ok ? result.message : result.error}

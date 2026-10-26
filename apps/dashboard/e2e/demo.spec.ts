@@ -652,11 +652,10 @@ test('a rigor dial sits above each git session pipeline, and the lane dims what 
     'aria-checked',
     'true',
   );
-  // The caption, plus (for screen readers; a tooltip on the dial) the demo's read-only note.
+  // The caption, for screen readers.
   await expect(dial.getByTestId('rigor-caption')).toHaveText(
-    'Thorough: every check, QA on every PR, tests for every change Demo data is read-only.',
+    'Thorough: every check, QA on every PR, tests for every change',
   );
-  await expect(dial.getByRole('radiogroup')).toHaveAttribute('title', 'Demo data is read-only.');
   await expect(checkout.locator('[data-off]')).toHaveCount(0);
   // Demo data: read-only, yet reachable by keyboard; clicks and arrows change nothing.
   for (const radio of await dial.getByRole('radio').all())
