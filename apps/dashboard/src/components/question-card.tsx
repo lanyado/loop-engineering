@@ -122,7 +122,6 @@ export function QuestionCard({
           Answered: <strong>{sent}</strong>
         </p>
       )}
-      {readOnly && <p className="question-note">Demo data is read-only.</p>}
       {error && (
         <p className="error small" role="alert">
           {error}

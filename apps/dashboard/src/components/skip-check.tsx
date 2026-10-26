@@ -83,7 +83,6 @@ export function SkipCheck({
                 Cancel
               </button>
             </div>
-            {readOnly && <p className="muted small">Demo data is read-only.</p>}
           </Dialog>
         </span>
       )}

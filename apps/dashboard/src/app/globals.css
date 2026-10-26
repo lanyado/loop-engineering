@@ -758,11 +758,6 @@ button.option.recommended:disabled {
   font-size: var(--text-sm);
   color: var(--good);
 }
-.question-note {
-  margin: 0;
-  font-size: var(--text-xs);
-  color: var(--muted);
-}
 
 /* Time left: a small ring and the minutes; red in the last three. */
 .countdown {

@@ -154,7 +154,6 @@ export function RigorDial({
         aria-label={`Rigor for ${title}`}
         aria-describedby={`rigor-caption-${sessionId}`}
         aria-disabled={locked || undefined}
-        title={readOnly && !preview ? 'Demo data is read-only.' : undefined}
         onKeyDown={onKeyDown}
       >
         {RIGOR_LEVELS.map((level, i) => (
@@ -172,7 +171,7 @@ export function RigorDial({
             data-testid={`rigor-${level}`}
             // Not `disabled`: in demo mode the group stays reachable by keyboard; choose() ignores it.
             aria-disabled={readOnly || undefined}
-            title={`${NAMES[level]}: ${RIGOR_CAPTIONS[level]}${readOnly && !preview ? ' (Demo data is read-only.)' : ''}`}
+            title={`${NAMES[level]}: ${RIGOR_CAPTIONS[level]}`}
             onClick={() => choose(level)}
           >
             <span className="rigor-name">
@@ -190,7 +189,6 @@ export function RigorDial({
       {/* The words for the chosen level, for screen readers; sighted users read the meters (and hover). */}
       <p className="rigor-caption sr-only" id={`rigor-caption-${sessionId}`} data-testid="rigor-caption">
         <strong>{NAMES[shown]}:</strong> {RIGOR_CAPTIONS[shown]}
-        {readOnly && !preview && <span className="sr-only"> Demo data is read-only.</span>}
       </p>
       {error && (
         <p className="error small rigor-note" role="alert">
