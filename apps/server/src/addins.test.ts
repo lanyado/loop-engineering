@@ -43,6 +43,9 @@ describe('local add-ins', () => {
     fresh();
     entry('export const serverModules = () => ({ name: "one" });');
     await expect(loadAddins(dir, {}, () => {})).rejects.toThrow(/must return an array/);
+    fresh();
+    entry('export const serverModules = () => [null];');
+    await expect(loadAddins(dir, {}, () => {})).rejects.toThrow(/must return an array/);
   });
 
   it('refuse an entry without serverModules, and pass on its own errors', async () => {
@@ -54,5 +57,9 @@ describe('local add-ins', () => {
       'export function serverModules() { const e = new Error("MINE_TOKEN is not set"); e.name = "MineConfigError"; throw e; }',
     );
     await expect(loadAddins(dir, {}, () => {})).rejects.toThrow(/MINE_TOKEN is not set/);
+    // Thrown while importing it, too, and without the rebuild advice.
+    fresh();
+    entry('const e = new Error("MINE_URL is not set"); e.name = "MineConfigError"; throw e;');
+    await expect(loadAddins(dir, {}, () => {})).rejects.toThrow(/^MINE_URL is not set$/);
   });
 });

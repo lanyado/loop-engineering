@@ -33,14 +33,16 @@ export async function loadAddins(
   try {
     loaded = (await import(pathToFileURL(entry).href)) as Partial<AddinEntry>;
   } catch (error) {
+    // An add-in's own settings error, thrown while loading, speaks for itself.
+    if (error instanceof Error && error.name.endsWith('ConfigError')) throw error;
     const why = error instanceof Error ? error.message : String(error);
     throw new ConfigError(`Could not load ${entry}: ${why}\nRebuild it: ${REBUILD}`);
   }
   if (typeof loaded.serverModules !== 'function')
     throw new ConfigError(`${entry} must export serverModules(env)`);
   const modules = await loaded.serverModules(env);
-  if (!Array.isArray(modules))
-    throw new ConfigError(`${entry}: serverModules(env) must return an array of modules`);
+  if (!Array.isArray(modules) || modules.some((m) => typeof m?.name !== 'string'))
+    throw new ConfigError(`${entry}: serverModules(env) must return an array of modules, each with a name`);
   log(`[addins] loaded ${modules.map((m) => m.name).join(', ') || 'no modules'}`);
   return modules;
 }
