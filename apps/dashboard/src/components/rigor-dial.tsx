@@ -142,7 +142,7 @@ export function RigorDial({
 
   return (
     <div
-      className={`rigor rigor-${shown}`}
+      className="rigor"
       data-testid="rigor-dial"
       data-rigor={shown}
       aria-busy={pending || undefined}

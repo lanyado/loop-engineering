@@ -39,12 +39,12 @@
   --bad-hover: light-dark(#991b1b, #ffaaa2);
   --ring: light-dark(rgb(79 70 229 / 0.28), rgb(139 147 255 / 0.35));
   /* The rigor dial: each level's own colour (its icon, and its glow when chosen). */
-  --rigor-fast: light-dark(#d97706, #fbbf24);
-  --rigor-light: light-dark(#16a34a, #22c55e);
+  --rigor-fast: light-dark(#b45309, #fbbf24);
+  --rigor-light: light-dark(#15803d, #22c55e);
   --rigor-standard: light-dark(#0891b2, #22d3ee);
   --rigor-thorough: light-dark(#7c3aed, #a78bfa);
-  --rigor-bolt: light-dark(#f59e0b, #fbbf24);
-  --rigor-off: light-dark(#d5d9e1, #374050);
+  --rigor-bolt: light-dark(#d97706, #fbbf24);
+  --rigor-off: light-dark(#e4e7ec, #374050);
 
   /* Type scale (1.2 ratio around a 16px body). */
   --font: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
@@ -1440,7 +1440,7 @@ button.icon-button,
 .rigor-stop + .rigor-stop::before {
   content: '';
   position: absolute;
-  left: -2px;
+  left: -3px;
   top: 22%;
   bottom: 22%;
   width: 1px;
@@ -1463,6 +1463,9 @@ button.icon-button,
     0 0 0 3px color-mix(in srgb, var(--c) 14%, transparent),
     0 0 18px color-mix(in srgb, var(--c) 35%, transparent);
   z-index: 1;
+}
+.rigor-stop:focus-visible {
+  z-index: 2;
 }
 .rigor-stop[aria-disabled='true'] {
   cursor: default;
@@ -1530,6 +1533,19 @@ button.icon-button,
 @media (forced-colors: active) {
   .rigor-stop[aria-checked='true'] {
     outline: 2px solid CanvasText;
+  }
+  .rigor-meters {
+    forced-color-adjust: none;
+  }
+  .rigor-bolts svg,
+  .rigor-dots i {
+    fill: GrayText;
+    background: GrayText;
+  }
+  .rigor-bolts svg.on,
+  .rigor-dots i.on {
+    fill: CanvasText;
+    background: CanvasText;
   }
 }
 @media (pointer: coarse) {
