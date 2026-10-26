@@ -6,7 +6,7 @@ import type { PullRequest, Question, TreeSession } from '../lib/schemas';
 import { EndSessionButton } from './end-session-button';
 import { QuestionCard } from './question-card';
 import { RigorDial } from './rigor-dial';
-import { SkipCheck } from './skip-check';
+import { SkipCheck, SkipDetail, SkipState } from './skip-check';
 import {
   DetailsButton,
   DoubleClickTerminal,
@@ -287,7 +287,8 @@ function Node({
         <span className="node-title" title={title}>
           {title}
         </span>
-        {detail && <span className="node-detail">{detail}</span>}
+        {/* A word gets its span here; an element (SkipDetail) draws its own, or nothing. */}
+        {typeof detail === 'string' ? detail && <span className="node-detail">{detail}</span> : detail}
         <AskBadge questions={questions} />
         {chip}
       </span>
@@ -410,43 +411,58 @@ function LaneView({
   // The way back is drawn by node position, which the editor's own steps would shift.
   const origin = feedback && !edit ? nodes.findIndex((n) => n.stage === feedbackOrigin(feedback)) : -1;
   const back = laneFeedbacks([lane])[0];
-  const node = (node: StageNode, buttons: boolean, detail?: string) => (
-    <WithTerminal target={buttons ? stageTerminal(lane, node) : null} readOnly={readOnly}>
-      {(button) => (
-        <Node
-          kind={node.icon}
-          stage={node.stage}
-          state={node.state}
-          off={node.off || node.notRun}
-          notRun={node.notRun}
-          title={node.label}
-          detail={
-            detail ??
-            (node.stage === 'deploying'
-              ? deployDetail(node, lane)
-              : node.stage === 'guardian'
-                ? guardianDetail(node, lane)
-                : nodeDetail(node))
-          }
-          questions={node.stage === 'deploying' ? [...node.questions, ...lane.end.questions] : node.questions}
-          chip={
-            buttons && pr && node.skippable ? (
-              <SkipCheck
-                prId={pr.id}
-                pr={`${pr.repo}#${pr.number}`}
-                check={node.stage}
-                label={node.label}
-                skipped={node.skipped}
-                readOnly={readOnly}
-              />
-            ) : undefined
-          }
-        >
-          {button}
-        </Node>
-      )}
-    </WithTerminal>
-  );
+  const node = (node: StageNode, buttons: boolean, detail?: string) => {
+    // Skip / Run again flips the node before the server answers (SkipState holds that until then).
+    const skipFor = buttons && node.skippable ? pr : null;
+    return (
+      <WithTerminal target={buttons ? stageTerminal(lane, node) : null} readOnly={readOnly}>
+        {(button) => {
+          const drawn = (
+            <Node
+              kind={node.icon}
+              stage={node.stage}
+              state={node.state}
+              off={node.off || node.notRun}
+              notRun={node.notRun}
+              title={node.label}
+              detail={
+                detail ??
+                (node.stage === 'deploying' ? (
+                  deployDetail(node, lane)
+                ) : node.stage === 'guardian' ? (
+                  guardianDetail(node, lane)
+                ) : skipFor ? (
+                  <SkipDetail
+                    skipped={nodeDetail({ ...node, skipped: true })}
+                    unskipped={nodeDetail({ ...node, skipped: false })}
+                  />
+                ) : (
+                  nodeDetail(node)
+                ))
+              }
+              questions={
+                node.stage === 'deploying' ? [...node.questions, ...lane.end.questions] : node.questions
+              }
+              chip={
+                skipFor ? (
+                  <SkipCheck
+                    prId={skipFor.id}
+                    pr={`${skipFor.repo}#${skipFor.number}`}
+                    check={node.stage}
+                    label={node.label}
+                    readOnly={readOnly}
+                  />
+                ) : undefined
+              }
+            >
+              {button}
+            </Node>
+          );
+          return skipFor ? <SkipState skipped={node.skipped}>{drawn}</SkipState> : drawn;
+        }}
+      </WithTerminal>
+    );
+  };
   const steps: LaneStep[] = edit
     ? edit.lane(lane, (n, detail) => node(n, false, detail), first)
     : nodes.map((n) => ({ key: n.stage, state: n.state, content: node(n, true) }));

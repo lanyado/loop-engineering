@@ -50,7 +50,7 @@ const server = createServer({
   // without ctx.runner. History comes last: it only adds an MCP tool and a background sweep.
   modules: [
     dashboardApi(),
-    pipelineModule({ stages, poke: () => loop?.engine()?.poke() }),
+    pipelineModule({ stages, pokePr: (id) => loop?.engine()?.pokePr(id) }),
     claudeUsageModule(),
     terminalModule(),
     opencodeSubagentsModule(),

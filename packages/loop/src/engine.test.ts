@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LOOP_REQUEST_PREFIX, LOOP_SESSION_TITLE, pickOption } from './engine.js';
 import { verdictResult } from './fakes.js';
 import type { AgentJob, AgentJobResult } from './ports.js';
+import { skipCheck } from './skip.js';
+import { builtinStageLibrary, type Stage } from './stages.js';
 import { loopState } from './state.js';
 import {
   blocking,
@@ -1286,6 +1288,118 @@ describe('robustness', () => {
     h.store.pullRequests.update(pr.id, { loopState: { ...loopState(pr), feedback: undefined, posted: [] } });
     await h.engine.tick();
     expect(h.github.pr(SLUG, number).comments).toHaveLength(1);
+  });
+});
+
+describe('pokePr: a skip or a check brought back acts at once', () => {
+  const security: Stage = {
+    id: 'security',
+    title: 'Security review',
+    label: 'Security',
+    icon: 'shield',
+    access: 'read',
+    runs: 'always',
+    prompt: 'Look for leaked secrets.',
+    builtin: false,
+    overridden: false,
+  };
+  /** A job that never answers and ignores its signal: only the engine's race can end it. */
+  const hang = (started: () => void) => () => {
+    started();
+    return new Promise<AgentJobResult>(() => undefined);
+  };
+
+  it.each([
+    { check: 'qa', kind: 'qa', checks: ['tests', 'review', 'qa'] },
+    { check: 'security', kind: 'check-security', checks: ['tests', 'review', 'security'] },
+  ] as const)(
+    'skipping $check while its job runs stops the job, and the PR moves on without spending an attempt',
+    async ({ check, kind, checks }) => {
+      const lib = builtinStageLibrary({ checks: [...checks] }, [security]);
+      const h = harness({ deps: { stages: lib } });
+      h.github.diffFiles = ['checkout.tsx'];
+      let running = false;
+      h.launcher
+        .on('tests', testsPass({ qaNeeded: true, qaReason: 'UI' }))
+        .on('review', clean())
+        .on(
+          kind,
+          hang(() => (running = true)),
+        );
+      await h.builderWithPr();
+      h.engine.start();
+      const tick = h.engine.tick();
+      while (!running) await vitestFlush();
+      const id = h.pr().id;
+      skipCheck(h.store, lib, id, check, true);
+      h.engine.pokePr(id);
+      await tick;
+
+      expect(h.launcher.kinds()).toEqual(['tests', 'review', kind]);
+      expect(h.pr()).toMatchObject({ outcome: 'merged' });
+      expect(loopState(h.pr()).lastError).toBeUndefined();
+      expect(h.store.metrics.get(id)).toMatchObject({ failures: 0 });
+      expect(h.logs.filter((l) => /job failed|limit/.test(l))).toEqual([]);
+      expect(
+        h.github
+          .pr(SLUG, 1)
+          .comments.map((c) => c.body)
+          .join('\n'),
+      ).not.toMatch(/failed/);
+      expect(h.workspace.live.size).toBe(0);
+      await h.engine.stop();
+    },
+  );
+
+  it('steps only that PR, without discovery; a check brought back starts at once', async () => {
+    const lib = builtinStageLibrary();
+    const h = harness({ autoMerge: false, deps: { stages: lib } });
+    h.launcher.on('tests', testsPass()).on('review', clean());
+    await h.builderWithPr();
+    await h.engine.discover();
+    const id = h.pr().id;
+    skipCheck(h.store, lib, id, 'tests', true);
+    h.engine.start();
+    const discover = vi.spyOn(h.engine, 'discover');
+    const finds = h.github.calls.filter((c) => c.startsWith('find')).length;
+
+    h.engine.pokePr(id);
+    await settle(h);
+    expect(h.launcher.kinds()).toEqual(['review']);
+    expect(h.pr()).toMatchObject({ stage: 'awaiting_approval', outcome: null });
+
+    skipCheck(h.store, lib, id, 'tests', false); // "Run again"
+    h.engine.pokePr(id);
+    await settle(h);
+    expect(h.launcher.kinds()).toEqual(['review', 'tests']);
+    expect(discover).not.toHaveBeenCalled();
+    expect(h.github.calls.filter((c) => c.startsWith('find'))).toHaveLength(finds);
+    expect(h.timers.pending).toBe(1); // only the first tick, never fired
+    await h.engine.stop();
+  });
+
+  it('a PR poked while its step runs is stepped again as soon as that step ends', async () => {
+    const h = harness();
+    let release!: () => void;
+    h.launcher.on('tests', testsPass()).on(
+      'review',
+      // No decision: a failed attempt that ends the step; the poke retries it at once, not next tick.
+      () => new Promise<AgentJobResult>((resolve) => (release = () => resolve(verdictResult({})))),
+      clean(),
+    );
+    await h.builderWithPr();
+    await h.engine.discover();
+    h.engine.start();
+    const id = h.pr().id;
+    const step = h.engine.step(id);
+    await vitestFlush();
+    expect(h.engine.status().busy).toEqual([id]);
+    h.engine.pokePr(id); // busy: remembered
+    release();
+    await step;
+    expect(h.launcher.kinds()).toEqual(['tests', 'review', 'review']);
+    expect(h.pr().outcome).toBe('merged');
+    await h.engine.stop();
   });
 });
 
