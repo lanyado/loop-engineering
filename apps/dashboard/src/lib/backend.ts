@@ -25,10 +25,7 @@ export interface Backend {
   pendingQuestions(): Promise<Question[]>;
   answer(questionId: number, answer: string): Promise<AnswerResult>;
   tree(): Promise<TreeProject[]>;
-  updateProject(
-    id: number,
-    patch: Partial<Pick<Project, 'autoMerge' | 'markedForDirectInput' | 'permissionMode'>>,
-  ): Promise<Project>;
+  updateProject(id: number, patch: Partial<Pick<Project, 'autoMerge'>>): Promise<Project>;
   pullRequests(): Promise<PullRequest[]>;
   settings(): Promise<Settings>;
   updateSettings(patch: SettingsPatch): Promise<Settings>;

@@ -1,15 +1,7 @@
 'use client';
 
 import { useId, useOptimistic, useState, useTransition, type ReactNode } from 'react';
-import {
-  setPermissionMode,
-  setProjectToggle,
-  setTheme,
-  updateSettings,
-  type ActionResult,
-} from '../app/actions';
-import { permissionLabel } from '../lib/format';
-import { SELECTABLE_PERMISSION_MODES } from '../lib/schemas';
+import { setProjectToggle, setTheme, updateSettings, type ActionResult } from '../app/actions';
 import type { Theme } from '../lib/theme';
 import { FolderPath, KindChip } from './project-kind';
 
@@ -127,28 +119,21 @@ export function ProjectSettings({
     kind: string;
     folderPath: string | null;
     autoMerge: boolean;
-    markedForDirectInput: boolean;
-    permissionMode: string;
   };
   readOnly: boolean;
 }) {
   const { pending, run, message } = useAction();
   // Optimistic: show the new value at once; the refreshed page confirms or reverts it.
-  const [optimistic, setOptimistic] = useState<Record<string, boolean>>({});
-  const value = (field: 'autoMerge' | 'markedForDirectInput') => optimistic[field] ?? project[field];
-  const toggle = (field: 'autoMerge' | 'markedForDirectInput', next: boolean) => {
-    setOptimistic((o) => ({ ...o, [field]: next }));
+  const [optimistic, setOptimistic] = useState<boolean | null>(null);
+  const autoMerge = optimistic ?? project.autoMerge;
+  const toggle = (next: boolean) => {
+    setOptimistic(next);
     run(async () => {
-      const result = await setProjectToggle(project.id, field, next);
-      setOptimistic((o) => {
-        const rest = { ...o };
-        delete rest[field];
-        return rest;
-      });
+      const result = await setProjectToggle(project.id, 'autoMerge', next);
+      setOptimistic(null);
       return result;
     });
   };
-  const modes: readonly string[] = SELECTABLE_PERMISSION_MODES;
   return (
     <div className="card settings-card" data-testid="project-settings" data-project={project.name}>
       <h3>{project.name}</h3>
@@ -171,41 +156,12 @@ export function ProjectSettings({
         <Switch
           label="Auto-merge"
           hint="Merge when review, tests and QA pass, without waiting for you."
-          checked={value('autoMerge')}
+          checked={autoMerge}
           disabled={readOnly || pending}
-          onChange={(v) => toggle('autoMerge', v)}
+          onChange={toggle}
           testId="toggle-autoMerge"
         />
       )}
-      <Switch
-        label="Marked for direct input"
-        hint="New tasks can be routed here."
-        checked={value('markedForDirectInput')}
-        disabled={readOnly || pending}
-        onChange={(v) => toggle('markedForDirectInput', v)}
-        testId="toggle-markedForDirectInput"
-      />
-      <label className="field">
-        <span>Agent permission mode</span>
-        <select
-          value={project.permissionMode}
-          disabled={readOnly || pending}
-          data-testid="permission-mode"
-          onChange={(e) => run(() => setPermissionMode(project.id, e.target.value))}
-        >
-          {/* A mode set locally (bypassPermissions) shows as the current value but cannot be picked. */}
-          {!modes.includes(project.permissionMode) && (
-            <option value={project.permissionMode} disabled>
-              {permissionLabel(project.permissionMode)} (set locally)
-            </option>
-          )}
-          {modes.map((m) => (
-            <option key={m} value={m}>
-              {permissionLabel(m)}
-            </option>
-          ))}
-        </select>
-      </label>
       {message}
     </div>
   );

@@ -64,7 +64,6 @@ const actions = async () => {
   return {
     answerQuestion: () => a.answerQuestion(1, 'Postgres'),
     setProjectToggle: () => a.setProjectToggle(1, 'autoMerge', true),
-    setPermissionMode: () => a.setPermissionMode(1, 'plan'),
     updateSettings: () => a.updateSettings({ sessionModel: 'sonnet' }),
     createRequest: () => a.createRequest('do it', 1),
     messageSession: () => a.messageSession(101, 'also this'),

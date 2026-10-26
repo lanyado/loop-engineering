@@ -341,16 +341,14 @@ test('settings sit with their project and in the top bar, disabled in demo mode'
   await open(page);
   const shop = await projectSettings(page, 'shop');
   await expect(shop.getByTestId('toggle-autoMerge')).not.toBeChecked();
-  await expect(shop.getByTestId('toggle-markedForDirectInput')).toBeChecked();
   await expect(shop.getByTestId('toggle-autoMerge')).toBeDisabled();
-  await expect((await projectSettings(page, 'infra')).getByTestId('permission-mode')).toHaveValue('plan');
-  // bypassPermissions is never offered from the dashboard.
-  await expect(page.locator('option[value="bypassPermissions"]')).toHaveCount(0);
+  // Routing and the agents' permissions are not project settings any more.
+  await expect(shop.getByTestId('toggle-markedForDirectInput')).toHaveCount(0);
+  await expect(shop.getByTestId('permission-mode')).toHaveCount(0);
   const resume = await projectSettings(page, 'resume');
   await expect(resume.getByTestId('kind-chip')).toHaveText('Folder');
   await expect(resume.getByTestId('autoMerge-na')).toContainText('n/a (no PRs)');
   await expect(resume.getByTestId('toggle-autoMerge')).toHaveCount(0);
-  await expect(resume.getByTestId('toggle-markedForDirectInput')).toBeChecked();
   await expectNoHorizontalScroll(page);
 
   const sheet = await globalSettings(page);
