@@ -57,6 +57,7 @@ export {
   checkJobKind,
   FileStageLibrary,
   GUARDIAN_STAGE,
+  PLANNER_STAGE,
   isStageId,
   RESERVED_STAGE_IDS,
   STAGE_ACCESS,

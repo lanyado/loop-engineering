@@ -6,6 +6,7 @@ import {
   RealGitDriver,
   RealTmuxDriver,
   SessionRunner,
+  type RunnerConfig,
 } from '@loop-engineering/runner';
 import { ConfigError, type ServerConfig } from './config.js';
 
@@ -16,6 +17,7 @@ import { ConfigError, type ServerConfig } from './config.js';
 export function runnerFromEnv(
   env: NodeJS.ProcessEnv,
   config: ServerConfig,
+  options: Pick<RunnerConfig, 'planner'> = {},
 ): ((store: Store) => SessionRunner) | null {
   const worktreesRoot = env.WORKTREES_ROOT?.trim();
   if (!worktreesRoot) return null;
@@ -37,6 +39,7 @@ export function runnerFromEnv(
         serverUrl,
         env,
         onClaudeLimit: env.CLAUDE_LIMIT?.trim() === 'opencode' ? 'opencode' : 'wait',
+        ...options,
       },
     );
 }

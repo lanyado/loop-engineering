@@ -109,6 +109,20 @@ export class RequestRepo {
       .map(toRequest);
   }
 
+  /**
+   * When each session got its newest task from the human: session id → the latest createdAt of its
+   * requests. The loop's own "[loop]" fix requests are not tasks to plan.
+   */
+  latestBySession(): Map<number, string> {
+    const rows = this.db
+      .prepare<[], { session_id: number; latest: string }>(
+        `SELECT session_id, MAX(created_at) AS latest FROM requests
+         WHERE session_id IS NOT NULL AND text NOT LIKE '[loop]%' GROUP BY session_id`,
+      )
+      .all();
+    return new Map(rows.map((r) => [r.session_id, r.latest]));
+  }
+
   /** The parts the router split a request into, oldest first. */
   parts(id: number): Request[] {
     return this.db

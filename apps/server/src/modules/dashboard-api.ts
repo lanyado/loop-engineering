@@ -55,7 +55,7 @@ import { idParam as id } from '../ids.js';
  *                                            stored transcript of a past session (the View button
  *                                            of a finished row), redacted like search results
  *   GET    /tree[?status=active,paused]      { projects: [{ ...project, sessions: [{ ...session,
- *                                              pendingQuestions, subagents: [...] }] }] }, sessions
+ *                                              pendingQuestions, subagents: [...], latestRequestAt }] }] }, sessions
  *                                            newest first; session.source "import" marks imported ones
  *   GET    /requests[?projectId=N|none&sessionId=N]   { requests }, newest first
  *   POST   /requests                         { text, projectId? | sessionId? } -> 201 { request } (source
@@ -233,6 +233,8 @@ export interface TreeSession extends Session {
   /** Questions from this session (or its subagents) still waiting for the human. */
   pendingQuestions: number;
   subagents: Subagent[];
+  /** When its newest task arrived: a plan older than that is the previous task's (the Planner node). */
+  latestRequestAt: string | null;
 }
 export interface TreeProject extends Project {
   sessions: TreeSession[];
@@ -363,7 +365,7 @@ export function dashboardRoutes(ctx: ServerContext, options: DashboardApiOptions
     return c.json({ session: updated });
   });
 
-  // A fixed number of queries whatever the size: sessions, their subagents, pending questions.
+  // A fixed number of queries whatever the size: sessions, their subagents, pending questions, tasks.
   api.get('/tree', (c) => {
     const { status } = parse(treeQuery, c.req.query());
     const pending = new Map<number, number>();
@@ -380,10 +382,16 @@ export function dashboardRoutes(ctx: ServerContext, options: DashboardApiOptions
         subagents.set(sub.sessionId, list);
       }
     }
+    const latestRequest = store.requests.latestBySession();
     const byProject = new Map<number, TreeSession[]>();
     for (const s of sessions) {
       const list = byProject.get(s.projectId) ?? [];
-      list.push({ ...s, pendingQuestions: pending.get(s.id) ?? 0, subagents: subagents.get(s.id) ?? [] });
+      list.push({
+        ...s,
+        pendingQuestions: pending.get(s.id) ?? 0,
+        subagents: subagents.get(s.id) ?? [],
+        latestRequestAt: latestRequest.get(s.id) ?? null,
+      });
       byProject.set(s.projectId, list);
     }
     const projects: TreeProject[] = visibleProjects().map((project) => ({

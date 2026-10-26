@@ -77,6 +77,8 @@ interface SessionRow {
   worktrees: string;
   source: SessionSource;
   rigor: Rigor;
+  plan: string | null;
+  planned_at: string | null;
   created_at: string;
   ended_at: string | null;
 }
@@ -96,6 +98,8 @@ const toSession = (r: SessionRow): Session => ({
   worktrees: parseJson<Worktree[]>(r.worktrees),
   source: r.source,
   rigor: r.rigor,
+  plan: r.plan,
+  plannedAt: r.planned_at,
   createdAt: r.created_at,
   endedAt: r.ended_at,
 });
@@ -257,6 +261,13 @@ export class SessionRepo {
       rigor: patch.rigor,
       ended_at: endedAt,
     });
+    return this.require(id);
+  }
+
+  /** Records the planner's plan, stamped now; a later plan replaces it. */
+  setPlan(id: number, plan: string): Session {
+    if (plan.trim() === '') throw new ValidationError('the plan must not be empty');
+    updateById(this.db, 'sessions', 'session', id, { plan, planned_at: isoNow(this.clock) });
     return this.require(id);
   }
 

@@ -129,6 +129,20 @@ describe('HttpBackend against the real server', () => {
     expect(rigor).toEqual(view.rigor);
   });
 
+  it("reads a session's plan and newest task time, and the Planner's instructions", async () => {
+    expect((await backend.tree())[0]?.sessions[0]).toMatchObject({
+      plan: null,
+      plannedAt: null,
+      latestRequestAt: null,
+    });
+    store.sessions.setPlan(sessionId, 'Goal: Apple Pay.');
+    expect((await backend.tree())[0]?.sessions[0]).toMatchObject({
+      plan: 'Goal: Apple Pay.',
+      plannedAt: '2026-10-18T09:00:00.000Z',
+    });
+    expect((await backend.pipeline()).planner).toMatchObject({ id: 'planner', builtin: true });
+  });
+
   it("sets a session's rigor and reads it back in the tree; refuses an unknown session", async () => {
     expect((await backend.tree())[0]?.sessions[0]?.rigor).toBe('standard');
     await backend.setRigor(sessionId, 'fast');

@@ -289,9 +289,27 @@ describe('sessions', () => {
       worktrees: [{ repo: 'web', path: '/wt/web' }],
       source: 'runner',
       rigor: 'standard',
+      plan: null,
+      plannedAt: null,
       createdAt: '2026-10-18T09:00:00.000Z',
       endedAt: null,
     });
+  });
+
+  it('records the plan with its time; a later plan replaces it, other updates keep it', () => {
+    const s = store.sessions.create({ projectId: project.id, title: 't', model: 'm', branch: 'b' });
+    expect(store.sessions.setPlan(s.id, 'Goal: checkout.')).toMatchObject({
+      plan: 'Goal: checkout.',
+      plannedAt: '2026-10-18T09:00:00.000Z',
+    });
+    clock.advance(60_000);
+    expect(store.sessions.setPlan(s.id, 'Goal: refunds.')).toMatchObject({
+      plan: 'Goal: refunds.',
+      plannedAt: '2026-10-18T09:01:00.000Z',
+    });
+    expect(store.sessions.update(s.id, { title: 'renamed' }).plan).toBe('Goal: refunds.');
+    expect(() => store.sessions.setPlan(s.id, '  ')).toThrow(ValidationError);
+    expect(() => store.sessions.setPlan(999, 'x')).toThrow(NotFoundError);
   });
 
   it('sets the rigor dial and refuses an unknown level', () => {
@@ -658,6 +676,25 @@ describe('requests', () => {
     });
     expect(store.requests.list({ sessionId: session.id }).map((r) => r.id)).toEqual([request.id, second.id]);
     expect(store.requests.list({ projectId: 999 })).toEqual([]);
+  });
+
+  it('knows when each session got its newest task', () => {
+    const a = store.sessions.create({ projectId: project.id, title: 'a', model: 'm', branch: 'a' });
+    const b = store.sessions.create({ projectId: project.id, title: 'b', model: 'm', branch: 'b' });
+    store.requests.create({ projectId: project.id, sessionId: a.id, text: 'first', source: 'dashboard' });
+    clock.advance(60_000);
+    store.requests.create({ projectId: project.id, sessionId: a.id, text: 'second', source: 'dashboard' });
+    store.requests.create({ projectId: project.id, text: 'unrouted', source: 'dashboard' });
+    // The loop's own fix tasks are not for the Planner.
+    clock.advance(60_000);
+    store.requests.create({
+      projectId: project.id,
+      sessionId: a.id,
+      text: '[loop] Fix deploy failure of PR #3: boom',
+      source: 'dashboard',
+    });
+    expect(store.requests.latestBySession()).toEqual(new Map([[a.id, '2026-10-18T09:01:00.000Z']]));
+    expect(store.requests.latestBySession().has(b.id)).toBe(false);
   });
 
   it('stores the session a request is addressed to, which must be in its project', () => {

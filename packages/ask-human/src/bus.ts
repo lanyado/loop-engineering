@@ -1,4 +1,4 @@
-import type { AnswerChannel, Question, Request } from '@loop-engineering/core';
+import type { AnswerChannel, Question, Request, Session } from '@loop-engineering/core';
 
 /** A new question is waiting for the human. Channels post it. */
 export interface QuestionCreatedEvent {
@@ -31,8 +31,14 @@ export interface RequestCreatedEvent {
   request: Request;
 }
 
+/** A session's agent submitted its plan (submit_plan); the dashboard redraws its Planner node. */
+export interface SessionPlannedEvent {
+  type: 'session.planned';
+  session: Session;
+}
+
 /** Everything the bus carries. */
-export type BusEvent = QuestionEvent | RequestCreatedEvent;
+export type BusEvent = QuestionEvent | RequestCreatedEvent | SessionPlannedEvent;
 export type BusEventType = BusEvent['type'];
 export type BusEventOf<T extends BusEventType> = Extract<BusEvent, { type: T }>;
 

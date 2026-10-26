@@ -10,7 +10,7 @@ export const rigorRuns = (view: BoardPipeline, rigor: Rigor): string[] =>
 
 /*
  * The one-screen board: every project, and in it every live session as a pipeline read left to right
- * (n8n style): Session → Builder → one lane per PR: the pipeline's checks in order (built-in: Tests →
+ * (n8n style): Planner → Builder → one lane per PR: the pipeline's checks in order (built-in: Tests →
  * CR → QA; custom stage files too) → Approval → Merge → Deploy, and the Deploy node also shows where
  * the lane ended (shipped/merged/…). Pure functions, unit tested; the page only renders what
  * buildBoard returns.
@@ -18,6 +18,8 @@ export const rigorRuns = (view: BoardPipeline, rigor: Rigor): string[] =>
 
 /** The node after Deploy: the Production Guardian's check of the live site. It has no PR stage of its own. */
 export const GUARDIAN_NODE = 'guardian';
+/** The first node: the session agent planning its task (planner.md holds its instructions). */
+export const PLANNER_NODE = 'planner';
 /** A node's id: a check's stage id (tests, review, qa or a custom stage), or one of the fixed nodes. */
 export type NodeStage = string;
 /** Names of the fixed nodes; a check's name is its stage file's label. */
@@ -67,10 +69,13 @@ export interface Lane {
   end: LaneEnd;
 }
 
-export type BuilderState = 'working' | 'paused' | 'done';
+export type BuilderState = 'todo' | 'working' | 'paused' | 'done';
+export type PlannerState = 'planning' | 'paused' | 'planned';
 
 export interface Row {
   session: TreeSession;
+  /** The session agent's first phase: its questions while planning, and asked before its plan. */
+  planner: { state: PlannerState; questions: Question[] };
   builder: { state: BuilderState; questions: Question[] };
   /** Open PRs, else the newest finished one, else (git projects) one empty placeholder lane. */
   lanes: Lane[];
@@ -264,6 +269,21 @@ function builderState(status: string, open: PullRequest[]): BuilderState {
   return prs.length === 0 || prs.some((pr) => pr.loopState.feedback) ? 'working' : 'done';
 }
 
+/**
+ * The session agent plans each new task, then builds it: it is planning while open with no plan, or
+ * with one older than its newest task. With no plan ever, a session is past planning once it has
+ * opened a PR or started subagents (it started before the Planner existed, or skipped submit_plan).
+ * A folder session never has a PR, so with no plan it counts as planning only while it asks something.
+ */
+export function isPlanning(session: TreeSession, hasPr: boolean, folder = false): boolean {
+  if (session.status === 'ended') return false;
+  if (session.plannedAt === null) {
+    if (hasPr || session.subagents.length > 0) return false;
+    return !folder || session.pendingQuestions > 0;
+  }
+  return session.latestRequestAt !== null && session.latestRequestAt > session.plannedAt;
+}
+
 /** Still in the loop: no outcome yet, or merged and still deploying (the loop sets both at merge). */
 const isOpen = (pr: PullRequest) => pr.outcome === null || pr.stage === 'deploying';
 
@@ -304,11 +324,25 @@ export function buildBoard(
       const drawn = open.length > 0 ? [...open].sort((a, b) => a.id - b.id) : sessionPrs.slice(0, 1);
       const lanes = drawn.map((pr) => lane(project, view, session.rigor, pr, loopQuestionOf.get(pr.id)));
       if (lanes.length === 0 && project.kind === 'git') lanes.push(lane(project, view, session.rigor, null));
+      const planning = isPlanning(session, sessionPrs.length > 0, project.kind === 'folder');
+      // Asked since the newest task came, while planning or before its plan: the Planner asked them.
+      const { plannedAt, latestRequestAt } = session;
+      const plannerAsks = asks.filter(
+        (q) =>
+          (latestRequestAt === null || q.createdAt >= latestRequestAt) &&
+          (planning || (plannedAt !== null && q.createdAt < plannedAt)),
+      );
+      const builder = builderState(session.status, open);
       const row: Row = {
         session,
+        planner: {
+          state: planning ? (session.status === 'paused' ? 'paused' : 'planning') : 'planned',
+          questions: plannerAsks,
+        },
         builder: {
-          state: builderState(session.status, open),
-          questions: asks,
+          // The builder starts once the plan is in (a pause while planning is the Planner's).
+          state: planning && builder !== 'done' ? 'todo' : builder,
+          questions: asks.filter((q) => !plannerAsks.includes(q)),
         },
         lanes,
         olderPrs: sessionPrs.filter((pr) => !drawn.includes(pr)),
@@ -321,7 +355,13 @@ export function buildBoard(
     }
     // Rows that wait on you first, then working, then paused, then the rest; newest first within.
     const rank = (r: Row) =>
-      r.pending > 0 ? 0 : r.builder.state === 'working' ? 1 : r.builder.state === 'paused' ? 2 : 3;
+      r.pending > 0
+        ? 0
+        : r.builder.state === 'working' || r.planner.state === 'planning'
+          ? 1
+          : r.builder.state === 'paused' || r.planner.state === 'paused'
+            ? 2
+            : 3;
     rows.sort((a, b) => rank(a) - rank(b) || b.session.id - a.session.id);
     return {
       project,

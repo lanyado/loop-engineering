@@ -41,6 +41,7 @@ function library(pipeline: Partial<Pipeline>, extra: Stage[] = []) {
     pipeline: () => current.pipeline(),
     stages: () => current.stages(),
     guardian: () => current.guardian(),
+    planner: () => current.planner(),
     stage: (id) => current.stage(id),
     set: (p) => {
       current = builtinStageLibrary(p, extra);
@@ -297,6 +298,7 @@ describe('fail closed: a broken stage file or pipeline.json never lets a PR skip
     pipeline: () => pipeline,
     stages: () => [...builtinStageLibrary().stages(), ...stages],
     guardian: () => builtinStageLibrary().guardian(),
+    planner: () => builtinStageLibrary().planner(),
     stage: (id) => stages.find((s) => s.id === id) ?? builtinStageLibrary().stage(id),
   });
   const on = { deploy: true, guardian: true };

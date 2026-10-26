@@ -1619,8 +1619,8 @@ button.icon-button,
   border-radius: 12px;
   box-shadow: var(--shadow-sm);
 }
-/* The session starts the pipeline, like an n8n trigger: rounded on the left. */
-.node-session {
+/* The Planner starts the pipeline, like an n8n trigger: rounded on the left. */
+.node-planner {
   width: 224px;
   border-radius: 34px 12px 12px 34px;
   padding-left: var(--s-2);
@@ -1639,7 +1639,7 @@ button.icon-button,
   background: var(--surface-2);
   color: var(--muted);
 }
-.node-session .node-icon {
+.node-planner .node-icon {
   width: 44px;
   height: 44px;
   border-radius: 50%;
@@ -2071,6 +2071,32 @@ button.node-plus:hover:not(:disabled) {
 .session-details .subagents {
   border-top: none;
   padding-top: 0;
+}
+/* The Planner's plan, at the top of the details: kept as written, scrolled when long. */
+.plan {
+  display: grid;
+  gap: var(--s-2);
+  padding-bottom: var(--s-3);
+  border-bottom: 1px solid var(--border);
+}
+.plan-head {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 650;
+}
+.plan-text {
+  max-height: 320px;
+  overflow: auto;
+  margin: 0;
+  padding: var(--s-3);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .composer-actions {
   display: flex;

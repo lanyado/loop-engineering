@@ -19,7 +19,8 @@ import { idParam } from '../ids.js';
  *
  *   GET /pipeline   { pipeline: { checks, deploy, guardian }, stages: [{ id, title, label, icon, access,
  *                     runs, prompt, builtin, overridden }], guardian: <the Guardian's instructions, the
- *                     same shape>, choices: { icons, access, runs, reserved },
+ *                     same shape>, planner: <the Planner's instructions, the same shape>,
+ *                     choices: { icons, access, runs, reserved },
  *                     rigor: { fast, light, standard, thorough } }
  *                   (choices: the values a stage may take and the ids it may not, for the editor;
  *                   rigor: the checks of the pipeline each rigor level runs, from the loop's policy)
@@ -29,7 +30,7 @@ import { idParam } from '../ids.js';
  *                   (a job running the skipped check is stopped, a check brought back starts).
  *   PUT /pipeline   { pipeline, stages?: { [id]: { title, label, icon, access, runs, prompt } | null } }
  *                   -> the same as GET. Writes STAGES_DIR/<id>.md and pipeline.json; null deletes a
- *                   custom stage or resets a built-in one ("guardian" is the Guardian's instructions). Everything is validated before anything is
+ *                   custom stage or resets a built-in one ("guardian" and "planner" are their instructions). Everything is validated before anything is
  *                   written; a stage still in the pipeline cannot be deleted (400).
  *
  * This schema checks the shape; the stage library checks ids, sizes and the pipeline (its
@@ -76,6 +77,7 @@ export function pipelineModule({
       pipeline,
       stages: stages.stages(),
       guardian: stages.guardian(),
+      planner: stages.planner(),
       choices,
       rigor: rigorByLevel(pipeline.checks),
     };

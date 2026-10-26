@@ -5,7 +5,7 @@ import type { ServerContext } from '../context.js';
 /**
  * GET /events: Server-Sent Events stream of bus events for the dashboard. The first event is
  * `ready` (subscribed; fetch /api/questions now to get the current state without a gap), then one
- * event per bus event, named by its type (`question.created`, `question.resolved`, `request.created`) with the event
+ * event per bus event, named by its type (`question.created`, `question.resolved`, `request.created`, `session.planned`) with the event
  * as JSON data. A comment line every `keepAliveMs` keeps proxies from closing an idle stream.
  * Auth is the usual Authorization header, so browsers read it with fetch() rather than EventSource.
  */

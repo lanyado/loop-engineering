@@ -7,17 +7,21 @@ import { sanitizeLine } from './sanitize.js';
  * them. Keep them short: the agent reads them on every turn.
  */
 
-export interface GitInstructionsInput {
-  kind: 'git';
+interface CommonInstructionsInput {
   sessionId: number;
+  /** The Planner's instructions (planner.md): when set, the agent plans each new task first. */
+  planner?: string;
+}
+
+export interface GitInstructionsInput extends CommonInstructionsInput {
+  kind: 'git';
   branch: string;
   /** Every repo of the project, with the branch its pull request targets. */
   repos: { name: string; defaultBranch: string }[];
 }
 
-export interface FolderInstructionsInput {
+export interface FolderInstructionsInput extends CommonInstructionsInput {
   kind: 'folder';
-  sessionId: number;
   folder: string;
 }
 
@@ -112,13 +116,27 @@ const PARALLEL_WORK = [
     'Subagents never commit, push or open pull requests: you do, once.',
 ];
 
+/** The planner phase: the owner's planner.md prompt, after fixed lines on when and how it ends. */
+function planningFirst(prompt: string): string[] {
+  return [
+    '## Planning first',
+    '- For each new task (not pull request feedback or review fixes), plan before changing anything, ' +
+      'following the planner instructions below.',
+    '- When the plan is ready, call the submit_plan tool with it, then build it.',
+    '',
+    prompt.trim(),
+  ];
+}
+
 export function sessionInstructions(input: InstructionsInput): string {
   const git = input.kind === 'git';
+  const planner = input.planner?.trim();
   return [
     unattendedNote(input.sessionId),
     '',
     ...askHuman(git ? 'the pull request description' : 'your summary'),
     '',
+    ...(planner ? [...planningFirst(planner), ''] : []),
     ...PARALLEL_WORK,
     '',
     ...(git ? gitRules(input) : folderRules(input)),

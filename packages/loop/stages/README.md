@@ -43,6 +43,14 @@ checks the live site's API, pages, speed and integrations after each deploy and 
 prompt is used, though the file still needs its `---` block; it is never a check. A
 `data/stages/guardian.md` replaces it, and a broken one leaves the built-in instructions in use.
 
+`planner.md` holds the Planner's instructions: every session agent plans each new task before it
+builds, following them (it reads the code, asks you with `ask_human` when something is unclear, and
+records a short plan with the `submit_plan` tool). Like `guardian.md`, only its prompt is used, it is
+never a check, a `data/stages/planner.md` replaces it, and a broken one leaves the built-in
+instructions in use. A change reaches sessions started or resumed after it.
+
+`planner` is a reserved stage id now: a custom stage already named `planner` must be renamed.
+
 `pipeline.json` sets the order of the checks, and whether the loop watches deploys and runs the
 Production Guardian after a merge:
 

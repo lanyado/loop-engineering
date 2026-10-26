@@ -367,6 +367,28 @@ describe('migrations', () => {
     db.close();
   });
 
+  it('migration 22 gives every session an empty plan', () => {
+    const db = new Database(':memory:');
+    migrate(
+      db,
+      MIGRATIONS.filter((m) => m.version < 22),
+    );
+    db.exec(`
+      INSERT INTO projects (name, created_at) VALUES ('p', 't');
+      INSERT INTO sessions (project_id, title, model, branch, created_at) VALUES (1, 'live', 'opus', 'b', 't');
+    `);
+    expect(
+      migrate(
+        db,
+        MIGRATIONS.filter((m) => m.version <= 22),
+      ),
+    ).toEqual([22]);
+    expect(db.prepare('SELECT title, plan, planned_at FROM sessions').all()).toEqual([
+      { title: 'live', plan: null, planned_at: null },
+    ]);
+    db.close();
+  });
+
   it('migration 15 drops cloud and calendar/travel data: old pause reasons become manual, nothing is deleted', () => {
     const db = new Database(':memory:');
     db.pragma('foreign_keys = ON');

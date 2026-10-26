@@ -1,6 +1,13 @@
 import type { CSSProperties, ReactNode } from 'react';
-import { type Lane, type NodeStage, type NodeState, type Row, type StageNode } from '../lib/board';
-import { formatPrMetrics, humanize, pauseLabel, roundLabel, sessionRuntime } from '../lib/format';
+import {
+  PLANNER_NODE,
+  type Lane,
+  type NodeStage,
+  type NodeState,
+  type Row,
+  type StageNode,
+} from '../lib/board';
+import { formatAgo, formatPrMetrics, humanize, pauseLabel, roundLabel, sessionRuntime } from '../lib/format';
 import { shows, type RowDetail } from '../lib/layout';
 import type { PullRequest, Question, TreeSession } from '../lib/schemas';
 import { EndSessionButton } from './end-session-button';
@@ -19,10 +26,11 @@ import {
 
 /* Inline 24px stroke icons (no icon library): one per fixed node, and the set a stage file picks from. */
 const ICON_PATHS: Record<string, ReactNode> = {
-  session: (
+  planner: (
     <>
-      <rect x="3" y="4" width="18" height="16" rx="3" />
-      <path d="m7 9 3 3-3 3M12.5 15H17" />
+      <path d="M9 4H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2" />
+      <rect x="9" y="2.5" width="6" height="3.5" rx="1" />
+      <path d="M9 11h6M9 15h4" />
     </>
   ),
   builder: (
@@ -384,6 +392,8 @@ export interface LaneStep {
  */
 export interface RowEdit {
   part: (detail: RowDetail, content: ReactNode) => ReactNode;
+  /** The Planner node: tapping it edits its instructions. */
+  planner: (node: ReactNode) => ReactNode;
   /** `node` draws a node as the board does, without its buttons; `detail` replaces its state word. */
   lane: (lane: Lane, node: (node: StageNode, detail?: string) => ReactNode, first: boolean) => LaneStep[];
 }
@@ -512,18 +522,45 @@ function LaneView({
   );
 }
 
-/** What runs the session, its subagents, and End session: opened by "⋯" on the session node. */
+/** The Planner's plan for the newest task it planned, with when it came. */
+function PlanSection({ session, planning, now }: { session: TreeSession; planning: boolean; now: number }) {
+  return (
+    <section className="plan" data-testid="session-plan" aria-label="Plan">
+      <h4 className="plan-head">
+        Plan
+        {session.plannedAt && <span className="muted small"> · {formatAgo(session.plannedAt, now)}</span>}
+        {planning && session.plan && <span className="muted small"> · a newer task is being planned</span>}
+      </h4>
+      {session.plan ? (
+        <pre className="plan-text" data-testid="session-plan-text">
+          {session.plan}
+        </pre>
+      ) : (
+        <p className="muted small">
+          {planning ? 'Planning: the plan shows here once it is ready.' : 'No plan was recorded.'}
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** The plan, what runs the session, its subagents, and End session: opened by "⋯" on the Planner node. */
 function SessionDetails({
   session,
+  planning,
   folder,
   readOnly,
+  now,
 }: {
   session: TreeSession;
+  planning: boolean;
   folder: boolean;
   readOnly: boolean;
+  now: number;
 }) {
   return (
     <div className="session-details" data-testid="session-details">
+      {session.source !== 'import' && <PlanSection session={session} planning={planning} now={now} />}
       <p className="small">
         <span data-testid="session-provider">{session.provider}</span> · {session.model}
         {session.effort && ` · ${session.effort}`}
@@ -552,9 +589,13 @@ function SessionDetails({
 
 /** Which node asked: shown above each question card under the row. */
 function askerLabel(q: Question, row: Row): string {
-  if (row.builder.questions.includes(q)) {
+  for (const [name, node] of [
+    ['Planner', row.planner],
+    ['Builder', row.builder],
+  ] as const) {
+    if (!node.questions.includes(q)) continue;
     const sub = row.session.subagents.find((s) => s.id === q.subagentId);
-    return ['Builder', sub?.title].filter(Boolean).join(' › ');
+    return [name, sub?.title].filter(Boolean).join(' › ');
   }
   for (const lane of row.lanes) {
     const pr = lane.pr ? `${lane.pr.repo}#${lane.pr.number}` : '';
@@ -584,24 +625,55 @@ export function PipelineRow({
 }) {
   const part: RowEdit['part'] = (detail, content) =>
     edit ? edit.part(detail, content) : shows(hidden, detail) ? content : null;
-  const { session, builder } = row;
+  const { session, planner, builder } = row;
+  const planning = planner.state !== 'planned';
+  const builderNode: NodeState =
+    builder.state === 'working'
+      ? 'current'
+      : builder.state === 'paused'
+        ? 'halted'
+        : builder.state === 'todo'
+          ? 'todo'
+          : 'done';
   const pause = pauseLabel(session.pauseReason);
   const open = session.status !== 'ended';
   const feedbacks = laneFeedbacks(row.lanes);
   const froms = [...new Set(feedbacks.map((f) => f.short))];
   const feedbackChip = `${feedbacks.length} feedback · ${froms.join(', ')}`;
   const questions = [
+    ...planner.questions,
     ...builder.questions,
     ...row.lanes.flatMap((l) => [...l.nodes.flatMap((n) => n.questions), ...l.end.questions]),
   ];
   const running = sessionRuntime(session.createdAt, session.endedAt, now);
+  const plannerNode = (
+    <Node
+      kind="planner"
+      stage={PLANNER_NODE}
+      state={planner.state === 'planning' ? 'current' : planner.state === 'paused' ? 'halted' : 'done'}
+      title="Planner"
+      testId="planner-node"
+      detail={planner.state}
+      questions={planner.questions}
+    >
+      {/* The terminal is the Builder's: planning and building are the same agent. */}
+      {!edit && (
+        <span className="node-actions">
+          {open && <MessageButton />}
+          <DetailsButton />
+        </span>
+      )}
+    </Node>
+  );
   return (
     <SessionRowShell
       sessionId={session.id}
       title={session.title}
       readOnly={readOnly}
       paused={session.status === 'paused'}
-      details={<SessionDetails session={session} folder={folder} readOnly={readOnly} />}
+      details={
+        <SessionDetails session={session} planning={planning} folder={folder} readOnly={readOnly} now={now} />
+      }
       feedback={
         feedbacks.length > 0 ? (
           <div className="session-details" data-testid="session-feedback">
@@ -660,24 +732,8 @@ export function PipelineRow({
           )}
         </div>
         <div className="flow">
-          <Node
-            kind="session"
-            state={open ? 'current' : 'done'}
-            title="Session"
-            testId="session-node"
-            detail={null}
-          >
-            {!edit && (
-              <span className="node-actions">
-                {open && <MessageButton />}
-                {session.status === 'active' && (
-                  <TerminalButton target={{ kind: 'session', sessionId: session.id }} readOnly={readOnly} />
-                )}
-                <DetailsButton />
-              </span>
-            )}
-          </Node>
-          <Edge state="done" />
+          {edit ? edit.planner(plannerNode) : plannerNode}
+          <Edge state={edgeInto(builderNode)} />
           <WithTerminal
             target={session.status === 'active' && !edit ? { kind: 'session', sessionId: session.id } : null}
             readOnly={readOnly}
@@ -686,11 +742,17 @@ export function PipelineRow({
               <Node
                 kind="builder"
                 stage="builder"
-                state={
-                  builder.state === 'working' ? 'current' : builder.state === 'paused' ? 'halted' : 'done'
-                }
+                state={builderNode}
                 title="Builder"
-                detail={builder.state === 'working' ? 'building' : builder.state === 'paused' ? 'paused' : ''}
+                detail={
+                  builder.state === 'working'
+                    ? 'building'
+                    : builder.state === 'paused'
+                      ? 'paused'
+                      : builder.state === 'todo'
+                        ? STATE_WORDS.todo
+                        : ''
+                }
                 chip={feedbacks.length > 0 && !edit && <FeedbackButton label={feedbackChip} />}
                 questions={builder.questions}
               >

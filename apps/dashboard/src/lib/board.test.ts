@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildBoard as buildWith, laneOrder, stageStates, type BoardPipeline } from './board';
+import { buildBoard as buildWith, isPlanning, laneOrder, stageStates, type BoardPipeline } from './board';
 import { demoData } from './fixtures';
 import type { PipelineView, PullRequest, Question, Rigor, TreeProject, TreeSession } from './schemas';
 
@@ -25,6 +25,10 @@ const session = (id: number, projectId: number, extra: Partial<TreeSession> = {}
   branch: `loop/s${id}`,
   source: 'runner',
   rigor: 'standard',
+  // Planned unless a test says otherwise: most tests are about building.
+  plan: 'Goal: the task.',
+  plannedAt: '2026-10-18T10:05:00.000Z',
+  latestRequestAt: '2026-10-18T10:00:00.000Z',
   createdAt: '2026-10-18T10:00:00.000Z',
   endedAt: null,
   pendingQuestions: 0,
@@ -69,7 +73,7 @@ const pr = (
   ...extra,
 });
 
-const question = (id: number, sessionId: number): Question => ({
+const question = (id: number, sessionId: number, createdAt = '2026-10-18T11:55:00.000Z'): Question => ({
   id,
   sessionId,
   subagentId: null,
@@ -80,7 +84,7 @@ const question = (id: number, sessionId: number): Question => ({
   status: 'pending',
   answer: null,
   answeredVia: null,
-  createdAt: '2026-10-18T11:55:00.000Z',
+  createdAt,
   deadline: '2026-10-18T12:10:00.000Z',
   answeredAt: null,
 });
@@ -264,7 +268,7 @@ describe('buildBoard', () => {
     expect(projects[0]!.rows.map((r) => r.session.id)).toEqual([4, 3, 2]);
   });
 
-  it('places every pending question of the demo data somewhere', () => {
+  it('places every pending question of the demo data somewhere, and one session still plans', () => {
     const data = demoData(NOW);
     const pending = data.questions.filter((q) => q.status === 'pending');
     const { projects, unplaced } = buildBoard(data.tree, data.pullRequests, pending);
@@ -273,6 +277,72 @@ describe('buildBoard', () => {
     const shop = projects.find((p) => p.project.name === 'shop')!;
     const search = shop.rows.find((r) => r.session.title === 'Search relevance')!;
     expect(search.lanes[0]!.nodes.find((n) => n.stage === 'awaiting_approval')!.questions).toHaveLength(1);
+    const rows = projects.flatMap((p) => p.rows);
+    const planning = rows.filter((r) => r.planner.state !== 'planned');
+    expect(planning.map((r) => [r.session.title, r.planner.questions.length])).toEqual([
+      ['Update resume for the Acme role', 1],
+    ]);
+    expect(rows.filter((r) => r.session.plan).length).toBeGreaterThanOrEqual(4);
+  });
+});
+
+describe('the Planner node', () => {
+  const unplanned = { plan: null, plannedAt: null };
+
+  it('plans while open with no plan, or with a plan older than the newest task', () => {
+    expect(isPlanning(session(1, 1, unplanned), false)).toBe(true);
+    expect(isPlanning(session(1, 1), false)).toBe(false);
+    expect(isPlanning(session(1, 1, { latestRequestAt: '2026-10-18T11:00:00.000Z' }), true)).toBe(true);
+    expect(isPlanning(session(1, 1, { latestRequestAt: null }), false)).toBe(false);
+    // Ended: nothing left to plan. Started before the Planner existed and opened a PR: past it.
+    expect(isPlanning(session(1, 1, { ...unplanned, status: 'ended' }), false)).toBe(false);
+    expect(isPlanning(session(1, 1, unplanned), true)).toBe(false);
+    // Subagents running: the builder is clearly working. A folder session has no PR to show it.
+    const sub = {
+      id: 1,
+      sessionId: 1,
+      title: 't',
+      model: 'm',
+      effort: 'high',
+      status: 'running',
+      createdAt: 't',
+    };
+    expect(isPlanning(session(1, 1, { ...unplanned, subagents: [sub] }), false)).toBe(false);
+    expect(isPlanning(session(1, 1, unplanned), false, true)).toBe(false);
+    expect(isPlanning(session(1, 1, { ...unplanned, pendingQuestions: 1 }), false, true)).toBe(true);
+  });
+
+  it('while planning, the Planner has every question and the Builder has not started', () => {
+    const tree = [project(1, [session(1, 1, unplanned), session(2, 1, { ...unplanned, status: 'paused' })])];
+    const [board] = buildBoard(tree, [], [question(11, 1), question(12, 2)]).projects;
+    const row = (id: number) => board!.rows.find((r) => r.session.id === id)!;
+    expect(row(1).planner).toEqual({ state: 'planning', questions: [expect.objectContaining({ id: 11 })] });
+    expect(row(1).builder).toEqual({ state: 'todo', questions: [] });
+    expect(row(2).planner.state).toBe('paused');
+    expect(row(2).builder.state).toBe('todo');
+    expect(row(1).pending).toBe(1);
+  });
+
+  it('once planned, questions asked before the plan stay on the Planner and later ones go to the Builder', () => {
+    const tree = [project(1, [session(1, 1)])];
+    const before = question(11, 1, '2026-10-18T10:03:00.000Z');
+    const after = question(12, 1, '2026-10-18T10:30:00.000Z');
+    const [board] = buildBoard(tree, [], [before, after]).projects;
+    const row = board!.rows[0]!;
+    expect(row.planner).toEqual({ state: 'planned', questions: [before] });
+    expect(row.builder).toEqual({ state: 'working', questions: [after] });
+    expect(row.pending).toBe(2);
+  });
+
+  it('a new task after the plan sends it back to planning; questions from before that task stay on the Builder', () => {
+    const tree = [project(1, [session(1, 1, { latestRequestAt: '2026-10-18T11:50:00.000Z' })])];
+    const prs = [pr(1, 1, 'review')];
+    const earlier = question(10, 1, '2026-10-18T11:00:00.000Z');
+    const [board] = buildBoard(tree, prs, [earlier, question(11, 1)]).projects;
+    const row = board!.rows[0]!;
+    expect(row.planner).toEqual({ state: 'planning', questions: [expect.objectContaining({ id: 11 })] });
+    // Its earlier PR stays in the loop; the builder's part of it is done.
+    expect(row.builder).toEqual({ state: 'done', questions: [earlier] });
   });
 });
 

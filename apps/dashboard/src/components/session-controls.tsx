@@ -240,7 +240,7 @@ export function FeedbackButton({
   );
 }
 
-/** "⋯" on a session node: what runs it, its subagents, and End session. */
+/** "⋯" on the Planner node: the plan, what runs the session, its subagents, and End session. */
 export function DetailsButton() {
   const { panel, show } = useContext(RowContext);
   return (
@@ -249,8 +249,8 @@ export function DetailsButton() {
       className="node-more"
       onClick={() => show('details')}
       aria-expanded={panel === 'details'}
-      aria-label="Session details"
-      title="Session details"
+      aria-label="Plan and session details"
+      title="Plan and session details"
       data-testid="session-more"
     >
       ⋯

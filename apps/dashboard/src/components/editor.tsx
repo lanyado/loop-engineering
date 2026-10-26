@@ -3,7 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useMemo, useState, useTransition } from 'react';
 import { applyEdits } from '../app/actions';
-import { buildBoard, GUARDIAN_NODE, type StageNode } from '../lib/board';
+import { buildBoard, GUARDIAN_NODE, PLANNER_NODE, type StageNode } from '../lib/board';
 import {
   insert,
   ROW_DETAIL_LABELS,
@@ -96,7 +96,13 @@ export function Editor({
   };
   const [draft, setDraft] = useState<Draft>(initial);
   const [stages, setStages] = useState<Stage[]>(view.stages);
-  const [guardianStage, setGuardianStage] = useState<Stage>(view.guardian);
+  // The Guardian's and the Planner's instructions: stage files that are never checks.
+  const [instructions, setInstructions] = useState<Record<string, Stage>>({
+    [GUARDIAN_NODE]: view.guardian,
+    ...(view.planner ? { [PLANNER_NODE]: view.planner } : {}),
+  });
+  const savedInstructions = (id: string): Stage | undefined =>
+    id === GUARDIAN_NODE ? view.guardian : id === PLANNER_NODE ? view.planner : undefined;
   const [sheet, setSheet] = useState<'save' | 'discard' | { stage: Stage; isNew: boolean } | null>(null);
   const [saving, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -109,7 +115,7 @@ export function Editor({
   const setEdit = (id: string, edit: StageFields | null) =>
     setDraft((d) => {
       const rest = Object.fromEntries(Object.entries(d.edits).filter(([key]) => key !== id));
-      const saved = id === GUARDIAN_NODE ? view.guardian : view.stages.find((s) => s.id === id);
+      const saved = savedInstructions(id) ?? view.stages.find((s) => s.id === id);
       // A broken file is on the server too, even where it changes nothing (a built-in's, unread).
       const fileOnServer =
         saved !== undefined && (!saved.builtin || saved.overridden || saved.error !== undefined);
@@ -141,9 +147,10 @@ export function Editor({
 
   const saveStage = (id: string, fields: StageFields) => {
     setSheet(null);
-    if (id === GUARDIAN_NODE) {
-      if (JSON.stringify(fieldsOf(guardianStage)) === JSON.stringify(fields) && !guardianStage.error) return;
-      setGuardianStage((g) => ({ ...g, ...fields, overridden: true, error: undefined }));
+    const own = instructions[id];
+    if (own) {
+      if (JSON.stringify(fieldsOf(own)) === JSON.stringify(fields) && !own.error) return;
+      setInstructions((all) => ({ ...all, [id]: { ...own, ...fields, overridden: true, error: undefined } }));
       setEdit(id, fields);
       return;
     }
@@ -162,7 +169,8 @@ export function Editor({
     setSheet(null);
     const reset = (s: Stage, original: Stage | undefined): Stage =>
       original && !original.overridden ? original : { ...s, prompt: '', overridden: false };
-    if (id === GUARDIAN_NODE) setGuardianStage((g) => reset(g, view.guardian));
+    const own = instructions[id];
+    if (own) setInstructions((all) => ({ ...all, [id]: reset(own, savedInstructions(id)) }));
     else
       setStages((all) =>
         all.map((s) =>
@@ -184,10 +192,7 @@ export function Editor({
   };
   const openStage = (id: string) =>
     setSheet({
-      stage:
-        id === GUARDIAN_NODE
-          ? guardianStage
-          : (stage(id) ?? { ...BLANK_STAGE, id, title: id, label: id.slice(0, 10) }),
+      stage: instructions[id] ?? stage(id) ?? { ...BLANK_STAGE, id, title: id, label: id.slice(0, 10) },
       isNew: false,
     });
 
@@ -232,6 +237,18 @@ export function Editor({
       </Wiggle>
     );
   };
+
+  /** The Planner node: it always runs, so it only opens its instructions (when the server has them). */
+  const planner: RowEdit['planner'] = (n) =>
+    instructions[PLANNER_NODE] ? (
+      <Wiggle item={PLANNER_NODE} label="Planner" onOpen={() => openStage(PLANNER_NODE)}>
+        {n}
+      </Wiggle>
+    ) : (
+      <span className="fixed-node" inert>
+        {n}
+      </span>
+    );
 
   /**
    * A lane as the editor draws it: the checks wiggle and reorder; stage files not in the pipeline and
@@ -399,7 +416,7 @@ export function Editor({
                   folder={p.project.kind === 'folder'}
                   readOnly
                   now={now}
-                  edit={{ part, lane }}
+                  edit={{ part, lane, planner }}
                 />
               ))}
             </ul>
