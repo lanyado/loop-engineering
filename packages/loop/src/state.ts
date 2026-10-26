@@ -4,7 +4,7 @@ import type { PullRequest } from '@loop-engineering/core';
 export type FeedbackKind = 'review' | 'tests' | 'qa' | 'check' | 'ci' | 'conflict';
 
 /** The check a send-back came from (a custom stage's id for "check"); CI and conflicts have none. */
-const feedbackCheck = (f: Pick<Feedback, 'kind' | 'stage'>): string | undefined =>
+export const feedbackCheck = (f: Pick<Feedback, 'kind' | 'stage'>): string | undefined =>
   f.kind === 'check' ? f.stage : f.kind === 'ci' || f.kind === 'conflict' ? undefined : f.kind;
 
 /** The human skipped `check` for this PR (no check: never skipped). */
@@ -144,12 +144,18 @@ export const testsBeforeQa = (checks: readonly string[]): boolean =>
 
 /**
  * The first check of `checks` (in order) that `head` has not passed, or null when all have. QA counts
- * as passed without running when the tests ran before it at this head and the tester saw no need.
+ * as passed without running when the tests ran before it at this head and the tester saw no need,
+ * unless `qaAlways` (rigor Thorough).
  */
-export function nextCheck(s: LoopState, head: string, checks: readonly string[]): string | null {
+export function nextCheck(
+  s: LoopState,
+  head: string,
+  checks: readonly string[],
+  qaAlways = false,
+): string | null {
   for (const check of checks) {
     if (passedAt(s, check) === head) continue;
-    if (check === 'qa' && testsBeforeQa(checks) && s.testedSha === head && !s.qaNeeded) continue;
+    if (check === 'qa' && !qaAlways && testsBeforeQa(checks) && s.testedSha === head && !s.qaNeeded) continue;
     return check;
   }
   return null;

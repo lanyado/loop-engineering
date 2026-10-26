@@ -288,9 +288,20 @@ describe('sessions', () => {
       branch: 'feat/checkout',
       worktrees: [{ repo: 'web', path: '/wt/web' }],
       source: 'runner',
+      rigor: 'standard',
       createdAt: '2026-10-18T09:00:00.000Z',
       endedAt: null,
     });
+  });
+
+  it('sets the rigor dial and refuses an unknown level', () => {
+    const s = store.sessions.create({ projectId: project.id, title: 't', model: 'm', branch: 'b' });
+    expect(s.rigor).toBe('standard');
+    expect(store.sessions.update(s.id, { rigor: 'thorough' }).rigor).toBe('thorough');
+    // Other updates leave it alone.
+    expect(store.sessions.update(s.id, { title: 'renamed' }).rigor).toBe('thorough');
+    expect(() => store.sessions.update(s.id, { rigor: 'reckless' as never })).toThrow(ValidationError);
+    expect(store.sessions.require(s.id).rigor).toBe('thorough');
   });
 
   it('updates, ends and reopens', () => {

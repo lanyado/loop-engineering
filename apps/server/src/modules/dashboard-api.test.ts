@@ -486,6 +486,37 @@ describe('tree', () => {
   });
 });
 
+describe('the rigor dial', () => {
+  it("sets a session's rigor, shows it in the tree, and records the change once", async () => {
+    const { s1 } = seed();
+    expect(store.sessions.require(s1.id).rigor).toBe('standard');
+    const res = await call('PATCH', `/sessions/${s1.id}`, { rigor: 'thorough' });
+    expect(res.status).toBe(200);
+    expect(res.json.session).toMatchObject({ id: s1.id, rigor: 'thorough' });
+    const { json } = await call('GET', '/tree');
+    const shop = json.projects.find((p: { name: string }) => p.name === 'shop');
+    expect(shop.sessions.find((s: { id: number }) => s.id === s1.id).rigor).toBe('thorough');
+    expect(shop.sessions.filter((s: { rigor: string }) => s.rigor === 'standard')).toHaveLength(2);
+    // Setting the same level again changes nothing.
+    expect((await call('PATCH', `/sessions/${s1.id}`, { rigor: 'thorough' })).status).toBe(200);
+    expect(store.history.list({ sessionId: s1.id }).map((e) => e.text)).toEqual([
+      `Session ${s1.id}: the human set its rigor from standard to thorough (dashboard).`,
+    ]);
+  });
+
+  it('refuses an unknown level, other fields, an unknown session and the reserved router session', async () => {
+    const { s1 } = seed();
+    expect((await call('PATCH', `/sessions/${s1.id}`, { rigor: 'reckless' })).status).toBe(400);
+    expect((await call('PATCH', `/sessions/${s1.id}`, { rigor: 'fast', title: 'x' })).status).toBe(400);
+    expect((await call('PATCH', `/sessions/${s1.id}`, {})).status).toBe(400);
+    expect((await call('PATCH', `/sessions/${s1.id}`, 'not json')).status).toBe(400);
+    expect((await call('PATCH', '/sessions/999', { rigor: 'fast' })).status).toBe(404);
+    const routerSession = ensureRouterSession(store);
+    expect((await call('PATCH', `/sessions/${routerSession.id}`, { rigor: 'fast' })).status).toBe(409);
+    expect(store.sessions.require(s1.id).rigor).toBe('standard');
+  });
+});
+
 describe('session transcripts', () => {
   it("sends a finished session's latest stored transcript, redacted on read", async () => {
     const { s1, ended, shop } = seed();

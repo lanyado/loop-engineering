@@ -62,6 +62,8 @@ export function demoData(now: Date): DemoData {
     session(101, 1, 'Apple Pay checkout', 'active', null, 'claude', 'opus', at(3 * HOUR + 12 * MIN), {
       pendingQuestions: 2,
       branch: 'loop/apple-pay',
+      // Payments: every check, QA on every PR.
+      rigor: 'thorough',
       subagents: [
         sub(1001, 101, 'Payment sheet UI', 'sonnet', 'high', 'running'),
         sub(1002, 101, 'Stripe webhook handler', 'sonnet', 'xhigh', 'waiting'),
@@ -90,11 +92,13 @@ export function demoData(now: Date): DemoData {
       {
         pendingQuestions: 1,
         branch: 'loop/rss-dark-mode',
+        rigor: 'light',
         subagents: [sub(1006, 201, 'Theme tokens', 'opencode/glm-5.3-flash-free', 'medium', 'running')],
       },
     ),
     session(202, 2, 'Image CDN migration', 'paused', 'manual', 'claude', 'opus', at(9 * HOUR), {
       branch: 'loop/image-cdn',
+      rigor: 'fast',
       subagents: [],
     }),
     session(301, 3, 'Staging DB upgrade plan', 'paused', 'usage_limit', 'claude', 'opus', at(5 * HOUR), {
@@ -337,7 +341,7 @@ export function demoData(now: Date): DemoData {
       tokensOut: 31_000,
       failures: 0,
     }),
-    pr(9, 2, 201, 13, 'site', 45, 'tests', 3, null, 20 * MIN, {
+    pr(9, 2, 201, 13, 'site', 45, 'tests', 2, null, 20 * MIN, {
       costUsd: 0,
       tokensIn: 920_000,
       tokensOut: 54_000,
@@ -364,12 +368,21 @@ export function demoData(now: Date): DemoData {
       tokensOut: 30_000,
       failures: 0,
     }),
-    pr(5, 2, 202, 10, 'site', 44, 'deploying', 1, 'merged', 3 * MIN, {
-      costUsd: 0.92,
-      tokensIn: 400_000,
-      tokensOut: 22_000,
-      failures: 0,
-    }),
+    pr(
+      5,
+      2,
+      202,
+      10,
+      'site',
+      44,
+      'deploying',
+      1,
+      'merged',
+      3 * MIN,
+      { costUsd: 0.92, tokensIn: 400_000, tokensOut: 22_000, failures: 0 },
+      // Merged at rigor Fast: no check passed at the merged head, so its lane says "not run".
+      { mergedHeadSha: '4e1d9a07c3b2f6e58d1a0b9c7e6f5d4c3b2a1908' },
+    ),
     pr(4, 1, 103, 9, 'web', 207, 'deployed', 2, 'merged', 3 * 24 * HOUR, {
       costUsd: 2.6,
       tokensIn: 1_400_000,
@@ -445,6 +458,13 @@ export function demoData(now: Date): DemoData {
     // Demo stages: the built-in pipeline, with sample prompts (the server serves the real files).
     pipeline: {
       pipeline: { checks: ['tests', 'review', 'qa'], deploy: true, guardian: true },
+      // What the server's loop policy answers for this pipeline (http-backend.test.ts checks it).
+      rigor: {
+        fast: [],
+        light: ['tests', 'review'],
+        standard: ['tests', 'review', 'qa'],
+        thorough: ['tests', 'review', 'qa'],
+      },
       stages: [
         stage('tests', 'Tests', 'Tests', 'shell', 'always', 'Run the tests that cover the changed files.'),
         stage(
@@ -568,6 +588,7 @@ function session(
     model,
     effort: 'high',
     source: 'runner',
+    rigor: 'standard',
     createdAt,
     endedAt: null,
     pendingQuestions: 0,

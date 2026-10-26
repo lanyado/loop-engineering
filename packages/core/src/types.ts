@@ -12,6 +12,15 @@ export type PauseReason = (typeof PAUSE_REASONS)[number];
 export const SESSION_SOURCES = ['runner', 'import'] as const;
 export type SessionSource = (typeof SESSION_SOURCES)[number];
 
+/**
+ * How much checking a session's PRs get, one dial from fast and cheap to slow and safe: fast runs
+ * none of the pipeline's checks, light only tests and review, standard the pipeline as it is,
+ * thorough all of it with QA on every PR. The policy itself is in packages/loop/src/rigor.ts.
+ */
+export const RIGOR_LEVELS = ['fast', 'light', 'standard', 'thorough'] as const;
+export type Rigor = (typeof RIGOR_LEVELS)[number];
+export const DEFAULT_RIGOR: Rigor = 'standard';
+
 export const PROVIDERS = ['claude', 'opencode'] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
@@ -193,6 +202,8 @@ export interface Session {
   worktrees: Worktree[];
   /** "import" for a past conversation brought in by the session importer (always ended). */
   source: SessionSource;
+  /** How much checking the PR loop gives this session's PRs. */
+  rigor: Rigor;
   createdAt: Iso;
   endedAt: Iso | null;
 }

@@ -1,6 +1,7 @@
 import { ValidationError } from '@loop-engineering/core';
 import {
   RESERVED_STAGE_IDS,
+  rigorByLevel,
   STAGE_ACCESS,
   STAGE_ICONS,
   STAGE_RUNS,
@@ -17,8 +18,10 @@ import { idParam } from '../ids.js';
  * dashboard's editor. Served whether or not the loop runs, so the pipeline can be set up first.
  *
  *   GET /pipeline   { pipeline: { checks, deploy, guardian }, stages: [{ id, title, label, icon, access,
- *                     runs, prompt, builtin, overridden }], choices: { icons, access, runs, reserved } }
- *                   (choices: the values a stage may take and the ids it may not, for the editor)
+ *                     runs, prompt, builtin, overridden }], choices: { icons, access, runs, reserved },
+ *                     rigor: { fast, light, standard, thorough } }
+ *                   (choices: the values a stage may take and the ids it may not, for the editor;
+ *                   rigor: the checks of the pipeline each rigor level runs, from the loop's policy)
  *   POST /prs/:id/skip  { check, skip } -> { pullRequest }: skips one check of the pipeline for one PR,
  *                   or brings it back (packages/loop/src/skip.ts); 400 for a PR not at a check or a
  *                   check outside the pipeline. Works with the loop off; a running loop acts on it at once.
@@ -65,7 +68,10 @@ export function pipelineModule({
     runs: STAGE_RUNS,
     reserved: RESERVED_STAGE_IDS,
   };
-  const view = () => ({ pipeline: stages.pipeline(), stages: stages.stages(), choices });
+  const view = () => {
+    const pipeline = stages.pipeline();
+    return { pipeline, stages: stages.stages(), choices, rigor: rigorByLevel(pipeline.checks) };
+  };
   return {
     name: 'pipeline',
     api(api, ctx) {

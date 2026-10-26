@@ -6,6 +6,7 @@ import type {
   PipelineView,
   PullRequest,
   Question,
+  Rigor,
   Settings,
   SettingsPatch,
   TaskRequest,
@@ -43,6 +44,8 @@ export interface Backend {
    * while a git worktree has uncommitted changes). A folder session's files are never touched.
    */
   endSession(sessionId: number): Promise<{ id: number; status: string }>;
+  /** Sets how much checking the PR loop gives the session's PRs (the rigor dial). */
+  setRigor(sessionId: number, rigor: Rigor): Promise<void>;
   /** Opens a terminal on the server's Mac showing the session's running agent. */
   openTerminal(sessionId: number): Promise<void>;
   /** Opens a terminal following a PR stage's job log (review, tests, QA or a custom stage). */

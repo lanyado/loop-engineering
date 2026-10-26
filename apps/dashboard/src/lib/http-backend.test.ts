@@ -122,9 +122,19 @@ describe('HttpBackend against the real server', () => {
   it("reads the pipeline, and the demo's choices (reserved ids, runs) are the server's", async () => {
     const view = await backend.pipeline();
     expect(view.pipeline.checks).toEqual(['tests', 'review', 'qa']);
-    const { choices } = demoData(new Date()).pipeline;
+    const { choices, rigor } = demoData(new Date()).pipeline;
     expect([...choices.reserved].sort()).toEqual([...view.choices.reserved].sort());
     expect(choices.runs).toEqual(view.choices.runs);
+    // The demo's rigor map is what the loop's policy answers for the same pipeline.
+    expect(rigor).toEqual(view.rigor);
+  });
+
+  it("sets a session's rigor and reads it back in the tree; refuses an unknown session", async () => {
+    expect((await backend.tree())[0]?.sessions[0]?.rigor).toBe('standard');
+    await backend.setRigor(sessionId, 'fast');
+    expect((await backend.tree())[0]?.sessions[0]?.rigor).toBe('fast');
+    expect(store.sessions.require(sessionId).rigor).toBe('fast');
+    await expect(backend.setRigor(9999, 'light')).rejects.toMatchObject({ status: 404 });
   });
 
   it("reads a PR's pending loop question and sends a message to one session", async () => {
@@ -136,6 +146,7 @@ describe('HttpBackend against the real server', () => {
     });
     expect((await backend.pullRequests())[0]?.loopState).toEqual({
       question: { kind: 'approval', id: q.id },
+      reviewedSha: 'abc',
     });
     expect(await backend.messageSession(sessionId, 'Also refunds')).toMatchObject({
       targetSessionId: sessionId,

@@ -1,8 +1,12 @@
 import { newestFinishedFirst } from './format';
-import type { PipelineView, PullRequest, Question, TreeProject, TreeSession } from './schemas';
+import type { PipelineView, PullRequest, Question, Rigor, TreeProject, TreeSession } from './schemas';
 
-/** What the board draws lanes from: the pipeline and its stages. */
-export type BoardPipeline = Pick<PipelineView, 'pipeline' | 'stages'>;
+/** What the board draws lanes from: the pipeline, its stages, and the checks each rigor level runs. */
+export type BoardPipeline = Pick<PipelineView, 'pipeline' | 'stages' | 'rigor'>;
+
+/** The checks a session at `rigor` runs: the server's answer, else (an older server) the whole pipeline. */
+export const rigorRuns = (view: BoardPipeline, rigor: Rigor): string[] =>
+  view.rigor?.[rigor] ?? view.pipeline.checks;
 
 /*
  * The one-screen board: every project, and in it every live session as a pipeline read left to right
@@ -39,6 +43,10 @@ export interface StageNode {
   check: boolean;
   /** The human skipped this check for the lane's PR. */
   skipped: boolean;
+  /** The session's rigor does not run this check (the dial above the pipeline). */
+  off: boolean;
+  /** A merged PR's check that did not pass at the merged head: it never ran there (a level, the tester's call). */
+  notRun: boolean;
   /** A check of a PR still in its checks: the human may skip it, or bring it back. */
   skippable: boolean;
   state: NodeState;
@@ -119,23 +127,35 @@ export function stageStates(
   return order.map((_, i) => (i < index ? 'done' : i === index ? 'current' : 'todo'));
 }
 
+/** The head a check last passed at (packages/loop's passedAt). */
+function passedAt(s: PullRequest['loopState'], check: string): string | undefined {
+  if (check === 'tests') return s.testedSha;
+  if (check === 'review') return s.reviewedSha;
+  if (check === 'qa') return s.qaSha;
+  return s.passed?.[check];
+}
+
 /** The node a PR is at: a custom stage's id for stage "check". */
 const nodeOf = (pr: PullRequest) => (pr.stage === 'check' ? (pr.loopState.check ?? 'check') : pr.stage);
 
 /**
  * A lane's nodes before Guardian: the pipeline's checks, Approval (not in auto-merge projects whose
- * pipeline reviews the code, unless a PR waits there anyway), Merge, and Deploy (when the pipeline
- * watches deploys, or the PR got that far before it stopped).
+ * PRs get a code review or run at rigor Fast, unless a PR waits there anyway), Merge, and Deploy (when
+ * the pipeline watches deploys, or the PR got that far before it stopped). Checks the session's rigor
+ * does not run stay in, drawn off.
  */
 export function laneOrder(
   project: { autoMerge: boolean },
   view: BoardPipeline,
   pr: PullRequest | null,
+  rigor: Rigor = 'standard',
 ): string[] {
   // A check with no stage file stays in: the loop holds PRs there until the file is back.
   const { checks } = view.pipeline;
-  const reviewed = checks.includes('review') && !pr?.loopState.skip?.includes('review');
-  const approval = !(project.autoMerge && reviewed) || pr?.stage === 'awaiting_approval';
+  const reviewed = rigorRuns(view, rigor).includes('review') && !pr?.loopState.skip?.includes('review');
+  // At Fast the human chose to merge on CI alone: only auto-merge being off asks them.
+  const approval =
+    !(project.autoMerge && (reviewed || rigor === 'fast')) || pr?.stage === 'awaiting_approval';
   const deployed = pr !== null && ['deploying', 'deployed', 'reverted'].includes(pr.stage);
   return [
     ...checks,
@@ -184,18 +204,26 @@ function loopQuestionNode(kind: string, pr: PullRequest): string {
 function lane(
   project: TreeProject,
   view: BoardPipeline,
+  rigor: Rigor,
   pr: PullRequest | null,
   loopQuestion?: Question,
 ): Lane {
-  const order = laneOrder(project, view, pr);
+  const order = laneOrder(project, view, pr, rigor);
+  const runs = rigorRuns(view, rigor);
   const states = pr ? stageStates(nodeOf(pr), pr.outcome, order) : order.map((): NodeState => 'todo');
   const node = (stage: string, state: NodeState): StageNode => {
     const file = view.stages.find((s) => s.id === stage);
     const check = !(stage in FIXED_LABELS);
-    // A skipped check is not waited for, so its file's state does not matter to the PR.
+    // Only a PR still in its checks (or none yet) follows today's level; a finished one ran what it ran.
+    const off = check && (pr === null || pr.outcome === null) && !runs.includes(stage);
+    // A skipped or off check is not waited for, so its file's state does not matter to the PR.
     const skipped = check && (pr?.loopState.skip?.includes(stage) ?? false);
+    // Merged (reverted ones merged too): only the checks that passed at the merged head ran there.
+    const merged =
+      pr?.outcome === 'merged' || pr?.outcome === 'reverted' ? pr.loopState.mergedHeadSha : undefined;
+    const notRun = check && !skipped && merged !== undefined && passedAt(pr!.loopState, stage) !== merged;
     const problem =
-      !check || skipped ? undefined : !file ? 'no stage file' : file.error ? 'file broken' : undefined;
+      !check || skipped || off ? undefined : !file ? 'no stage file' : file.error ? 'file broken' : undefined;
     return {
       stage,
       label: file?.label ?? FIXED_LABELS[stage] ?? stage,
@@ -204,7 +232,9 @@ function lane(
       ...(problem ? { problem } : {}),
       check,
       skipped,
-      skippable: check && pr !== null && pr.outcome === null && pr.stage !== 'escalated',
+      off,
+      notRun,
+      skippable: check && !off && pr !== null && pr.outcome === null && pr.stage !== 'escalated',
       state,
       questions: [],
     };
@@ -272,8 +302,8 @@ export function buildBoard(
       }
       // Oldest first, so lanes keep their place as their PRs move.
       const drawn = open.length > 0 ? [...open].sort((a, b) => a.id - b.id) : sessionPrs.slice(0, 1);
-      const lanes = drawn.map((pr) => lane(project, view, pr, loopQuestionOf.get(pr.id)));
-      if (lanes.length === 0 && project.kind === 'git') lanes.push(lane(project, view, null));
+      const lanes = drawn.map((pr) => lane(project, view, session.rigor, pr, loopQuestionOf.get(pr.id)));
+      if (lanes.length === 0 && project.kind === 'git') lanes.push(lane(project, view, session.rigor, null));
       const row: Row = {
         session,
         builder: {

@@ -72,6 +72,9 @@ export class DemoBackend implements Backend {
   endSession(): never {
     throw new ReadOnlyError();
   }
+  setRigor(): never {
+    throw new ReadOnlyError();
+  }
   openTerminal(): never {
     throw new ReadOnlyError();
   }

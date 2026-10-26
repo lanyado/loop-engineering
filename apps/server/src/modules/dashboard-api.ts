@@ -7,6 +7,7 @@ import {
   secretValues,
   PERMISSION_MODES,
   PR_STAGES,
+  RIGOR_LEVELS,
   SESSION_STATUSES,
   ValidationError,
   type LoopMetrics,
@@ -46,6 +47,10 @@ import { idParam as id } from '../ids.js';
  *                                            changes in a git worktree unless force: true; a folder
  *                                            session's files are never touched; 503 without a runner;
  *                                            409 for an imported session (source "import")
+ *   PATCH  /sessions/:id                     { rigor: 'fast' | 'light' | 'standard' | 'thorough' } -> { session }:
+ *                                            how much checking the PR loop gives its PRs, from the next
+ *                                            step on (packages/loop/src/rigor.ts); 404 for an unknown
+ *                                            session, 409 for the router's reserved one
  *   GET    /sessions/:id/transcript           { transcript: { createdAt, text } | null }: the latest
  *                                            stored transcript of a past session (the View button
  *                                            of a finished row), redacted like search results
@@ -156,6 +161,7 @@ const newFolderProject = z.strictObject({
   allowOutsideHome: z.boolean().optional(),
 });
 const endSession = z.strictObject({ force: z.boolean().optional() });
+const sessionPatch = z.strictObject({ rigor: z.enum(RIGOR_LEVELS) });
 const nonEmpty = <T extends object>(o: T) => Object.keys(o).length > 0;
 const projectPatch = z.strictObject(projectFields).partial().refine(nonEmpty, 'nothing to update');
 const settingsPatch = z
@@ -339,6 +345,22 @@ export function dashboardRoutes(ctx: ServerContext, options: DashboardApiOptions
     if (!ctx.runner)
       return c.json({ error: 'no session runner on this server (WORKTREES_ROOT is not set)' }, 503);
     return c.json({ session: await ctx.runner.end(sessionId, { force: force ?? false }) });
+  });
+
+  api.patch('/sessions/:id', async (c) => {
+    const sessionId = parse(id, c.req.param('id'));
+    const { rigor } = parse(sessionPatch, await body(c));
+    const session = store.sessions.require(sessionId);
+    if (isReserved(session.projectId)) return reserved(c);
+    if (session.rigor === rigor) return c.json({ session });
+    const updated = store.sessions.update(sessionId, { rigor });
+    store.history.add({
+      projectId: session.projectId,
+      sessionId,
+      kind: 'decision',
+      text: `Session ${sessionId}: the human set its rigor from ${session.rigor} to ${rigor} (dashboard).`,
+    });
+    return c.json({ session: updated });
   });
 
   // A fixed number of queries whatever the size: sessions, their subagents, pending questions.

@@ -59,6 +59,14 @@ export type Subagent = z.infer<typeof subagentSchema>;
 export const transcriptSchema = z.object({ createdAt: iso, text: z.string() });
 export type Transcript = z.infer<typeof transcriptSchema>;
 
+/**
+ * The rigor dial (core's RIGOR_LEVELS): how much checking the PR loop gives a session's PRs, from
+ * fast and cheap to slow and safe. Which checks each level runs comes from the server (the pipeline
+ * view's `rigor`), never from here.
+ */
+export const RIGOR_LEVELS = ['fast', 'light', 'standard', 'thorough'] as const;
+export type Rigor = (typeof RIGOR_LEVELS)[number];
+
 export const treeSessionSchema = z.object({
   id: z.number(),
   projectId: z.number(),
@@ -71,6 +79,8 @@ export const treeSessionSchema = z.object({
   branch: z.string(),
   // "import": a past Claude Code conversation brought in by the importer. Older servers send none.
   source: z.string().default('runner'),
+  // Older servers have no dial (and so run the pipeline as it is); an unknown level reads the same.
+  rigor: z.enum(RIGOR_LEVELS).catch('standard').default('standard'),
   createdAt: iso,
   endedAt: iso.nullable(),
   pendingQuestions: z.number(),
@@ -141,6 +151,14 @@ export const pullRequestSchema = z.object({
         .catch(undefined),
       /** With stage "check": the custom stage (a stage file) the PR is at. */
       check: z.string().optional().catch(undefined),
+      /** The heads each check passed at, and the head that was merged: which checks really ran. */
+      testedSha: z.string().optional().catch(undefined),
+      reviewedSha: z.string().optional().catch(undefined),
+      qaSha: z.string().optional().catch(undefined),
+      passed: z.record(z.string(), z.string()).optional().catch(undefined),
+      mergedHeadSha: z.string().optional().catch(undefined),
+      /** The PR's round budget (5, plus 5 per "Continue"); older data has none. */
+      maxRounds: z.number().optional().catch(undefined),
       /** Checks the human skipped for this PR. */
       skip: z.array(z.string()).optional().catch(undefined),
       feedback: z
@@ -220,10 +238,20 @@ export const stageChoicesSchema = z.object({
   reserved: z.array(z.string()),
 });
 export type StageChoices = z.infer<typeof stageChoicesSchema>;
+/** The checks of the pipeline each rigor level runs (the loop's policy, computed by the server). */
+export const rigorMapSchema = z.object({
+  fast: z.array(z.string()),
+  light: z.array(z.string()),
+  standard: z.array(z.string()),
+  thorough: z.array(z.string()),
+});
+export type RigorMap = z.infer<typeof rigorMapSchema>;
 export const pipelineViewSchema = z.object({
   pipeline: pipelineSchema,
   stages: z.array(stageSchema),
   choices: stageChoicesSchema,
+  /** Absent from older servers: then every level draws the whole pipeline. */
+  rigor: rigorMapSchema.optional(),
 });
 export type PipelineView = z.infer<typeof pipelineViewSchema>;
 
@@ -242,6 +270,7 @@ export const responses = {
   loopStatus: loopStatusSchema,
   request: z.object({ request: requestSchema }),
   session: z.object({ session: z.object({ id: z.number(), status: z.string() }) }),
+  rigor: z.object({ session: z.object({ id: z.number(), rigor: z.enum(RIGOR_LEVELS) }) }),
   transcript: z.object({ transcript: transcriptSchema.nullable() }),
   error: z.object({ error: z.string() }),
 };
@@ -268,6 +297,7 @@ export const permissionModeInput = z.object({
   permissionMode: z.enum(SELECTABLE_PERMISSION_MODES),
 });
 export const endSessionInput = z.object({ sessionId: z.number().int().positive() });
+export const rigorInput = z.object({ sessionId: z.number().int().positive(), rigor: z.enum(RIGOR_LEVELS) });
 export const skipCheckInput = z.object({
   prId: z.number().int().positive(),
   check: z.string().min(1).max(32),

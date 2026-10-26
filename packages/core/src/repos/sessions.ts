@@ -1,14 +1,16 @@
 import { isoNow, type Clock } from '../clock.js';
 import { NotFoundError, ValidationError } from '../errors.js';
 import { parseJson, toJson, updateById, where, type Db } from '../sql.js';
-import type {
-  Effort,
-  PauseReason,
-  Provider,
-  Session,
-  SessionSource,
-  SessionStatus,
-  Worktree,
+import {
+  RIGOR_LEVELS,
+  type Effort,
+  type PauseReason,
+  type Provider,
+  type Rigor,
+  type Session,
+  type SessionSource,
+  type SessionStatus,
+  type Worktree,
 } from '../types.js';
 import type { ProjectRepo } from './projects.js';
 
@@ -50,6 +52,7 @@ export type SessionPatch = Partial<
     | 'agentSessionId'
     | 'branch'
     | 'worktrees'
+    | 'rigor'
   > & { pauseReason: PauseReason }
 >;
 
@@ -73,6 +76,7 @@ interface SessionRow {
   branch: string;
   worktrees: string;
   source: SessionSource;
+  rigor: Rigor;
   created_at: string;
   ended_at: string | null;
 }
@@ -91,6 +95,7 @@ const toSession = (r: SessionRow): Session => ({
   branch: r.branch,
   worktrees: parseJson<Worktree[]>(r.worktrees),
   source: r.source,
+  rigor: r.rigor,
   createdAt: r.created_at,
   endedAt: r.ended_at,
 });
@@ -225,6 +230,9 @@ export class SessionRepo {
       throw new ValidationError(`session ${id} is an imported past conversation and stays ended`);
     }
     if (patch.worktrees) this.validateWorktrees(current.projectId, patch.worktrees);
+    if (patch.rigor !== undefined && !RIGOR_LEVELS.includes(patch.rigor)) {
+      throw new ValidationError(`unknown rigor "${String(patch.rigor)}"`);
+    }
     // undefined leaves the column alone; re-pausing a paused session keeps its reason unless given.
     let pauseReason: PauseReason | null | undefined;
     if (patch.status !== undefined || patch.pauseReason !== undefined) {
@@ -246,6 +254,7 @@ export class SessionRepo {
       agent_session_id: patch.agentSessionId,
       branch: patch.branch,
       worktrees: toJson(patch.worktrees),
+      rigor: patch.rigor,
       ended_at: endedAt,
     });
     return this.require(id);

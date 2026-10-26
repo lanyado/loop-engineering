@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildBoard as buildWith, laneOrder, stageStates, type BoardPipeline } from './board';
 import { demoData } from './fixtures';
-import type { PipelineView, PullRequest, Question, TreeProject, TreeSession } from './schemas';
+import type { PipelineView, PullRequest, Question, Rigor, TreeProject, TreeSession } from './schemas';
 
 const NOW = new Date('2026-10-18T12:00:00.000Z');
 // The demo's pipeline is the built-in one: tests, review, QA.
@@ -24,6 +24,7 @@ const session = (id: number, projectId: number, extra: Partial<TreeSession> = {}
   effort: null,
   branch: `loop/s${id}`,
   source: 'runner',
+  rigor: 'standard',
   createdAt: '2026-10-18T10:00:00.000Z',
   endedAt: null,
   pendingQuestions: 0,
@@ -361,5 +362,60 @@ describe('the pipeline (stage files) shapes every lane', () => {
     expect(merged.nodes.every((n) => !n.skippable)).toBe(true);
     const escalated = lane(view({}), [pr(3, 1, 'escalated')]);
     expect(escalated.nodes.every((n) => !n.skippable)).toBe(true);
+  });
+});
+
+describe('the rigor dial shapes the lane', () => {
+  // The demo's pipeline view carries the server's rigor map: Fast none, Light tests and review.
+  const lane = (rigor: Rigor, prs: PullRequest[], autoMerge = false, view: BoardPipeline = PIPELINE) => {
+    const tree = [{ ...project(1, [session(1, 1, { rigor })]), autoMerge }];
+    return buildBoard(tree, prs, [], view).projects[0]!.rows[0]!.lanes[0]!;
+  };
+  const off = (l: ReturnType<typeof lane>) => l.nodes.filter((n) => n.off).map((n) => n.stage);
+
+  it('draws the checks a level does not run off, never skippable and never a problem', () => {
+    expect(off(lane('standard', [pr(1, 1, 'tests')]))).toEqual([]);
+    expect(off(lane('thorough', [pr(1, 1, 'tests')]))).toEqual([]);
+    const light = lane('light', [pr(1, 1, 'tests')]);
+    expect(off(light)).toEqual(['qa']);
+    expect(light.nodes.find((n) => n.stage === 'qa')).toMatchObject({ off: true, skippable: false });
+    expect(light.nodes.find((n) => n.stage === 'tests')).toMatchObject({ off: false, skippable: true });
+    const fast = lane('fast', [pr(1, 1, 'merge')]);
+    expect(off(fast)).toEqual(['tests', 'review', 'qa']);
+    // A finished PR ran what it ran: today's level does not dim it.
+    expect(off(lane('fast', [pr(1, 1, 'deployed', { outcome: 'merged' })]))).toEqual([]);
+    // What it did not run at its merged head says so (unknown without the merged head: left alone).
+    const head = 'abc';
+    const merged = pr(2, 1, 'deployed', {
+      outcome: 'merged',
+      loopState: { mergedHeadSha: head, testedSha: head, reviewedSha: 'older', skip: ['qa'] },
+    });
+    const done = lane('standard', [merged]).nodes;
+    expect(done.filter((n) => n.notRun).map((n) => n.stage)).toEqual(['review']);
+    expect(done.find((n) => n.stage === 'qa')).toMatchObject({ skipped: true, notRun: false });
+    expect(lane('standard', [pr(3, 1, 'qa')]).nodes.some((n) => n.notRun)).toBe(false);
+    expect(off(lane('fast', [pr(1, 1, 'deploying', { outcome: 'merged' })]))).toEqual([]);
+    // An off check whose stage file is gone does not hold anything: no problem shown.
+    const ghost = lane('fast', [], false, {
+      ...PIPELINE,
+      pipeline: { ...PIPELINE.pipeline, checks: ['ghost'] },
+    });
+    expect(ghost.nodes[0]).toMatchObject({ stage: 'ghost', off: true });
+    expect(ghost.nodes[0]!.problem).toBeUndefined();
+  });
+
+  it('Fast merges on CI alone in an auto-merge project: no Approval node there, unless auto-merge is off', () => {
+    expect(lane('fast', [], true).nodes.map((n) => n.stage)).not.toContain('awaiting_approval');
+    expect(lane('fast', [], false).nodes.map((n) => n.stage)).toContain('awaiting_approval');
+    expect(laneOrder({ autoMerge: true }, PIPELINE, null, 'light')).not.toContain('awaiting_approval');
+    expect(laneOrder({ autoMerge: true }, PIPELINE, null, 'fast')).not.toContain('awaiting_approval');
+    // A level without review (an edited pipeline where Light keeps only tests) asks for approval.
+    const testsOnly = { ...PIPELINE, rigor: { ...PIPELINE.rigor!, light: ['tests'] } };
+    expect(laneOrder({ autoMerge: true }, testsOnly, null, 'light')).toContain('awaiting_approval');
+  });
+
+  it('draws the whole pipeline at every level when an older server sends no rigor map', () => {
+    const older: BoardPipeline = { pipeline: PIPELINE.pipeline, stages: PIPELINE.stages };
+    expect(off(lane('fast', [pr(1, 1, 'tests')], false, older))).toEqual([]);
   });
 });
