@@ -1,6 +1,7 @@
 dist/
 coverage/
 .boost/
+local/
 package-lock.json
 # Hand-maintained docs; keep their formatting as written.
 CLAUDE.md

@@ -9,8 +9,8 @@ Hierarchy: Projects → Sessions → Subagents.
 ## Global
 - **Usage limits:** when Claude runs out, switch to a free model (OpenCode free models, e.g. `opencode/glm-5.3-flash-free`) **(AI)**, with the same rights, including merge.
 - **Runtime:** local Mac only for now. No GPU support.
-- **Hosting:** local only: the server and dashboard listen on 127.0.0.1 and nothing is exposed to the network. Telegram runs in long-polling mode (outbound only).
-- **Stack:** TypeScript everywhere. Next.js dashboard and Node server run locally; Node server for the Telegram bot and orchestrator. Sessions run as Claude Code CLI processes in tmux, driven by the orchestrator.
+- **Hosting:** local only: the server and dashboard listen on 127.0.0.1 and nothing is exposed to the network.
+- **Stack:** TypeScript everywhere. Next.js dashboard and Node server run locally; the Node server runs the orchestrator. Sessions run as Claude Code CLI processes in tmux, driven by the orchestrator.
 
 ## Project (a group of one or more repos, e.g. frontend + backend)
 - Session list (active/ended)
@@ -29,7 +29,7 @@ Hierarchy: Projects → Sessions → Subagents.
 
 ## Flow
 1. **Input.** Questions from subagents are shown in both channels; the first answer wins and the other channel gets an "answered: X" confirmation. Proactive notifications only when a question is waiting.
-   1. Telegram bot: answer questions and send new tasks (routed per step 2). Only the owner + an allowlist managed outside the dashboard (core `Settings.telegramAllowlist`).
+   1. Other channels (private local add-ins): answer questions and send new tasks (routed per step 2).
    2. Web dashboard (usable from phone): pending questions inbox; projects → sessions → subagents tree; PR pipeline (tests, review, QA, merge); loop metrics per PR (cost, tokens, rounds, failures, outcome); settings toggles (auto-merge, marked for direct input, …).
 2. **Direct input (AI)** to the right project among marked projects, and to an open session or a new one. If unclear, ask the human with the likely projects/sessions as options.
 3. **Tests:** run relevant existing unit & integration tests, add more if needed. The builder writes tests for its changes as part of building. If tests fail, back to the building agent.
@@ -43,5 +43,5 @@ Hierarchy: Projects → Sessions → Subagents.
 - 2026-10-18: removed the calendar connection, the pause during video calls, and the travel handoff to Claude Code cloud. The code is not part of this repository.
 - 2026-10-18: dashboard and server are local-only (127.0.0.1) for now; the Vercel preview was deleted. Moving sessions to Claude Code cloud and an always-on server are deferred.
 - Kept: searchable history, per-session MCP tokens, free-model fallback.
-- 2026-10-25: an email channel (Gmail): an allowlisted sender mails a task, the loop replies with clarifying questions if needed, then the plan as approved, carries the agents' questions on the same thread, and writes there when the new version is in production.
 - 2026-10-25: each session has a rigor dial (Fast, Light, Standard, Thorough) above its pipeline that trades safety against time and money for its PRs: Fast runs no checks and merges on CI when auto-merge is on, Light only tests and review (2 rounds), Standard the pipeline as it is, Thorough every check with QA on every PR. Details in docs/reference.md.
+- 2026-10-26: channels other than the dashboard are private local add-ins (`local/`, gitignored), not part of this repository.

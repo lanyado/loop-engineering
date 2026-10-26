@@ -2,7 +2,7 @@
 /*
  * The dashboard's settings from the repository's root .env, so one file configures the server and
  * the dashboard. Plain JavaScript: scripts/serve.mjs applies it before Next starts. Only the
- * dashboard's own variables are taken (the root .env also holds MCP_TOKEN, the Telegram token, ...).
+ * dashboard's own variables are taken (the root .env also holds MCP_TOKEN and other secrets).
  * Order: the shell, then apps/dashboard/.env.local (older setups keep the dashboard's settings
  * there), then the root .env. The .env.local values are applied here too, not left to Next, because
  * this launcher binds DASHBOARD_HOST/DASHBOARD_PORT before Next reads that file. Empty root values are

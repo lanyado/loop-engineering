@@ -1,18 +1,15 @@
 import { FileStageLibrary } from '@loop-engineering/loop';
-import { EmailConfigError, loadEmailConfig } from '@loop-engineering/email';
-import { loadTelegramConfig, TelegramConfigError } from '@loop-engineering/telegram';
+import { loadAddins } from './addins.js';
 import { ConfigError, describeListenError, loadConfig, nonLocalBindWarning } from './config.js';
 import { fromRoot, loadRootEnv, REPO_ROOT } from './env.js';
 import { claudeUsageModule } from './modules/claude-usage.js';
 import { terminalModule } from './modules/terminal.js';
 import { opencodeSubagentsModule } from './modules/opencode-subagents.js';
 import { dashboardApi } from './modules/dashboard-api.js';
-import { emailModule } from './modules/email.js';
 import { loopModuleFromEnv } from './modules/loop.js';
 import { pipelineModule } from './modules/pipeline.js';
 import { routerModule } from './modules/router.js';
 import { historyModule } from './modules/history.js';
-import { telegramModule } from './modules/telegram.js';
 import { runnerFromEnv } from './runner.js';
 import { createServer } from './server.js';
 
@@ -25,23 +22,18 @@ loadRootEnv();
 const stages = new FileStageLibrary(fromRoot(process.env.STAGES_DIR?.trim() || 'data/stages'));
 
 let config;
-let telegram;
-let email;
 let loop;
 let runner;
+let addins;
 try {
   config = loadConfig();
-  telegram = loadTelegramConfig(process.env);
-  email = loadEmailConfig(process.env);
   runner = runnerFromEnv(process.env, config);
   loop = loopModuleFromEnv(process.env, { stages });
+  // Private add-ins from local/ (see addins.ts); one that is set up wrong stops the start, like the rest.
+  addins = await loadAddins(fromRoot('local'), process.env);
 } catch (error) {
-  if (!(
-    error instanceof ConfigError ||
-    error instanceof TelegramConfigError ||
-    error instanceof EmailConfigError
-  ))
-    throw error;
+  if (!(error instanceof Error)) throw error;
+  if (!(error instanceof ConfigError) && !error.name.endsWith('ConfigError')) throw error;
   console.error(error.message);
   process.exit(1);
 }
@@ -53,7 +45,8 @@ const server = createServer({
   config: { ...config, dbPath: fromRoot(config.dbPath) },
   // The one SessionRunner and usage-limit monitor, shared by the PR loop and the router.
   ...(runner ? { runner } : {}),
-  // The router comes after the channels, so they are listening when it asks a routing question, and
+  // The router comes after the add-ins (which may add question channels), so they are listening when
+  // it asks a routing question, and
   // before the loop, so it hears the loop's fix requests. It stays off without ctx.runner. History comes
   // last: it only adds an MCP tool and a background sweep.
   modules: [
@@ -62,8 +55,7 @@ const server = createServer({
     claudeUsageModule(),
     terminalModule(),
     opencodeSubagentsModule(),
-    telegramModule({ telegram }),
-    emailModule({ email }),
+    ...addins,
     routerModule(),
     ...(loop ? [loop] : []),
     historyModule(),
