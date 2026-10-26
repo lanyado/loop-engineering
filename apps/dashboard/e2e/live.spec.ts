@@ -110,7 +110,7 @@ test('a question answered elsewhere disappears live', async ({ page }) => {
   });
   const card = page.getByTestId('question').filter({ hasText: 'Telegram will answer this one' });
   await expect(card).toBeVisible();
-  // Another channel (here: the API, as Telegram would through the bus) answers first.
+  // Another channel (here: the API, as an add-in channel would through the bus) answers first.
   await api(`/questions/${question.id}/answer`, { method: 'POST', body: JSON.stringify({ answer: 'B' }) });
   await expect(card).toBeHidden();
 });
@@ -153,7 +153,7 @@ test('project toggles and settings save to the server', async ({ page }, info) =
     )
     .toBe('opencode/qwen-free');
 
-  // The Telegram allowlist is managed outside the dashboard now; the sheet has no editor for it.
+  // The chat allowlist is managed outside the dashboard now; the sheet has no editor for it.
   await expect(page.getByTestId('allowlist')).toHaveCount(0);
 
   // Everything survives a reload, because it came from the server.

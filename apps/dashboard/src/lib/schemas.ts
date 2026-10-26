@@ -319,9 +319,9 @@ export const sessionMessageInput = z.object({
   text: z.string().trim().min(1, 'Write a message').max(LIMITS.request),
 });
 export const telegramId = z.coerce
-  .number({ message: 'A Telegram user ID is a number' })
-  .int('A Telegram user ID is a whole number')
-  .positive('A Telegram user ID is positive')
+  .number({ message: 'A channel user ID is a number' })
+  .int('A channel user ID is a whole number')
+  .positive('A channel user ID is positive')
   .max(Number.MAX_SAFE_INTEGER);
 export const settingsInput = z
   .object({

@@ -21,7 +21,7 @@ export interface QuestionResolvedEvent {
 export type QuestionEvent = QuestionCreatedEvent | QuestionResolvedEvent;
 
 /**
- * The human sent a new task (Telegram or the dashboard) and RequestService stored it. Telegram
+ * The human sent a new task (the dashboard or another channel) and RequestService stored it. Chat
  * tasks have no project yet; a dashboard task may name one. The router (M5) subscribes with
  * `bus.on('request.created', ...)`, picks the project and session, and records them with
  * store.requests.assignProject/assignSession.

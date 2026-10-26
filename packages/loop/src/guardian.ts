@@ -95,7 +95,7 @@ export interface GuardianDeps {
   github: GitHub;
   launcher: AgentLauncher;
   workspace: Workspace;
-  /** For the critical-failure alert, which shows in the dashboard and on Telegram. */
+  /** For the critical-failure alert, which shows in the dashboard and any other channel. */
   questions: Asker;
   /** The server's RequestService; default: store.requests.create, source "dashboard". */
   createRequest?: CreateRequest;
@@ -624,7 +624,7 @@ export class ProductionGuardian {
     return this.createRequest({ projectId: c.project.id, text }).id;
   }
 
-  /** A critical failure goes to the human: a question, which the dashboard and Telegram show. */
+  /** A critical failure goes to the human: a question, which every channel shows. */
   private alert(c: RunCtx, run: GuardianRun): GuardianRun {
     const { store, questions } = this.deps;
     try {

@@ -10,16 +10,37 @@ export interface AddinEntry {
   serverModules(env: NodeJS.ProcessEnv): ServerModule[] | Promise<ServerModule[]>;
 }
 
+const REBUILD = 'npm --prefix local install && npm --prefix local run build';
+
 /**
  * The owner's private add-ins: a `local/` folder in the repo (gitignored, with its own package.json
  * and build) whose `dist/index.js` exports serverModules(env). Extra channels or integrations live
- * there without being part of this repository. No folder (or no build): none.
+ * there without being part of this repository. No folder: none. A folder that is not built: none,
+ * with a warning.
  */
-export async function loadAddins(dir: string, env: NodeJS.ProcessEnv): Promise<ServerModule[]> {
+export async function loadAddins(
+  dir: string,
+  env: NodeJS.ProcessEnv,
+  log: (line: string) => void = console.log,
+): Promise<ServerModule[]> {
+  if (!existsSync(dir)) return [];
   const entry = join(dir, 'dist', 'index.js');
-  if (!existsSync(entry)) return [];
-  const loaded = (await import(pathToFileURL(entry).href)) as Partial<AddinEntry>;
+  if (!existsSync(entry)) {
+    log(`[addins] ${dir} is not built, so it is skipped. Build it: ${REBUILD}`);
+    return [];
+  }
+  let loaded: Partial<AddinEntry>;
+  try {
+    loaded = (await import(pathToFileURL(entry).href)) as Partial<AddinEntry>;
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+    throw new ConfigError(`Could not load ${entry}: ${why}\nRebuild it: ${REBUILD}`);
+  }
   if (typeof loaded.serverModules !== 'function')
     throw new ConfigError(`${entry} must export serverModules(env)`);
-  return loaded.serverModules(env);
+  const modules = await loaded.serverModules(env);
+  if (!Array.isArray(modules))
+    throw new ConfigError(`${entry}: serverModules(env) must return an array of modules`);
+  log(`[addins] loaded ${modules.map((m) => m.name).join(', ') || 'no modules'}`);
+  return modules;
 }

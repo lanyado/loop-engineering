@@ -46,9 +46,8 @@ const server = createServer({
   // The one SessionRunner and usage-limit monitor, shared by the PR loop and the router.
   ...(runner ? { runner } : {}),
   // The router comes after the add-ins (which may add question channels), so they are listening when
-  // it asks a routing question, and
-  // before the loop, so it hears the loop's fix requests. It stays off without ctx.runner. History comes
-  // last: it only adds an MCP tool and a background sweep.
+  // it asks a routing question, and before the loop, so it hears the loop's fix requests. It stays off
+  // without ctx.runner. History comes last: it only adds an MCP tool and a background sweep.
   modules: [
     dashboardApi(),
     pipelineModule({ stages, poke: () => loop?.engine()?.poke() }),

@@ -146,7 +146,7 @@ export function deliverySentence(name: string): string {
 }
 
 /**
- * Routes each new request (Telegram, dashboard, PR loop) to a project and session: a request that
+ * Routes each new request (dashboard, other channels, PR loop) to a project and session: a request that
  * names its project gets a new session there; otherwise the classifier picks among the projects
  * marked for direct input, and the human is asked when it is unsure.
  *

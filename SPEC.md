@@ -28,7 +28,7 @@ Hierarchy: Projects → Sessions → Subagents.
 - MCP tools/skills a subagent is started with: tavily, playwright, context7, GitHub MCP, opensource-search skill. Opensource search is mandatory: before writing any new module, search GitHub/npm/PyPI and justify building vs reusing.
 
 ## Flow
-1. **Input.** Questions from subagents are shown in both channels; the first answer wins and the other channel gets an "answered: X" confirmation. Proactive notifications only when a question is waiting.
+1. **Input.** Questions from subagents are shown in every channel that is set up; the first answer wins and the others get an "answered: X" confirmation. Proactive notifications only when a question is waiting.
    1. Other channels (private local add-ins): answer questions and send new tasks (routed per step 2).
    2. Web dashboard (usable from phone): pending questions inbox; projects → sessions → subagents tree; PR pipeline (tests, review, QA, merge); loop metrics per PR (cost, tokens, rounds, failures, outcome); settings toggles (auto-merge, marked for direct input, …).
 2. **Direct input (AI)** to the right project among marked projects, and to an open session or a new one. If unclear, ask the human with the likely projects/sessions as options.

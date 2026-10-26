@@ -37,7 +37,7 @@ const config = (dbPath = ':memory:'): ServerConfig => ({
   publicUrl: null,
 });
 
-/** A Telegram stand-in, plugged in the way M4 will: a server module attaching a channel to the bus. */
+/** A second channel, plugged in the way an add-in does: a server module attaching a channel to the bus. */
 class FakeTelegram implements QuestionChannel, ServerModule {
   readonly name = 'telegram' as const;
   posted: Question[] = [];

@@ -173,7 +173,7 @@ export interface Workspace {
  */
 export type LoopRunner = Pick<SessionRunner, 'deliverFile' | 'end' | 'stop' | 'pause'>;
 
-/** The QuestionService method the loop uses, so questions reach Telegram and the dashboard. */
+/** The QuestionService method the loop uses, so questions reach every channel. */
 export type Asker = Pick<QuestionService, 'ask'>;
 
 /** Records a new request (the deploy-fix task); the server passes its shared createRequest helper. */
