@@ -3,6 +3,7 @@
 // projects. Seeds sample data, and adds two test-only routes guarded by the MCP token:
 //   POST /test/reset  wipes and reseeds the data
 //   POST /test/ask    { text, options, recommended } asks a question as a session would
+//   POST /test/task   { text } sends the checkout session a new task (so its Planner plans again)
 // Claude's usage limits come from a snapshot file written here, as the status line script would.
 // A SessionRunner on fake tmux, git and an in-memory fs backs "End session": no agent, no real git.
 // Run after `npm run build`. Env: LIVE_PORT, DASHBOARD_TOKEN, MCP_TOKEN.
@@ -18,7 +19,13 @@ import {
   SessionRunner,
 } from '@loop-engineering/runner';
 import { FileStageLibrary } from '@loop-engineering/loop';
-import { claudeUsageModule, createServer, dashboardApi, pipelineModule } from '@loop-engineering/server';
+import {
+  claudeUsageModule,
+  createServer,
+  dashboardApi,
+  pipelineModule,
+  plannerModule,
+} from '@loop-engineering/server';
 
 const port = Number(process.env.LIVE_PORT ?? 3102);
 const dashboardToken = process.env.DASHBOARD_TOKEN;
@@ -86,6 +93,17 @@ function seed(server) {
     createdAt: '2026-09-03T09:00:00.000Z',
     endedAt: '2026-09-03T10:30:00.000Z',
   });
+  // Its task came, then its plan (submit_plan): questions asked from here on are the Builder's.
+  const request = store.requests.create({
+    projectId: shop.id,
+    sessionId: checkout.id,
+    text: 'Support Apple Pay',
+    source: 'telegram',
+  });
+  store.sessions.setPlan(
+    checkout.id,
+    'Goal: Apple Pay at checkout.\n\nFiles: web/src/checkout/PaymentSheet.tsx, api/src/webhooks/stripe.ts\n\nTests: webhook dedupe; checkout e2e.\n\nRisks: duplicate webhooks.',
+  );
   const webhook = store.subagents.create({
     sessionId: checkout.id,
     title: 'Stripe webhook handler',
@@ -107,12 +125,6 @@ function seed(server) {
     recommendedOption: 'Postgres table',
     context: 'We already run Postgres.',
   }).question;
-  const request = store.requests.create({
-    projectId: shop.id,
-    sessionId: checkout.id,
-    text: 'Support Apple Pay',
-    source: 'telegram',
-  });
   const pr = store.pullRequests.create({
     projectId: shop.id,
     sessionId: checkout.id,
@@ -193,6 +205,18 @@ const testRoutes = {
         recommendedOption: body.recommended,
       });
       return c.json({ question });
+    });
+    app.post('/test/task', async (c) => {
+      if (!guard(c)) return c.json({ error: 'unauthorized' }, 401);
+      const body = await c.req.json();
+      // Through RequestService, so request.created reaches the dashboard's live stream.
+      const request = ctx.requests.create({
+        projectId: ids.shop,
+        sessionId: ids.checkout,
+        text: body.text,
+        source: 'dashboard',
+      });
+      return c.json({ request });
     });
     // Board states the seed does not hold, for tests that need them: an extra session (e.g. a
     // paused one that has opened no PR, so the board shows its placeholder lane) and an extra PR
@@ -288,6 +312,7 @@ const server = createServer({
     dashboardApi({ home: tmpdir() }),
     claudeUsageModule({ file: usageFile }),
     pipelineModule({ stages: new FileStageLibrary(join(dir, 'stages'), () => undefined) }),
+    plannerModule(),
     testRoutes,
   ],
   sseKeepAliveMs: 5_000,

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { GUARDIAN_NODE } from '../lib/board';
+import { GUARDIAN_NODE, PLANNER_NODE } from '../lib/board';
 import type { Stage, StageChoices } from '../lib/schemas';
 import { Dialog } from './dialog';
 import { Icon } from './pipeline';
@@ -65,8 +65,8 @@ export function StageSheet({
   onClose: () => void;
 }) {
   const [f, setF] = useState<StageFields>(fieldsOf(stage));
-  // The Guardian's instructions: only the prompt is the user's to change.
-  const guardian = stage.id === GUARDIAN_NODE;
+  // The Guardian's and the Planner's instructions: only the prompt is the user's to change.
+  const instructions = stage.id === GUARDIAN_NODE || stage.id === PLANNER_NODE;
   const set = (patch: Partial<StageFields>) => setF((prev) => ({ ...prev, ...patch }));
   const id = isNew ? slug(f.title) : stage.id;
   const problem = !isNew
@@ -92,12 +92,12 @@ export function StageSheet({
         <h2>{isNew ? 'New stage' : stage.title}</h2>
         {stage.error && (
           <p className="warning small">
-            {guardian
-              ? `Its file is broken (${stage.error}), so the Guardian uses its built-in instructions. Saving here writes a working one.`
+            {instructions
+              ? `Its file is broken (${stage.error}), so the ${stage.label} uses its built-in instructions. Saving here writes a working one.`
               : `Its file is broken (${stage.error}), so PRs wait at it. Saving here writes a working one.`}
           </p>
         )}
-        {!guardian && (
+        {!instructions && (
           <>
             <label className="field">
               Name
@@ -137,7 +137,7 @@ export function StageSheet({
             </fieldset>
           </>
         )}
-        {guardian || stage.builtin ? null : (
+        {instructions || stage.builtin ? null : (
           <>
             <label className="field">
               It may
@@ -162,7 +162,7 @@ export function StageSheet({
           </>
         )}
         <label className="field">
-          {guardian ? 'Instructions' : 'What to check'}
+          {instructions ? 'Instructions' : 'What to check'}
           <textarea
             value={f.prompt}
             rows={8}

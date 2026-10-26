@@ -8,7 +8,7 @@ const demo = new DemoBackend(() => now);
 
 describe('DemoBackend', () => {
   it('serves fixtures in the same shapes the server returns', async () => {
-    expect(responses.questions.parse({ questions: await demo.pendingQuestions() }).questions).toHaveLength(4);
+    expect(responses.questions.parse({ questions: await demo.pendingQuestions() }).questions).toHaveLength(5);
     responses.tree.parse({ projects: await demo.tree() });
     responses.prs.parse({ pullRequests: await demo.pullRequests() });
     responses.settings.parse({ settings: await demo.settings() });

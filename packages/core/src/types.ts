@@ -204,6 +204,9 @@ export interface Session {
   source: SessionSource;
   /** How much checking the PR loop gives this session's PRs. */
   rigor: Rigor;
+  /** The planner's latest plan (submit_plan), and when it came: the newest task's plan wins. */
+  plan: string | null;
+  plannedAt: Iso | null;
   createdAt: Iso;
   endedAt: Iso | null;
 }

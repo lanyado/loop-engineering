@@ -9,7 +9,7 @@ const POLL_MS = 30_000;
 /**
  * Listens to /api/events (the dashboard's same-origin relay of the server's SSE stream, so the
  * cookie authenticates it and no token reaches the browser) and re-renders the page's server
- * components whenever a question is created or resolved, or a new task arrives.
+ * components whenever a question is created or resolved, a new task arrives, or a session's plan comes in.
  *
  * It renders nothing: the connection state used to show in the top bar ("Live"), and that
  * indicator was dropped. The stream and the 30-second poll stay on, so the board still updates
@@ -29,6 +29,7 @@ export function LiveUpdates({ demo }: { demo: boolean }) {
     source.addEventListener('question.created', refreshSoon);
     source.addEventListener('question.resolved', refreshSoon);
     source.addEventListener('request.created', refreshSoon);
+    source.addEventListener('session.planned', refreshSoon);
     const poll = setInterval(() => {
       if (document.visibilityState === 'visible') router.refresh();
     }, POLL_MS);

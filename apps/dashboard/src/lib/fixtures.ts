@@ -62,6 +62,7 @@ export function demoData(now: Date): DemoData {
     session(101, 1, 'Apple Pay checkout', 'active', null, 'claude', 'opus', at(3 * HOUR + 12 * MIN), {
       pendingQuestions: 2,
       branch: 'loop/apple-pay',
+      ...planned(at(2 * HOUR + 58 * MIN), at(3 * HOUR + 15 * MIN), APPLE_PAY_PLAN),
       // Payments: every check, QA on every PR.
       rigor: 'thorough',
       subagents: [
@@ -73,10 +74,30 @@ export function demoData(now: Date): DemoData {
     session(102, 1, 'Search relevance', 'paused', 'agent_exited', 'claude', 'opus', at(26 * HOUR), {
       pendingQuestions: 1,
       branch: 'loop/search-relevance',
+      ...planned(
+        at(25 * HOUR + 40 * MIN),
+        at(26 * HOUR),
+        [
+          'Goal: short queries (one or two words) should rank exact title matches first.',
+          '',
+          'Approach: a BM25 first pass over titles and tags, then the existing popularity boost; a feature flag to compare.',
+          '',
+          'Files: api/src/search/rank.ts, api/src/search/index.ts, api/src/flags.ts',
+          '',
+          'Tests: ranking cases for 1-2 word queries; the old cases keep passing.',
+          '',
+          'Risks: index rebuild time on deploy; long queries may rank differently.',
+        ].join('\n'),
+      ),
       subagents: [sub(1004, 102, 'Ranking experiment', 'sonnet', 'high', 'waiting')],
     }),
     session(103, 1, 'Order export CSV', 'ended', null, 'claude', 'opus', at(4 * 24 * HOUR), {
       branch: 'loop/order-export',
+      ...planned(
+        at(4 * 24 * HOUR - 10 * MIN),
+        at(4 * 24 * HOUR),
+        'Goal: admins export orders as CSV.\n\nApproach: a streaming /exports/orders.csv with a date range.',
+      ),
       endedAt: at(3 * 24 * HOUR),
       subagents: [sub(1005, 103, 'CSV writer', 'sonnet', 'medium', 'done')],
     }),
@@ -93,20 +114,48 @@ export function demoData(now: Date): DemoData {
         pendingQuestions: 1,
         branch: 'loop/rss-dark-mode',
         rigor: 'light',
+        ...planned(
+          at(44 * MIN),
+          at(50 * MIN),
+          [
+            'Goal: an RSS feed of the posts, and a dark mode.',
+            '',
+            'Approach: generate /rss.xml at build time from the posts; dark mode as CSS tokens for both themes.',
+            '',
+            'Files: site/src/pages/rss.xml.ts (new), site/src/styles/tokens.css, site/src/components/Header.astro',
+            '',
+            'Tests: the feed validates and lists the 20 newest posts; both themes render.',
+            '',
+            'Risks: contrast of code blocks in dark mode.',
+          ].join('\n'),
+        ),
         subagents: [sub(1006, 201, 'Theme tokens', 'opencode/glm-5.3-flash-free', 'medium', 'running')],
       },
     ),
     session(202, 2, 'Image CDN migration', 'paused', 'manual', 'claude', 'opus', at(9 * HOUR), {
       branch: 'loop/image-cdn',
+      ...planned(
+        at(8 * HOUR + 50 * MIN),
+        at(9 * HOUR),
+        'Goal: serve blog images from the CDN.\n\nApproach: rewrite image URLs at build time; keep the originals as fallback.\n\nFiles: site/astro.config.mjs, site/src/lib/images.ts\n\nTests: every image URL points at the CDN.\n\nRisks: cache invalidation for edited images.',
+      ),
       rigor: 'fast',
       subagents: [],
     }),
     session(301, 3, 'Staging DB upgrade plan', 'paused', 'usage_limit', 'claude', 'opus', at(5 * HOUR), {
       branch: 'loop/pg17',
+      ...planned(
+        at(4 * HOUR + 50 * MIN),
+        null,
+        'Goal: upgrade staging Postgres to 17.\n\nApproach: a blue-green copy, then switch the DNS.\n\nFiles: terraform/staging/db.tf\n\nTests: terraform plan; a restore drill.\n\nRisks: extension versions.',
+      ),
       subagents: [sub(1007, 301, 'Upgrade runbook', 'opus', 'max', 'failed')],
     }),
+    // Still planning: the Planner asked a question before it writes the plan.
     session(401, 4, 'Update resume for the Acme role', 'active', null, 'claude', 'opus', at(20 * MIN), {
       branch: '',
+      pendingQuestions: 1,
+      latestRequestAt: at(21 * MIN),
       subagents: [],
     }),
   ];
@@ -207,6 +256,16 @@ export function demoData(now: Date): DemoData {
       'Both (OS default + toggle)',
     ),
     pending(
+      55,
+      401,
+      null,
+      4 * MIN,
+      'The Acme posting is for a staff platform role. Lead the resume with the platform work or keep the product focus?',
+      ['Lead with platform', 'Keep product focus', 'Two versions'],
+      'Lead with platform',
+      'The posting asks for Kubernetes, CI and developer tooling; your last two roles were product-facing.',
+    ),
+    pending(
       54,
       102,
       null,
@@ -258,6 +317,7 @@ export function demoData(now: Date): DemoData {
   ];
 
   const requests: TaskRequest[] = [
+    request(15, 4, 401, 'Update my resume for the Acme staff platform role', 'dashboard', at(21 * MIN)),
     request(
       14,
       null,
@@ -483,6 +543,17 @@ export function demoData(now: Date): DemoData {
           builtin: false,
         },
       ],
+      planner: {
+        ...stage(
+          'planner',
+          'Planner',
+          'Planner',
+          'read',
+          'always',
+          'Understand the request first, and read the code it touches. If something is unclear, or there is a real product choice, ask the human with ask_human. Then write a short plan: the goal, the approach, the files to change, the tests, and the risks.',
+        ),
+        icon: 'check',
+      },
       guardian: {
         ...stage(
           'guardian',
@@ -533,6 +604,7 @@ export function demoData(now: Date): DemoData {
           'merged',
           'closed',
           'session',
+          'planner',
           'builder',
           'approval',
           'deploy',
@@ -557,6 +629,33 @@ function stage(
 ): Stage {
   return { id, title, label, icon: id, access, runs, prompt, builtin: true, overridden: false };
 }
+
+/** A session's plan fields: when the plan came, when its newest task came, and the plan. */
+function planned(plannedAt: string, latestRequestAt: string | null, plan: string) {
+  return { plan, plannedAt, latestRequestAt };
+}
+
+const APPLE_PAY_PLAN = [
+  'Goal: let shoppers pay with Apple Pay at checkout, on the web and through the API.',
+  '',
+  'Approach:',
+  "- Add Stripe's Payment Request Button to checkout, shown only where Apple Pay is available.",
+  '- Confirm the PaymentIntent on the server; handle payment_intent.succeeded once per event.',
+  '- Register the shop domain with Apple through Stripe.',
+  '',
+  'Files:',
+  '- web/src/checkout/PaymentSheet.tsx (new), web/src/checkout/CheckoutPage.tsx',
+  '- api/src/payments/intents.ts, api/src/webhooks/stripe.ts',
+  '- web/public/.well-known/apple-developer-merchantid-domain-association',
+  '',
+  'Tests:',
+  '- Unit: intent creation; webhook dedupe by event id.',
+  '- e2e: checkout with the Stripe test wallet (@prod-safe).',
+  '',
+  'Risks:',
+  '- Stripe sends some webhooks twice: dedupe (asking where to keep event ids).',
+  '- Safari-only UI: QA at iPhone SE width.',
+].join('\n');
 
 function project(
   id: number,
@@ -600,6 +699,9 @@ function session(
     effort: 'high',
     source: 'runner',
     rigor: 'standard',
+    plan: null,
+    plannedAt: null,
+    latestRequestAt: null,
     createdAt,
     endedAt: null,
     pendingQuestions: 0,

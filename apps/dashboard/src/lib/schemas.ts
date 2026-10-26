@@ -81,6 +81,10 @@ export const treeSessionSchema = z.object({
   source: z.string().default('runner'),
   // Older servers have no dial (and so run the pipeline as it is); an unknown level reads the same.
   rigor: z.enum(RIGOR_LEVELS).catch('standard').default('standard'),
+  // The planner's latest plan (submit_plan) and when its newest task came; older servers send none.
+  plan: z.string().nullable().default(null),
+  plannedAt: iso.nullable().default(null),
+  latestRequestAt: iso.nullable().default(null),
   createdAt: iso,
   endedAt: iso.nullable(),
   pendingQuestions: z.number(),
@@ -251,6 +255,8 @@ export const pipelineViewSchema = z.object({
   stages: z.array(stageSchema),
   /** The Production Guardian's instructions (guardian.md): only its prompt is edited. */
   guardian: stageSchema,
+  /** The Planner's instructions (planner.md), the same way; absent from older servers. */
+  planner: stageSchema.optional(),
   choices: stageChoicesSchema,
   /** Absent from older servers: then every level draws the whole pipeline. */
   rigor: rigorMapSchema.optional(),

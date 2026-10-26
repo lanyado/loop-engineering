@@ -10,6 +10,7 @@ import { loopModuleFromEnv } from './modules/loop.js';
 import { pipelineModule } from './modules/pipeline.js';
 import { routerModule } from './modules/router.js';
 import { historyModule } from './modules/history.js';
+import { plannerModule } from './modules/planner.js';
 import { runnerFromEnv } from './runner.js';
 import { createServer } from './server.js';
 
@@ -27,7 +28,8 @@ let runner;
 let addins;
 try {
   config = loadConfig();
-  runner = runnerFromEnv(process.env, config);
+  // Every session agent plans each new task first, following planner.md as it reads at launch.
+  runner = runnerFromEnv(process.env, config, { planner: () => stages.planner().prompt });
   loop = loopModuleFromEnv(process.env, { stages });
   // Private add-ins from local/ (see addins.ts); one that is set up wrong stops the start, like the rest.
   addins = await loadAddins(fromRoot('local'), process.env);
@@ -47,7 +49,7 @@ const server = createServer({
   ...(runner ? { runner } : {}),
   // The router comes after the add-ins (which may add question channels), so they are listening when
   // it asks a routing question, and before the loop, so it hears the loop's fix requests. It stays off
-  // without ctx.runner. History comes last: it only adds an MCP tool and a background sweep.
+  // without ctx.runner. History and the planner come last: they only add MCP tools (and a sweep).
   modules: [
     dashboardApi(),
     pipelineModule({ stages, poke: () => loop?.engine()?.poke() }),
@@ -58,6 +60,7 @@ const server = createServer({
     routerModule(),
     ...(loop ? [loop] : []),
     historyModule(),
+    plannerModule(),
   ],
 });
 // Registered before start(), so the server can always be stopped, even while it is starting.

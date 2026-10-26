@@ -329,7 +329,8 @@ export function Wiggle({
 }: {
   item: string;
   label: string;
-  onRemove: () => void;
+  /** Without it the item stays (it can still be opened). */
+  onRemove?: () => void;
   onOpen?: () => void;
   order?: Order;
   /** A whole line (a list, a paragraph): it takes the width and barely moves. */
@@ -350,9 +351,11 @@ export function Wiggle({
       {onOpen && (
         <button type="button" className="wiggle-open" aria-label={`Edit ${label}`} onClick={onOpen} />
       )}
-      <button type="button" className="wiggle-remove" aria-label={`Remove ${label}`} onClick={onRemove}>
-        −
-      </button>
+      {onRemove && (
+        <button type="button" className="wiggle-remove" aria-label={`Remove ${label}`} onClick={onRemove}>
+          −
+        </button>
+      )}
       {order && (
         <span className="wiggle-move">
           <button

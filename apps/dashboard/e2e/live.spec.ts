@@ -84,6 +84,51 @@ test('an agent asks via ask_human, the question appears live, one tap answers it
   }
 });
 
+test('a new task sends the session back to planning, and submit_plan brings its plan in live', async ({
+  page,
+}, info) => {
+  await open(page);
+  const checkout = page.getByTestId('session-row').filter({ hasText: 'Apple Pay checkout' });
+  const planner = checkout.getByTestId('planner-node');
+  await expect(planner).toHaveAttribute('data-state', 'done');
+  await expect(planner.locator('.node-detail')).toHaveText('planned');
+  await planner.getByTestId('session-more').click();
+  await expect(checkout.getByTestId('session-plan-text')).toContainText('Goal: Apple Pay at checkout.');
+
+  // A new task arrives: the Planner plans again. The question from before it stays the Builder's.
+  await testRoute('/test/task', { text: 'Also support Google Pay' });
+  await expect(planner.locator('.node-detail')).toHaveText('planning');
+  await expect(planner).toHaveAttribute('data-state', 'current');
+  await expect(checkout.locator('[data-stage="builder"]').getByTestId('node-ask')).toHaveText('1 question');
+  await expect(checkout.getByTestId('session-plan')).toContainText('a newer task is being planned');
+
+  const client = new Client({ name: 'e2e-agent', version: '0.0.0' });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(`${E2E.serverUrl}/mcp`), {
+      requestInit: {
+        headers: {
+          Authorization: `Bearer ${sessionToken(E2E.mcpToken, ids.checkout)}`,
+          'X-Loop-Session-Id': String(ids.checkout),
+        },
+      },
+    }),
+  );
+  try {
+    const result = await client.callTool({
+      name: 'submit_plan',
+      arguments: { plan: 'Goal: Google Pay too.\n\nFiles: web/src/checkout/PaymentSheet.tsx' },
+    });
+    expect(result.content).toEqual([{ type: 'text', text: 'Plan recorded. Now build it.' }]);
+  } finally {
+    await client.close();
+  }
+  // No reload: session.planned re-renders the board.
+  await expect(planner.locator('.node-detail')).toHaveText('planned');
+  await expect(checkout.getByTestId('session-plan-text')).toContainText('Goal: Google Pay too.');
+  await expect(planner.getByTestId('node-ask')).toHaveCount(0);
+  await snap(page, info, 'live-planned');
+});
+
 test('answers with free text', async ({ page }) => {
   await open(page);
   const card = page.getByTestId('question').filter({ hasText: 'Dedupe Stripe webhooks' });
@@ -571,6 +616,9 @@ test('the editor applies the layout and the pipeline on Save', async ({ page }, 
   await editor.getByRole('button', { name: 'Edit Guardian' }).click();
   await page.getByLabel('Instructions').fill('Check the booking flow end to end.');
   await page.getByTestId('stage-save').click();
+  await editor.getByRole('button', { name: 'Edit Planner' }).click();
+  await page.getByLabel('Instructions').fill('Read the code, then plan in five lines.');
+  await page.getByTestId('stage-save').click();
   await editor.getByTestId('editor-save').click();
   await page.getByTestId('confirm-yes').click();
   await expect(page).toHaveURL(/\/$/);
@@ -578,14 +626,17 @@ test('the editor applies the layout and the pipeline on Save', async ({ page }, 
 
   // The real board and the real server have it.
   await expect(page.locator('[data-testid="usage-meter"][data-window="Weekly"]')).toHaveCount(0);
-  const { pipeline, stages, guardian } = await api<{
+  const { pipeline, stages, guardian, planner } = await api<{
     pipeline: { checks: string[] };
     stages: { id: string; prompt: string }[];
     guardian: { prompt: string };
+    planner: { prompt: string; overridden: boolean };
   }>('/pipeline');
   expect(pipeline.checks).toEqual(['review', 'tests', 'qa', 'docs-check']);
   expect(stages.find((s) => s.id === 'docs-check')?.prompt).toBe('Check the README covers the change.');
   expect(guardian.prompt).toBe('Check the booking flow end to end.');
+  expect(planner).toMatchObject({ prompt: 'Read the code, then plan in five lines.', overridden: true });
+  expect(stages.map((s) => s.id)).not.toContain('planner');
   const lane = page.getByTestId('lane').first();
   await expect(lane.locator('[data-testid="node"]').first()).toHaveAttribute('data-stage', 'review');
   await expect(lane.locator('[data-stage="docs-check"]')).toContainText('Docs');

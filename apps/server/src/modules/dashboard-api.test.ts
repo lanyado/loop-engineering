@@ -437,6 +437,25 @@ describe('tree', () => {
       pendingQuestions: 0,
     });
 
+    expect(checkout).toMatchObject({ plan: null, plannedAt: null, latestRequestAt: null });
+
+    // The plan and the newest task's time ride along, for the Planner node.
+    store.sessions.setPlan(s1.id, 'Goal: checkout.');
+    store.requests.create({
+      projectId: s1.projectId,
+      sessionId: s1.id,
+      text: 'Also refunds',
+      source: 'dashboard',
+    });
+    const planned = (await call('GET', '/tree')).json.projects[1].sessions.find(
+      (s: { id: number }) => s.id === s1.id,
+    );
+    expect(planned).toMatchObject({
+      plan: 'Goal: checkout.',
+      plannedAt: expect.any(String) as unknown,
+      latestRequestAt: expect.any(String) as unknown,
+    });
+
     const open = await call('GET', '/tree?status=active,paused');
     expect(open.json.projects[1].sessions).toHaveLength(2);
     expect((await call('GET', '/tree?status=sleeping')).status).toBe(400);

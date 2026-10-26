@@ -7,6 +7,7 @@ import {
   builtinStageLibrary,
   FileStageLibrary,
   formatStageFile,
+  isStageId,
   parseStageFile,
   type StageFields,
 } from './stages.js';
@@ -222,6 +223,40 @@ describe('FileStageLibrary', () => {
     expect(lib.guardian().overridden).toBe(false);
     expect(() => lib.update({ pipeline: { checks: ['guardian'], deploy: true, guardian: true } })).toThrow(
       /unknown stage "guardian"/,
+    );
+  });
+
+  it("keeps the Planner's instructions in planner.md: built in, overridden, reset, never a check", () => {
+    expect(lib.planner()).toMatchObject({ id: 'planner', builtin: true, overridden: false, access: 'read' });
+    expect(lib.planner().prompt).toContain('ask_human');
+    expect(builtinStageLibrary().planner().prompt).toBe(lib.planner().prompt);
+    expect(lib.stages().map((s) => s.id)).not.toContain('planner');
+    expect(isStageId('planner')).toBe(false);
+
+    const mine = { ...lib.planner(), prompt: 'List the files first, then ask.', access: 'browser' as const };
+    lib.update({ pipeline: lib.pipeline(), stages: { planner: mine } });
+    const file = readFileSync(join(dir, 'stages', 'planner.md'), 'utf8');
+    expect(file).toContain('List the files first');
+    expect(file).not.toContain('access:');
+    // Its access is fixed by the code, whatever the file asks for.
+    expect(lib.planner()).toMatchObject({
+      prompt: 'List the files first, then ask.',
+      overridden: true,
+      access: 'read',
+    });
+    expect(lib.guardian().overridden).toBe(false);
+
+    write('planner.md', 'no front matter');
+    expect(lib.planner()).toMatchObject({ overridden: false });
+    expect(lib.planner().error).toContain('---');
+    expect(lib.planner().prompt).toContain('ask_human');
+
+    lib.update({ pipeline: lib.pipeline(), stages: { planner: null } });
+    expect(readdirSync(join(dir, 'stages'))).toEqual(['pipeline.json']);
+    expect(lib.planner()).toMatchObject({ overridden: false });
+    expect(lib.planner().error).toBeUndefined();
+    expect(() => lib.update({ pipeline: { checks: ['planner'], deploy: true, guardian: true } })).toThrow(
+      /unknown stage "planner"/,
     );
   });
 

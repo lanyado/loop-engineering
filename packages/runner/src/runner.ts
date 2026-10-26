@@ -66,6 +66,8 @@ export interface RunnerConfig {
    * (default); 'wait' keeps it paused (usage_limit) until the monitor resumes it on Claude.
    */
   onClaudeLimit?: 'opencode' | 'wait';
+  /** The Planner's current instructions, read at every launch; without it agents build without planning first. */
+  planner?: () => string;
 }
 
 export interface RunnerDeps {
@@ -158,6 +160,7 @@ export class SessionRunner {
   private readonly log: (message: string) => void;
   private readonly claudeProjectsDir: string;
   private readonly onClaudeLimit: 'opencode' | 'wait';
+  private readonly planner: (() => string) | undefined;
   /** Per-session promise chains: start, pause, resume, fallback and reconcile never interleave. */
   private readonly locks = new Map<number, Promise<unknown>>();
 
@@ -185,6 +188,7 @@ export class SessionRunner {
     this.claudeProjectsDir =
       config.claudeProjectsDir ?? join(this.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'projects');
     this.onClaudeLimit = config.onClaudeLimit ?? 'opencode';
+    this.planner = config.planner;
   }
 
   /** Folders the runner owns (it creates and removes things there); no project folder may overlap them. */
@@ -928,10 +932,12 @@ export class SessionRunner {
     const { store } = this.deps;
     const s = store.sessions.require(sessionId);
     const project = store.projects.require(s.projectId);
+    const planner = this.planner?.();
+    const common = { sessionId, ...(planner ? { planner } : {}) };
     if (project.kind === 'folder') {
-      return sessionInstructions({ kind: 'folder', sessionId, folder: project.folderPath ?? '' });
+      return sessionInstructions({ ...common, kind: 'folder', folder: project.folderPath ?? '' });
     }
-    return sessionInstructions({ kind: 'git', sessionId, branch: s.branch, repos: project.repos });
+    return sessionInstructions({ ...common, kind: 'git', branch: s.branch, repos: project.repos });
   }
 
   /** Writes the session's configs, then a launch script, and runs it in a new tmux window. */

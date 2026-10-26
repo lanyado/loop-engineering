@@ -81,6 +81,32 @@ describe('the pipeline API', () => {
     ]);
   });
 
+  it("serves the Planner's instructions and writes planner.md, never as a check", async () => {
+    type View = { planner: { id: string; prompt: string; overridden: boolean }; stages: { id: string }[] };
+    const before = (await (await call('GET')).json()) as View;
+    expect(before.planner).toMatchObject({ id: 'planner', overridden: false });
+    expect(before.planner.prompt).toContain('ask_human');
+    const planner = {
+      ...security,
+      title: 'Planner',
+      label: 'Planner',
+      icon: 'check',
+      prompt: 'Plan in five lines.',
+    };
+    const pipeline = { checks: ['tests', 'review', 'qa'], deploy: true, guardian: true };
+    expect((await call('PUT', { pipeline, stages: { planner } })).status).toBe(200);
+    expect(readFileSync(join(dir, 'stages', 'planner.md'), 'utf8')).toContain('Plan in five lines.');
+    const after = (await (await call('GET')).json()) as View;
+    expect(after.planner).toMatchObject({ prompt: 'Plan in five lines.', overridden: true });
+    expect(after.stages.map((s) => s.id)).not.toContain('planner');
+    expect((await call('PUT', { pipeline, stages: { planner: null } })).status).toBe(200);
+    expect(existsSync(join(dir, 'stages', 'planner.md'))).toBe(false);
+    expect(
+      (await call('PUT', { pipeline: { ...pipeline, checks: ['planner'] } })).status,
+      'the planner is never a check',
+    ).toBe(400);
+  });
+
   it('writes a new stage and the order, then serves them', async () => {
     const res = await call('PUT', {
       pipeline: { checks: ['security', 'tests', 'review'], deploy: false, guardian: true },

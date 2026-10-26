@@ -162,6 +162,51 @@ test('every live session is a pipeline of nodes, with questions on the node that
   await snap(page, info, 'board');
 });
 
+test('every row starts at the Planner: its plan in the details, no terminal; one session still plans', async ({
+  page,
+}, info) => {
+  await open(page);
+  const checkout = page.getByTestId('session-row').filter({ hasText: 'Apple Pay checkout' });
+  const planner = checkout.getByTestId('planner-node');
+  await expect(planner).toHaveAttribute('data-stage', 'planner');
+  await expect(planner).toHaveAttribute('data-state', 'done');
+  await expect(planner.locator('.node-title')).toHaveText('Planner');
+  await expect(planner.locator('.node-detail')).toHaveText('planned');
+  // The terminal belongs to the Builder; the Planner keeps the message and details buttons.
+  await expect(planner.getByTestId('session-terminal')).toHaveCount(0);
+  await expect(planner.getByTestId('session-plus')).toBeVisible();
+  await expect(checkout.locator('[data-stage="builder"]').getByTestId('session-terminal')).toHaveCount(1);
+  // The questions asked after the plan stay on the Builder.
+  await expect(planner.getByTestId('node-ask')).toHaveCount(0);
+  await expect(checkout.locator('[data-stage="builder"]').getByTestId('node-ask')).toHaveText('2 questions');
+  await expect(page.getByTestId('session-node')).toHaveCount(0);
+
+  // The plan is the Planner's details.
+  await planner.getByTestId('session-more').click();
+  const plan = checkout.getByTestId('session-plan');
+  await expect(plan).toContainText('Plan');
+  await expect(checkout.getByTestId('session-plan-text')).toContainText(
+    'Goal: let shoppers pay with Apple Pay at checkout',
+  );
+  await expect(checkout.getByTestId('session-plan-text')).toContainText('Risks:');
+  await expect(checkout.getByTestId('subagent')).toHaveCount(3);
+  await expectNoHorizontalScroll(page);
+  await snap(page, info, 'planner-plan');
+
+  // The resume session is still planning: its question sits on the Planner, the Builder waits.
+  const resume = page.locator('[data-testid="project"][data-project="resume"]').getByTestId('session-row');
+  const planning = resume.getByTestId('planner-node');
+  await expect(planning).toHaveAttribute('data-state', 'waiting');
+  await expect(planning.getByTestId('node-ask')).toHaveText('1 question');
+  await expect(resume.locator('[data-stage="builder"]')).toHaveAttribute('data-state', 'todo');
+  await expect(resume.locator('[data-stage="builder"]')).toContainText('not yet');
+  await expect(resume.getByTestId('question').locator('.asker')).toHaveText('Planner');
+  await planning.getByTestId('session-more').click();
+  await expect(resume.getByTestId('session-plan')).toContainText(
+    'Planning: the plan shows here once it is ready.',
+  );
+});
+
 test('finished stage nodes carry no state word, and the Builder is a narrow tile like the rest', async ({
   page,
 }) => {
@@ -420,7 +465,7 @@ test('the pencil edits one example project in place; Save and Discard each ask f
   await page.getByRole('link', { name: 'Edit the dashboard' }).click();
   const editor = page.getByTestId('editor');
   await expect(editor).toBeVisible();
-  // No help text, and the Session node carries none of its buttons here.
+  // No help text, and the Planner node carries none of its buttons here.
   await expect(editor.getByText('An example project with your layout')).toHaveCount(0);
   await expect(editor.getByTestId('session-plus')).toHaveCount(0);
   // One example project, and nothing to save yet: Discard just leaves.
@@ -501,6 +546,26 @@ test('the pencil edits one example project in place; Save and Discard each ask f
   await page.getByTestId('stage-save').click();
   await editor.getByRole('button', { name: 'Edit Guardian' }).click();
   await expect(page.getByLabel('Instructions')).toHaveValue('Check the booking flow end to end.');
+  await page.keyboard.press('Escape');
+
+  // Tapping the Planner edits its instructions too; it always runs, so it has no "−".
+  const plannerItem = editor.locator('[data-testid="editable-item"][data-item="planner"]');
+  await expect(plannerItem.getByTestId('planner-node')).toBeVisible();
+  await expect(editor.getByRole('button', { name: 'Remove Planner' })).toHaveCount(0);
+  await editor.getByRole('button', { name: 'Edit Planner' }).click();
+  const sheet = page.getByTestId('stage-sheet');
+  await expect(sheet.getByRole('heading', { name: 'Planner' })).toBeVisible();
+  await expect(page.getByLabel('Name')).toHaveCount(0);
+  await expect(page.getByLabel('Instructions')).toHaveValue(/ask the human with ask_human/);
+  await page.getByLabel('Instructions').fill('Read the code, then plan in five lines.');
+  await snap(page, info, 'editor-planner-sheet');
+  await page.getByTestId('stage-save').click();
+  await editor.getByRole('button', { name: 'Edit Planner' }).click();
+  await expect(page.getByLabel('Instructions')).toHaveValue('Read the code, then plan in five lines.');
+  // Overridden now: Reset brings the built-in instructions back.
+  await page.getByRole('button', { name: 'Reset to built-in' }).click();
+  await editor.getByRole('button', { name: 'Edit Planner' }).click();
+  await expect(page.getByLabel('Instructions')).toHaveValue(/ask the human with ask_human/);
   await page.keyboard.press('Escape');
 
   // Removing review warns that every PR will wait for approval; Deploy waits faded after Merge.
