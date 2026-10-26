@@ -5,6 +5,28 @@ import { answerQuestion } from '../app/actions';
 import type { Question } from '../lib/schemas';
 import { Countdown } from './countdown';
 
+/** The clock on the default answer: the one the countdown falls back to. */
+function ClockIcon() {
+  return (
+    <svg className="option-clock" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <circle cx="8" cy="8" r="6" />
+      <path d="M8 4.8V8l2.2 1.4" />
+    </svg>
+  );
+}
+
+function SendIcon() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path d="M8 13V3.5M3.8 7.5 8 3.3l4.2 4.2" />
+    </svg>
+  );
+}
+
+/**
+ * One question for the human: who asks and how long is left, the question, its options as pills
+ * (the default one marked with the countdown's clock), and a line to answer in your own words.
+ */
 export function QuestionCard({
   question,
   asker,
@@ -33,7 +55,13 @@ export function QuestionCard({
     <article className="card question" data-testid="question" data-question-id={question.id}>
       <header className="question-head">
         <span className="asker">{asker}</span>
-        <Countdown createdAt={question.createdAt} deadline={question.deadline} />
+        {sent === null && (
+          <Countdown
+            createdAt={question.createdAt}
+            deadline={question.deadline}
+            fallback={question.recommendedOption}
+          />
+        )}
       </header>
       <p className="question-text">{question.text}</p>
       {question.context && (
@@ -42,56 +70,64 @@ export function QuestionCard({
           <p>{question.context}</p>
         </details>
       )}
-      <div className="options" role="group" aria-label="Answer options">
-        {question.options.map((option) => (
-          <button
-            key={option}
-            type="button"
-            className={`option${option === question.recommendedOption ? ' recommended' : ''}`}
-            disabled={disabled}
-            onClick={() => send(option)}
+      {sent === null ? (
+        <>
+          <div className="options" role="group" aria-label="Answer options">
+            {question.options.map((option) => {
+              const recommended = option === question.recommendedOption;
+              return (
+                <button
+                  key={option}
+                  type="button"
+                  className={`option${recommended ? ' recommended' : ''}`}
+                  disabled={disabled}
+                  title={recommended ? 'The default: chosen if nobody answers in time' : undefined}
+                  onClick={() => send(option)}
+                >
+                  {recommended && <ClockIcon />}
+                  <span>{option}</span>
+                  {recommended && <span className="option-tag">· default</span>}
+                </button>
+              );
+            })}
+          </div>
+          <form
+            className="free-text"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (text.trim()) send(text.trim());
+            }}
           >
-            <span>{option}</span>
-            {option === question.recommendedOption && <span className="tag">default</span>}
-          </button>
-        ))}
-      </div>
-      <form
-        className="free-text"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (text.trim()) send(text.trim());
-        }}
-      >
-        <input
-          type="text"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="Or type an answer"
-          aria-label="Free-text answer"
-          maxLength={2000}
-          disabled={disabled}
-        />
-        <button type="submit" className="secondary" disabled={disabled || text.trim() === ''}>
-          Send
-        </button>
-      </form>
-      <div className="question-foot">
-        <p className="muted small">
-          No answer in time: goes with <strong>{question.recommendedOption}</strong>.
+            <input
+              type="text"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder="Or answer in your own words"
+              aria-label="Free-text answer"
+              maxLength={2000}
+              disabled={disabled}
+            />
+            <button
+              type="submit"
+              className={`send${text.trim() === '' ? ' empty' : ''}`}
+              aria-label="Send"
+              disabled={disabled || text.trim() === ''}
+            >
+              <SendIcon />
+            </button>
+          </form>
+        </>
+      ) : (
+        <p className="answered" role="status">
+          Answered: <strong>{sent}</strong>
         </p>
-        {readOnly && <p className="muted small">Demo data is read-only.</p>}
-        {sent !== null && (
-          <p className="ok small" role="status">
-            Answered: {sent}
-          </p>
-        )}
-        {error && (
-          <p className="error small" role="alert">
-            {error}
-          </p>
-        )}
-      </div>
+      )}
+      {readOnly && <p className="question-note">Demo data is read-only.</p>}
+      {error && (
+        <p className="error small" role="alert">
+          {error}
+        </p>
+      )}
     </article>
   );
 }

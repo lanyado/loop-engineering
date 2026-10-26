@@ -19,6 +19,26 @@ export const RIGOR_CAPTIONS: Record<Rigor, string> = {
   thorough: 'every check, QA on every PR, tests for every change',
 };
 
+/** What a level costs, how fast it ships and how deeply it checks, out of 4 each: one move trades them. */
+const METERS: Record<Rigor, { cost: number; speed: number; depth: number }> = {
+  fast: { cost: 1, speed: 4, depth: 1 },
+  light: { cost: 2, speed: 3, depth: 2 },
+  standard: { cost: 3, speed: 2, depth: 3 },
+  thorough: { cost: 4, speed: 1, depth: 4 },
+};
+
+/** "$$ ⚡⚡⚡ 🔍🔍": money, speed and how deeply it is checked, under the level's name. */
+function Meters({ level }: { level: Rigor }) {
+  const { cost, speed, depth } = METERS[level];
+  return (
+    <span className="rigor-meters" aria-hidden="true">
+      <span className="rigor-cost">{'$'.repeat(cost)}</span>
+      <span>{'⚡'.repeat(speed)}</span>
+      <span>{'🔍'.repeat(depth)}</span>
+    </span>
+  );
+}
+
 /** Where an arrow, Home or End key goes from stop `from` (null: another key). */
 function moveFrom(key: string, from: number, last: number): number | null {
   if (key === 'ArrowRight' || key === 'ArrowDown') return Math.min(from + 1, last);
@@ -134,18 +154,23 @@ export function RigorDial({
             data-testid={`rigor-${level}`}
             // Not `disabled`: in demo mode the group stays reachable by keyboard; choose() ignores it.
             aria-disabled={readOnly || undefined}
+            title={`${NAMES[level]}: ${RIGOR_CAPTIONS[level]}${readOnly && !preview ? ' (Demo data is read-only.)' : ''}`}
             onClick={() => choose(level)}
           >
-            <LevelIcon level={level} />
-            {NAMES[level]}
+            <span className="rigor-name">
+              <LevelIcon level={level} />
+              {NAMES[level]}
+            </span>
+            <Meters level={level} />
           </button>
         ))}
       </div>
       <div className="rigor-axis" aria-hidden="true">
-        <span>← Faster · cheaper</span>
-        <span>Safer · thorough →</span>
+        <span>← Faster &amp; Cheaper</span>
+        <span>Safer &amp; Pricier →</span>
       </div>
-      <p className="rigor-caption" id={`rigor-caption-${sessionId}`} data-testid="rigor-caption">
+      {/* The words for the chosen level, for screen readers; sighted users read the meters (and hover). */}
+      <p className="rigor-caption sr-only" id={`rigor-caption-${sessionId}`} data-testid="rigor-caption">
         <strong>{NAMES[shown]}:</strong> {RIGOR_CAPTIONS[shown]}
         {readOnly && !preview && <span className="sr-only"> Demo data is read-only.</span>}
       </p>
