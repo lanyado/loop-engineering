@@ -106,6 +106,10 @@ export type StageProvider = Provider | 'builder';
 const MODEL_LIMIT =
   /rate.?limit|too many requests|\b429\b|quota|overloaded|usage limit|(?:hit|reached) your .{0,20}limit/i;
 
+/** A job error that says the model does not accept the --effort value (the job is retried without it). */
+const EFFORT_REJECTED =
+  /(?:invalid|unsupported|unknown|not supported|does not support)[^\n]{0,60}effort|effort[^\n]{0,60}(?:invalid|unsupported|not supported|not available|not allowed)/i;
+
 /**
  * An error that says the network or GitHub is unreachable, not that the work failed. Auth errors, 404s,
  * merge conflicts and failing tests never match: those are real failures and keep counting as attempts.
@@ -1635,16 +1639,31 @@ export class LoopEngine {
       if (out.verdict !== null && inCheckout) out.pushed = await inCheckout(out.verdict, path);
     };
     let result: AgentJobResult;
+    let withEffort = true;
     try {
       const job = (p: Provider, model = this.modelFor(p)): PrJob => ({
         kind,
         provider: p,
         model,
-        ...(p === 'claude' && effortFor(c.rigor) ? { effort: effortFor(c.rigor) } : {}),
+        ...(withEffort && p === 'claude' && effortFor(c.rigor) ? { effort: effortFor(c.rigor) } : {}),
         cwd: '',
         ...spec,
       });
       result = await this.runAgent(c, gh, job(provider), finish);
+      // The model rejects the level's effort: once more without it, no attempt spent.
+      if (
+        result.isError &&
+        provider === 'claude' &&
+        effortFor(c.rigor) &&
+        EFFORT_REJECTED.test(result.text)
+      ) {
+        add(result);
+        withEffort = false;
+        this.log(
+          `PR ${c.pr.repo}#${c.pr.number}: the model rejected --effort ${effortFor(c.rigor)} in the ${kind} job; retrying without it`,
+        );
+        result = await this.runAgent(c, gh, job(provider), finish);
+      }
       if (
         result.isError &&
         provider === 'claude' &&

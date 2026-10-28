@@ -150,6 +150,53 @@ test('a new task sends the session back to planning, and submit_plan brings its 
   await expect(dial.getByTestId('rigor-thorough')).not.toHaveAttribute('title', /Planner/);
 });
 
+test('clicking the level the Planner picked pins it, and a later plan leaves it alone', async ({ page }) => {
+  await open(page);
+  const checkout = page.getByTestId('session-row').filter({ hasText: 'Apple Pay checkout' });
+  const dial = checkout.getByTestId('rigor-dial');
+  const submit = async (rigor: string, rigorReason: string) => {
+    const client = new Client({ name: 'e2e-agent', version: '0.0.0' });
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`${E2E.serverUrl}/mcp`), {
+        requestInit: {
+          headers: {
+            Authorization: `Bearer ${sessionToken(E2E.mcpToken, ids.checkout)}`,
+            'X-Loop-Session-Id': String(ids.checkout),
+          },
+        },
+      }),
+    );
+    try {
+      await client.callTool({
+        name: 'submit_plan',
+        arguments: { plan: `Plan for ${rigor}`, rigor, rigorReason },
+      });
+    } finally {
+      await client.close();
+    }
+  };
+  await checkout.getByTestId('planner-node').getByTestId('session-more').click();
+  await submit('light', 'A small change.');
+  await expect(dial).toHaveAttribute('data-rigor', 'light');
+  await expect(dial.getByTestId('rigor-light')).toHaveAttribute(
+    'title',
+    /Set by the Planner: A small change/,
+  );
+
+  // The same level, clicked: saved as the human's, and the hint says so.
+  await dial.getByRole('radio', { name: 'Light', exact: true }).click();
+  await expect(dial.getByTestId('rigor-light')).toHaveAttribute('title', /Set by you/);
+  await expect(checkout.getByTestId('session-rigor-source')).toHaveText('Rigor set by you');
+  await page.reload();
+  await expect(dial.getByTestId('rigor-light')).toHaveAttribute('title', /Set by you/);
+
+  // A later plan, with another pick, changes nothing.
+  await submit('thorough', 'Payments.');
+  await page.reload();
+  await expect(dial).toHaveAttribute('data-rigor', 'light');
+  await expect(dial.getByTestId('rigor-light')).not.toHaveAttribute('title', /Planner/);
+});
+
 test('answers with free text', async ({ page }) => {
   await open(page);
   const card = page.getByTestId('question').filter({ hasText: 'Dedupe Stripe webhooks' });

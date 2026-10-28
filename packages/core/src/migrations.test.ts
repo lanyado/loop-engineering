@@ -389,7 +389,7 @@ describe('migrations', () => {
     db.close();
   });
 
-  it('migration 23 marks existing sessions as default-level and refuses unknown sources', () => {
+  it('migration 23 keeps a level the human set (not Standard) theirs, and refuses unknown sources', () => {
     const db = new Database(':memory:');
     migrate(
       db,
@@ -399,6 +399,7 @@ describe('migrations', () => {
       INSERT INTO projects (name, created_at) VALUES ('p', 't');
       INSERT INTO sessions (project_id, title, model, branch, rigor, created_at)
         VALUES (1, 'live', 'opus', 'b', 'light', 't');
+      INSERT INTO sessions (project_id, title, model, branch, created_at) VALUES (1, 'plain', 'opus', 'b2', 't');
     `);
     expect(
       migrate(
@@ -406,8 +407,9 @@ describe('migrations', () => {
         MIGRATIONS.filter((m) => m.version <= 23),
       ),
     ).toEqual([23]);
-    expect(db.prepare('SELECT rigor, rigor_source, rigor_reason FROM sessions').all()).toEqual([
-      { rigor: 'light', rigor_source: 'default', rigor_reason: null },
+    expect(db.prepare('SELECT rigor, rigor_source, rigor_reason FROM sessions ORDER BY id').all()).toEqual([
+      { rigor: 'light', rigor_source: 'human', rigor_reason: null },
+      { rigor: 'standard', rigor_source: 'default', rigor_reason: null },
     ]);
     db.exec(`UPDATE sessions SET rigor_source = 'planner', rigor_reason = 'tiny' WHERE id = 1`);
     expect(() => db.exec(`UPDATE sessions SET rigor_source = 'bot' WHERE id = 1`)).toThrow(/CHECK/);

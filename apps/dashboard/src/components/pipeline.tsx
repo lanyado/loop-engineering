@@ -726,7 +726,8 @@ export function PipelineRow({
               sessionId={session.id}
               title={session.title}
               rigor={session.rigor}
-              reason={session.rigorSource === 'planner' ? session.rigorReason : null}
+              source={session.rigorSource}
+              reason={session.rigorReason}
               readOnly={readOnly}
               preview={edit !== undefined}
             />

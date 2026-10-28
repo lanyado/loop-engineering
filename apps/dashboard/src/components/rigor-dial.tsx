@@ -2,7 +2,8 @@
 
 import { useOptimistic, useRef, useState, useTransition, type KeyboardEvent, type ReactNode } from 'react';
 import { setRigor } from '../app/actions';
-import { RIGOR_LEVELS, type Rigor } from '../lib/schemas';
+import { rigorHint } from '../lib/format';
+import { RIGOR_LEVELS, type Rigor, type RigorSource } from '../lib/schemas';
 
 const NAMES: Record<Rigor, string> = {
   fast: 'Fast',
@@ -101,6 +102,7 @@ export function RigorDial({
   sessionId,
   title,
   rigor,
+  source = 'default',
   reason = null,
   readOnly,
   preview = false,
@@ -109,24 +111,28 @@ export function RigorDial({
   /** The session's title, for the group's accessible name. */
   title: string;
   rigor: Rigor;
-  /** Why the Planner chose the level (null when it did not, or the human chose). */
+  /** Who chose the level: choosing the shown level still saves while the human has not (it pins it). */
+  source?: RigorSource;
+  /** Why the Planner chose the level. */
   reason?: string | null;
   readOnly: boolean;
   /** The editor's preview: drawn, never changed. */
   preview?: boolean;
 }) {
   const [shown, setShown] = useOptimistic(rigor);
+  const [pinned, setPinned] = useOptimistic(source === 'human');
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const stops = useRef<(HTMLButtonElement | null)[]>([]);
   const locked = readOnly || preview;
-  const hint = reason && shown === rigor ? ` Set by the Planner: ${reason}` : '';
+  const hint = rigorHint(shown === rigor, pinned, source, reason);
 
   const choose = (level: Rigor) => {
-    if (locked || level === shown) return;
+    if (locked || (level === shown && pinned)) return;
     setError(null);
     start(async () => {
       setShown(level);
+      setPinned(true);
       const result = await setRigor(sessionId, level);
       if (!result.ok) setError(result.error);
     });

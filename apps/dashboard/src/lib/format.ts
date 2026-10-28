@@ -1,4 +1,5 @@
 /** Display helpers shared by server and client components. Pure functions, unit tested. */
+import type { RigorSource } from './schemas';
 
 export const REVIEW_ROUND_CAP = 5;
 
@@ -132,4 +133,16 @@ export function formatPrMetrics(m: {
     plural(m.rounds, 'round'),
     ...(m.failures > 0 ? [plural(m.failures, 'failure')] : []),
   ].join(' · ');
+}
+
+/** The words after the chosen level's caption: who chose it (nothing for an untouched default). */
+export function rigorHint(
+  current: boolean,
+  pinned: boolean,
+  source: RigorSource,
+  reason: string | null,
+): string {
+  if (!current || source === 'default') return '';
+  if (pinned) return ' Set by you.';
+  return reason ? ` Set by the Planner: ${reason}` : ' Set by the Planner.';
 }

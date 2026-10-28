@@ -65,6 +65,9 @@ export type Transcript = z.infer<typeof transcriptSchema>;
  */
 export const RIGOR_LEVELS = ['fast', 'light', 'standard', 'thorough'] as const;
 export type Rigor = (typeof RIGOR_LEVELS)[number];
+/** Who chose a session's level (core's RIGOR_SOURCES). */
+export const RIGOR_SOURCES = ['default', 'planner', 'human'] as const;
+export type RigorSource = (typeof RIGOR_SOURCES)[number];
 
 export const treeSessionSchema = z.object({
   id: z.number(),
@@ -81,7 +84,7 @@ export const treeSessionSchema = z.object({
   // Older servers have no dial (and so run the pipeline as it is); an unknown level reads the same.
   rigor: z.enum(RIGOR_LEVELS).catch('standard').default('standard'),
   // Who chose the level: "planner" (with its reason) or "human" pin it; older servers send neither.
-  rigorSource: z.enum(['default', 'planner', 'human']).catch('default').default('default'),
+  rigorSource: z.enum(RIGOR_SOURCES).catch('default').default('default'),
   rigorReason: z.string().nullable().default(null),
   // The planner's latest plan (submit_plan) and when its newest task came; older servers send none.
   plan: z.string().nullable().default(null),

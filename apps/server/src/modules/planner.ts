@@ -51,8 +51,16 @@ export function plannerModule(): ServerModule {
           // An ended session's token is refused before any tool runs.
           if (!ctx.store.sessions.get(resolved.sessionId))
             return errorResult(`session ${resolved.sessionId} does not exist`);
-          const pick = rigor ? { rigor, reason: rigorReason ?? '' } : undefined;
+          const pick = rigor ? { rigor, reason: rigorReason || null } : undefined;
+          const before = ctx.store.sessions.require(resolved.sessionId);
           const session = ctx.store.sessions.setPlan(resolved.sessionId, plan, pick);
+          if (pick && session.rigorSource === 'planner' && session.rigor !== before.rigor)
+            ctx.store.history.add({
+              projectId: session.projectId,
+              sessionId: session.id,
+              kind: 'decision',
+              text: `Planner chose ${rigor}${pick.reason ? `: ${pick.reason}` : ''} for session ${session.id}'s rigor.`,
+            });
           ctx.bus.emit({ type: 'session.planned', session });
           const kept =
             pick && session.rigorSource === 'human'

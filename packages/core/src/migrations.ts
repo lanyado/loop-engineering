@@ -628,7 +628,9 @@ export const MIGRATIONS: readonly Migration[] = [
     name: 'sessions: who set the rigor level, and why',
     sql: `ALTER TABLE sessions ADD COLUMN rigor_source TEXT NOT NULL DEFAULT 'default'
             CHECK (rigor_source IN ('default', 'planner', 'human'));
-          ALTER TABLE sessions ADD COLUMN rigor_reason TEXT NULL;`,
+          ALTER TABLE sessions ADD COLUMN rigor_reason TEXT NULL;
+          -- A level other than the default was the human's choice: the Planner must not override it.
+          UPDATE sessions SET rigor_source = 'human' WHERE rigor <> 'standard';`,
   },
 ];
 

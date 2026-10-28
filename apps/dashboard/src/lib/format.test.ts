@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  rigorHint,
   formatAgo,
   formatCountdown,
   formatClock,
@@ -103,5 +104,21 @@ describe('format', () => {
     expect(formatPrMetrics({ ...m, costUsd: 0, tokensIn: 0, tokensOut: 0 })).toBe(
       '$0.00 · 0 tokens · 2 rounds · 1 failure',
     );
+  });
+});
+
+describe('rigorHint', () => {
+  it('names the Planner and its reason until the human pins the level, then says "you"', () => {
+    expect(rigorHint(true, false, 'planner', 'A typo.')).toBe(' Set by the Planner: A typo.');
+    expect(rigorHint(true, false, 'planner', null)).toBe(' Set by the Planner.');
+    // Choosing the shown level pins it at once, before the server answers.
+    expect(rigorHint(true, true, 'planner', 'A typo.')).toBe(' Set by you.');
+    expect(rigorHint(true, true, 'human', null)).toBe(' Set by you.');
+  });
+
+  it('says nothing for an untouched default or a level that is not the shown one', () => {
+    expect(rigorHint(true, false, 'default', null)).toBe('');
+    expect(rigorHint(true, true, 'default', null)).toBe('');
+    expect(rigorHint(false, false, 'planner', 'A typo.')).toBe('');
   });
 });

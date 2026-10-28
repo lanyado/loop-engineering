@@ -276,7 +276,7 @@ export class SessionRepo {
    * Records the planner's plan, stamped now; a later plan replaces it. Its level pick applies only
    * while the human has not chosen one: the human's choice is never overridden.
    */
-  setPlan(id: number, plan: string, pick?: { rigor: Rigor; reason: string }): Session {
+  setPlan(id: number, plan: string, pick?: { rigor: Rigor; reason: string | null }): Session {
     if (plan.trim() === '') throw new ValidationError('the plan must not be empty');
     if (pick && !RIGOR_LEVELS.includes(pick.rigor)) {
       throw new ValidationError(`unknown rigor "${String(pick.rigor)}"`);
@@ -287,7 +287,7 @@ export class SessionRepo {
       planned_at: isoNow(this.clock),
       rigor: apply ? pick.rigor : undefined,
       rigor_source: apply ? 'planner' : undefined,
-      rigor_reason: apply ? pick.reason : undefined,
+      rigor_reason: apply ? pick.reason || null : undefined,
     });
     return this.require(id);
   }

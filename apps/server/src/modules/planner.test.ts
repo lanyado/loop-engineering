@@ -97,8 +97,14 @@ describe('submit_plan', () => {
       rigorReason: 'One word in the footer.',
     });
     expect(events.at(-1)).toEqual({ type: 'session.planned', session: store.sessions.require(mine) });
+    expect(store.history.list({ sessionId: mine }).map((e) => e.text)).toEqual([
+      `Planner chose fast: One word in the footer. for session ${mine}'s rigor.`,
+    ]);
     await client.callTool({ name: SUBMIT_PLAN_TOOL, arguments: { plan: 'next task' } });
     expect(store.sessions.require(mine)).toMatchObject({ rigor: 'fast', rigorSource: 'planner' });
+    // A pick without a reason stores none, not an empty string.
+    await client.callTool({ name: SUBMIT_PLAN_TOOL, arguments: { plan: 'p3', rigor: 'light' } });
+    expect(store.sessions.require(mine)).toMatchObject({ rigor: 'light', rigorReason: null });
   });
 
   it('refuses an invalid level or a too long reason, and stores nothing', async () => {

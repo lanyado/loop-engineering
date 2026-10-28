@@ -739,6 +739,28 @@ describe('the rigor dial', () => {
     },
   );
 
+  it('retries a job once without --effort when the model rejects it, spending no attempt', async () => {
+    const h = harness(library({ checks: ['tests', 'review'] }));
+    h.launcher
+      .on(
+        'tests',
+        verdictResult(
+          {},
+          { isError: true, text: 'Error: invalid value for --effort: max is not supported by this model' },
+        ),
+        testsPass(),
+      )
+      .on('review', clean());
+    const { session } = await h.builderWithPr();
+    h.store.sessions.update(session.id, { rigor: 'thorough' });
+    await h.engine.tick();
+    const tests = h.launcher.jobs.filter((j) => j.kind === 'tests');
+    expect(tests.map((j) => j.effort)).toEqual(['max', undefined]);
+    expect(h.logs.filter((l) => l.includes('rejected --effort'))).toHaveLength(1);
+    expect(loopState(h.pr()).attempts ?? 0).toBe(0);
+    expect(h.pr().outcome).toBe('merged');
+  });
+
   it('a per-PR skip still applies on top of the level', async () => {
     const lib = library({ checks: ['tests', 'review', 'qa'] });
     const h = harness(lib, { autoMerge: false });
