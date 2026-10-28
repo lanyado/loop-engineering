@@ -15,6 +15,7 @@ import {
   type Question,
   type Repo,
   DEFAULT_RIGOR,
+  effortFor,
   type Rigor,
   type Session,
   type Store,
@@ -76,7 +77,7 @@ import { runsOn } from './changes.js';
 import {
   qaAlways,
   reviewerNote,
-  rigorChecks,
+  pushesTests,
   rigorMaxRounds,
   rigorName,
   testerNote,
@@ -443,7 +444,7 @@ export class LoopEngine {
     if (this.stopped || !this.timer) return;
     const pr = this.deps.store.pullRequests.get(prId);
     const job = this.running.get(prId);
-    if (pr && job && this.droppedNow(pr, jobCheck(job.kind)))
+    if (pr && job && this.skippedNow(pr, jobCheck(job.kind)))
       job.controller.abort(new CheckSkipped(job.kind));
     if (this.busy.has(prId)) this.again.add(prId);
     else void this.step(prId);
@@ -744,9 +745,9 @@ export class LoopEngine {
       // Tests the tester wrote are committed and pushed by the loop, never by the job.
       // Once per PR: each push is a new head and a new review round, so pushing every round would
       // loop until the round cap.
-      // At rigor Light the tester writes none; any it wrote anyway are not pushed (a push costs a
-      // round). Read now: the level, or a skip, may have changed while the job ran.
-      verdict.passed && !c.s.testsAdded && this.rigorOf(c.pr) !== 'light' && !this.droppedNow(c.pr, 'tests')
+      // At rigor Fast and Light the tester writes none; any it wrote anyway are not pushed (a push
+      // costs a round). Read now: the level, or a skip, may have changed while the job ran.
+      verdict.passed && !c.s.testsAdded && pushesTests(this.rigorOf(c.pr)) && !this.skippedNow(c.pr, 'tests')
         ? this.deps.workspace.commitAndPush(c.repo, path, {
             branch: gh.headRefName,
             baseSha: gh.headRefOid,
@@ -874,7 +875,7 @@ export class LoopEngine {
    * so the ask service reuses the pending question instead of leaving it beside a second one.
    */
   private passedText(c: Ctx): string {
-    const checks = this.levelChecks(c);
+    const checks = this.pipeline().checks;
     const skipped = (c.s.skip ?? []).filter((id) => checks.includes(id));
     const names = skipped.map((id) => this.stages.stage(id)?.title ?? id).join(', ');
     if (checks.length === 0) return 'has no checks before merge';
@@ -882,12 +883,7 @@ export class LoopEngine {
     return skipped.length > 0 ? `passed its checks (you skipped ${names})` : 'passed its checks';
   }
 
-  /** The pipeline's checks that the session's rigor runs, before the human's skips. */
-  private levelChecks(c: Ctx): string[] {
-    return rigorChecks(c.rigor, this.pipeline().checks);
-  }
-
-  /** The PR gets a code review: the pipeline has it, its rigor keeps it and the human did not skip it. */
+  /** The PR gets a code review: the pipeline has it and the human did not skip it. */
   private reviews(c: Ctx): boolean {
     return this.checksOf(c).includes('review');
   }
@@ -897,10 +893,10 @@ export class LoopEngine {
     return runs === 'always' || runsOn(runs, await this.deps.github.diff(c.ref, c.pr.number));
   }
 
-  /** The checks this PR runs: the pipeline's that its session's rigor keeps, without the ones the human skipped for it. */
+  /** The checks this PR runs: the pipeline's, without the ones the human skipped for it. */
   private checksOf(c: Ctx): string[] {
     const skipped = c.s.skip ?? [];
-    return this.levelChecks(c).filter((id) => !skipped.includes(id));
+    return this.pipeline().checks.filter((id) => !skipped.includes(id));
   }
 
   private nextCheck(c: Ctx, head: string): string | null {
@@ -926,7 +922,7 @@ export class LoopEngine {
 
   /**
    * The head is not verified at approval or merge: new commits go back to the first check (round+1),
-   * while a check added since (to the pipeline, by a rigor change, a skip taken back) just runs, in
+   * while a check added since (to the pipeline, a skip taken back) just runs, in
    * the same round. Its approval question stays: it is about this same head, so once the check
    * passes, approvalStep waits on (or acts on) that one question instead of asking a second time.
    */
@@ -941,18 +937,15 @@ export class LoopEngine {
 
   /**
    * Merging waits for the human: auto-merge is off, only a free model reviewed this head, or the PR
-   * gets no code review. At rigor Fast nothing but auto-merge (and CI) stands before the merge, the
-   * human chose that for the session, but only for a PR that reaches the merge at Fast (`atFast`):
-   * one already waiting for approval when the level dropped stays with the human.
+   * gets no code review.
    */
-  private needsHuman(c: Ctx, atFast = false): boolean {
+  private needsHuman(c: Ctx): boolean {
     if (!c.project.autoMerge) return true;
-    if (atFast && c.rigor === 'fast') return false;
     return c.s.reviewedBy === 'opencode' || !this.reviews(c);
   }
 
   private toMerge(c: Ctx, state: Partial<LoopState>, usage: MetricsDelta): boolean {
-    const stage = this.needsHuman(c, true) ? 'awaiting_approval' : 'merge';
+    const stage = this.needsHuman(c) ? 'awaiting_approval' : 'merge';
     return this.save(
       c,
       { stage },
@@ -977,13 +970,11 @@ export class LoopEngine {
         context: `${gh.title}\n${gh.url}\nHead ${head}. ${
           !c.project.autoMerge
             ? `Auto-merge is off for ${c.project.name}.`
-            : c.rigor === 'fast'
-              ? 'It was waiting for your approval before Fast could merge it without asking: Fast does that only for PRs that reach the merge at Fast.'
-              : !this.levelChecks(c).includes('review')
-                ? 'The pipeline has no code review, so it is not merged automatically.'
-                : !this.reviews(c)
-                  ? 'Its code review was skipped, so it is not merged automatically.'
-                  : 'Only a free OpenCode model reviewed it (Claude was out of usage), so it is not merged automatically.'
+            : !this.pipeline().checks.includes('review')
+              ? 'The pipeline has no code review, so it is not merged automatically.'
+              : !this.reviews(c)
+                ? 'Its code review was skipped, so it is not merged automatically.'
+                : 'Only a free OpenCode model reviewed it (Claude was out of usage), so it is not merged automatically.'
         }${c.rigor === 'standard' ? '' : ` The session's rigor is ${rigorName(c.rigor)}.`}`,
         options: [...APPROVAL_OPTIONS],
         recommendedOption: 'Hold',
@@ -1003,7 +994,7 @@ export class LoopEngine {
     const head = gh.headRefOid;
     if (this.nextCheck(c, head) !== null) return this.recheck(c, head, 'new commits before merge');
     // Re-checked at the moment of merging: auto-merge may have been turned off since.
-    if (this.needsHuman(c, true) && c.s.approvedSha !== head) {
+    if (this.needsHuman(c) && c.s.approvedSha !== head) {
       return this.save(c, { stage: 'awaiting_approval' }, { question: undefined });
     }
     if (gh.mergeable === 'CONFLICTING') {
@@ -1136,11 +1127,11 @@ export class LoopEngine {
     usage: MetricsDelta = {},
     stage?: string,
   ): boolean {
-    // Skipped, or dropped by a rigor change, while its job ran: nothing goes back to the builder and
+    // Skipped while its job ran: nothing goes back to the builder and
     // the PR is not escalated (the job's usage, failure included, is still recorded); the next step
     // moves the PR on.
     const from = { kind, ...(stage ? { stage } : {}) };
-    if (this.droppedNow(c.pr, feedbackCheck(from))) return this.save(c, {}, FRESH_ATTEMPTS, usage);
+    if (this.skippedNow(c.pr, feedbackCheck(from))) return this.save(c, {}, FRESH_ATTEMPTS, usage);
     if (c.pr.round >= this.maxRounds(c)) {
       return this.escalate(c, `PR #${c.pr.number} hit ${c.pr.round} rounds`, items, false, usage, from);
     }
@@ -1649,6 +1640,7 @@ export class LoopEngine {
         kind,
         provider: p,
         model,
+        ...(p === 'claude' && effortFor(c.rigor) ? { effort: effortFor(c.rigor) } : {}),
         cwd: '',
         ...spec,
       });
@@ -1928,7 +1920,7 @@ export class LoopEngine {
 
   /**
    * A job that ended without a result (crashed, no decision, every model at its limit) whose check
-   * the human skipped (or dropped with the session's rigor) while it ran (read from the row): its usage is recorded and the PR moves on,
+   * the human skipped while it ran (read from the row): its usage is recorded and the PR moves on,
    * never retried or escalated. A model limit is still recorded (`backoff`): the next check runs on
    * the same models. Null when the check was not skipped.
    */
@@ -1938,7 +1930,7 @@ export class LoopEngine {
     usage: MetricsDelta,
     backoff: Partial<LoopState> = {},
   ): JobOutcome<never> | null {
-    if (!this.droppedNow(c.pr, jobCheck(kind))) return null;
+    if (!this.skippedNow(c.pr, jobCheck(kind))) return null;
     return { ok: false, progressed: this.save(c, {}, { ...FRESH_ATTEMPTS, ...backoff }, usage) };
   }
 
@@ -1980,16 +1972,9 @@ export class LoopEngine {
     return session?.rigor ?? DEFAULT_RIGOR;
   }
 
-  /**
-   * The human no longer wants `check` for this PR: they skipped it, or set the session's rigor to a
-   * level that does not run it. Read fresh from the PR row and the session, because it is asked once
-   * a job has run, and either may have changed meanwhile.
-   */
-  private droppedNow(pr: PullRequest, check: string | undefined): boolean {
-    if (check === undefined) return false;
-    if (isSkipped(loopState(this.deps.store.pullRequests.require(pr.id)), check)) return true;
-    const { checks } = this.pipeline();
-    return checks.includes(check) && !rigorChecks(this.rigorOf(pr), checks).includes(check);
+  /** The human skipped `check` for this PR. Read fresh from the PR row: it is asked once a job has run. */
+  private skippedNow(pr: PullRequest, check: string | undefined): boolean {
+    return check !== undefined && isSkipped(loopState(this.deps.store.pullRequests.require(pr.id)), check);
   }
 
   private maxRounds(c: Ctx): number {

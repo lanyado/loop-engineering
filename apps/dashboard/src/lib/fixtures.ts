@@ -63,8 +63,10 @@ export function demoData(now: Date): DemoData {
       pendingQuestions: 2,
       branch: 'loop/apple-pay',
       ...planned(at(2 * HOUR + 58 * MIN), at(3 * HOUR + 15 * MIN), APPLE_PAY_PLAN),
-      // Payments: every check, QA on every PR.
+      // Payments: the Planner chose Thorough.
       rigor: 'thorough',
+      rigorSource: 'planner',
+      rigorReason: 'Touches payments and webhooks, where a mistake costs money.',
       subagents: [
         sub(1001, 101, 'Payment sheet UI', 'sonnet', 'high', 'running'),
         sub(1002, 101, 'Stripe webhook handler', 'sonnet', 'xhigh', 'waiting'),
@@ -114,6 +116,7 @@ export function demoData(now: Date): DemoData {
         pendingQuestions: 1,
         branch: 'loop/rss-dark-mode',
         rigor: 'light',
+        rigorSource: 'human',
         ...planned(
           at(44 * MIN),
           at(50 * MIN),
@@ -140,6 +143,7 @@ export function demoData(now: Date): DemoData {
         'Goal: serve blog images from the CDN.\n\nApproach: rewrite image URLs at build time; keep the originals as fallback.\n\nFiles: site/astro.config.mjs, site/src/lib/images.ts\n\nTests: every image URL points at the CDN.\n\nRisks: cache invalidation for edited images.',
       ),
       rigor: 'fast',
+      rigorSource: 'human',
       subagents: [],
     }),
     session(301, 3, 'Staging DB upgrade plan', 'paused', 'usage_limit', 'claude', 'opus', at(5 * HOUR), {
@@ -440,7 +444,7 @@ export function demoData(now: Date): DemoData {
       'merged',
       3 * MIN,
       { costUsd: 0.92, tokensIn: 400_000, tokensOut: 22_000, failures: 0 },
-      // Merged at rigor Fast: no check passed at the merged head, so its lane says "not run".
+      // QA did not run at the merged head (the tester did not ask for it), so its lane says "not run".
       { mergedHeadSha: '4e1d9a07c3b2f6e58d1a0b9c7e6f5d4c3b2a1908' },
     ),
     pr(4, 1, 103, 9, 'web', 207, 'deployed', 2, 'merged', 3 * 24 * HOUR, {
@@ -518,13 +522,6 @@ export function demoData(now: Date): DemoData {
     // Demo stages: the built-in pipeline, with sample prompts (the server serves the real files).
     pipeline: {
       pipeline: { checks: ['tests', 'review', 'qa'], deploy: true, guardian: true },
-      // What the server's loop policy answers for this pipeline (http-backend.test.ts checks it).
-      rigor: {
-        fast: [],
-        light: ['tests', 'review'],
-        standard: ['tests', 'review', 'qa'],
-        thorough: ['tests', 'review', 'qa'],
-      },
       stages: [
         stage('tests', 'Tests', 'Tests', 'shell', 'always', 'Run the tests that cover the changed files.'),
         stage(
@@ -699,6 +696,8 @@ function session(
     effort: 'high',
     source: 'runner',
     rigor: 'standard',
+    rigorSource: 'default',
+    rigorReason: null,
     plan: null,
     plannedAt: null,
     latestRequestAt: null,

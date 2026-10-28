@@ -122,11 +122,9 @@ describe('HttpBackend against the real server', () => {
   it("reads the pipeline, and the demo's choices (reserved ids, runs) are the server's", async () => {
     const view = await backend.pipeline();
     expect(view.pipeline.checks).toEqual(['tests', 'review', 'qa']);
-    const { choices, rigor } = demoData(new Date()).pipeline;
+    const { choices } = demoData(new Date()).pipeline;
     expect([...choices.reserved].sort()).toEqual([...view.choices.reserved].sort());
     expect(choices.runs).toEqual(view.choices.runs);
-    // The demo's rigor map is what the loop's policy answers for the same pipeline.
-    expect(rigor).toEqual(view.rigor);
   });
 
   it("reads a session's plan and newest task time, and the Planner's instructions", async () => {
@@ -149,6 +147,21 @@ describe('HttpBackend against the real server', () => {
     expect((await backend.tree())[0]?.sessions[0]?.rigor).toBe('fast');
     expect(store.sessions.require(sessionId).rigor).toBe('fast');
     await expect(backend.setRigor(9999, 'light')).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("reads who set a session's level: the Planner with its reason, then the human", async () => {
+    expect((await backend.tree())[0]?.sessions[0]).toMatchObject({
+      rigorSource: 'default',
+      rigorReason: null,
+    });
+    store.sessions.setPlan(sessionId, 'Goal: copy.', { rigor: 'fast', reason: 'A copy change.' });
+    expect((await backend.tree())[0]?.sessions[0]).toMatchObject({
+      rigor: 'fast',
+      rigorSource: 'planner',
+      rigorReason: 'A copy change.',
+    });
+    await backend.setRigor(sessionId, 'fast');
+    expect((await backend.tree())[0]?.sessions[0]).toMatchObject({ rigorSource: 'human', rigorReason: null });
   });
 
   it("reads a PR's pending loop question and sends a message to one session", async () => {

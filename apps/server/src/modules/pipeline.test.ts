@@ -65,15 +65,9 @@ describe('the pipeline API', () => {
       pipeline: unknown;
       stages: { id: string; builtin: boolean }[];
       choices: { reserved: string[]; icons: string[] };
-      rigor: unknown;
     };
     expect(json.pipeline).toEqual({ checks: ['tests', 'review', 'qa'], deploy: true, guardian: true });
-    expect(json.rigor).toEqual({
-      fast: [],
-      light: ['tests', 'review'],
-      standard: ['tests', 'review', 'qa'],
-      thorough: ['tests', 'review', 'qa'],
-    });
+    expect(json).not.toHaveProperty('rigor'); // every level runs every stage: nothing to list
     expect(json.choices).toMatchObject({
       icons: expect.arrayContaining(['shield']) as unknown,
       reserved: expect.arrayContaining(['merge', 'deploy']) as unknown,
@@ -120,14 +114,8 @@ describe('the pipeline API', () => {
     expect(readFileSync(join(dir, 'stages', 'security.md'), 'utf8')).toContain('Look for leaked secrets.');
     const json = (await (await call('GET')).json()) as {
       pipeline: { checks: string[]; deploy: boolean };
-      rigor: Record<string, string[]>;
     };
     expect(json.pipeline).toMatchObject({ checks: ['security', 'tests', 'review'], deploy: false });
-    // The levels follow the edited pipeline: Light keeps only its tests and review.
-    expect(json.rigor).toMatchObject({
-      light: ['tests', 'review'],
-      standard: ['security', 'tests', 'review'],
-    });
   });
 
   it.each([

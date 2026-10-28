@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ServerConfig } from '../config.js';
 import { createServer, type LoopServer } from '../server.js';
 import { dashboardApi } from './dashboard-api.js';
-import { PLAN_MAX, plannerModule, SUBMIT_PLAN_TOOL } from './planner.js';
+import { PLAN_MAX, plannerModule, RIGOR_REASON_MAX, SUBMIT_PLAN_TOOL } from './planner.js';
 
 const DASHBOARD_TOKEN = 'dashboard-token-for-tests-0001';
 const MCP_TOKEN = 'mcp-token-for-tests-00000000001';
@@ -82,6 +82,59 @@ describe('submit_plan', () => {
     });
     expect(store.sessions.require(other).plan).toBeNull();
     expect(events).toEqual([{ type: 'session.planned', session: store.sessions.require(mine) }]);
+  });
+
+  it('sets the rigor level and its reason; a plan without a level leaves it alone', async () => {
+    const client = await mcpClient(mine);
+    const res = await client.callTool({
+      name: SUBMIT_PLAN_TOOL,
+      arguments: { plan: 'Fix the typo.', rigor: 'fast', rigorReason: '  One word in the footer.  ' },
+    });
+    expect(res.isError).toBeFalsy();
+    expect(store.sessions.require(mine)).toMatchObject({
+      rigor: 'fast',
+      rigorSource: 'planner',
+      rigorReason: 'One word in the footer.',
+    });
+    expect(events.at(-1)).toEqual({ type: 'session.planned', session: store.sessions.require(mine) });
+    await client.callTool({ name: SUBMIT_PLAN_TOOL, arguments: { plan: 'next task' } });
+    expect(store.sessions.require(mine)).toMatchObject({ rigor: 'fast', rigorSource: 'planner' });
+  });
+
+  it('refuses an invalid level or a too long reason, and stores nothing', async () => {
+    const client = await mcpClient(mine);
+    for (const args of [
+      { plan: 'p', rigor: 'reckless', rigorReason: 'x' },
+      { plan: 'p', rigor: 'fast', rigorReason: 'x'.repeat(RIGOR_REASON_MAX + 1) },
+    ]) {
+      expect((await client.callTool({ name: SUBMIT_PLAN_TOOL, arguments: args })).isError).toBe(true);
+    }
+    expect(store.sessions.require(mine)).toMatchObject({
+      plan: null,
+      rigor: 'standard',
+      rigorSource: 'default',
+    });
+    expect(events).toEqual([]);
+  });
+
+  it("never overrides the human's level, and says so; a human change after the Planner's pick sticks", async () => {
+    const client = await mcpClient(mine);
+    await client.callTool({
+      name: SUBMIT_PLAN_TOOL,
+      arguments: { plan: 'p1', rigor: 'light', rigorReason: 'small' },
+    });
+    store.sessions.update(mine, { rigor: 'thorough' }); // the dial
+    const res = await client.callTool({
+      name: SUBMIT_PLAN_TOOL,
+      arguments: { plan: 'p2', rigor: 'fast', rigorReason: 'tiny' },
+    });
+    expect(text(res)).toBe('Plan recorded. The human chose rigor thorough; it stays. Now build it.');
+    expect(store.sessions.require(mine)).toMatchObject({
+      plan: 'p2',
+      rigor: 'thorough',
+      rigorSource: 'human',
+      rigorReason: null,
+    });
   });
 
   it('a later plan replaces the earlier one', async () => {

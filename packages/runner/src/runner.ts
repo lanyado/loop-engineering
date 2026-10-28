@@ -14,6 +14,7 @@ import {
   sessionToken,
   ValidationError,
   type Effort,
+  effortFor,
   type PauseReason,
   type Repo,
   type Project,
@@ -356,7 +357,7 @@ export class SessionRunner {
         permissionMode: project.permissionMode,
         resume,
         agentSessionId,
-        effort: s.effort,
+        effort: effortFor(s.rigor, s.effort),
         prompt,
       });
       return store.sessions.update(sessionId, {
@@ -701,7 +702,7 @@ export class SessionRunner {
         prompt: text,
         ...(session.agentSessionId ? { agentSessionId: session.agentSessionId } : {}),
         title: session.title,
-        effort: session.effort,
+        effort: effortFor(session.rigor, session.effort),
       });
       const target = launched;
       const current = store.transaction(() => {

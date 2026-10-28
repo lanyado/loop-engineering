@@ -85,6 +85,14 @@ describe('agent jobs', () => {
     expect(disallowed).toEqual(expect.arrayContaining(['Edit', 'Write', 'WebFetch', 'Bash']));
   });
 
+  it("passes the rigor level's effort to claude, and nothing without one", () => {
+    const args = (j: Partial<AgentJob>) => buildJobCommand(job(j)).args;
+    expect(args({ effort: 'low' }).join(' ')).toContain('--model opus --effort low --permission-mode');
+    expect(args({})).not.toContain('--effort');
+    expect(args({ effort: null })).not.toContain('--effort');
+    expect(buildJobCommand(job({ provider: 'opencode', effort: 'low' })).args.join(' ')).not.toContain('low');
+  });
+
   it('gives QA jobs the headless Playwright MCP, and testers edits and every command', () => {
     const qa = buildJobCommand(job({ kind: 'qa', rights: QA_RIGHTS }));
     const mcp = JSON.parse(qa.args[qa.args.indexOf('--mcp-config') + 1]!) as {

@@ -103,7 +103,9 @@ describe('sessionInstructions', () => {
         '## Planning first',
         '- For each new task (not pull request feedback or review fixes), plan before changing anything, ' +
           'following the planner instructions below.',
-        '- When the plan is ready, call the submit_plan tool with it, then build it.',
+        '- When the plan is ready, call the submit_plan tool with it, then build it. Pass rigor (fast, light, ' +
+          'standard or thorough) and rigorReason (one short sentence) too: your judgement of how much checking ' +
+          'this change needs, which the human can override.',
         prompt,
         '## Finishing the work',
       ];

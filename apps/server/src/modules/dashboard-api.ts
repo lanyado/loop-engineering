@@ -354,14 +354,15 @@ export function dashboardRoutes(ctx: ServerContext, options: DashboardApiOptions
     const { rigor } = parse(sessionPatch, await body(c));
     const session = store.sessions.require(sessionId);
     if (isReserved(session.projectId)) return reserved(c);
-    if (session.rigor === rigor) return c.json({ session });
+    if (session.rigor === rigor && session.rigorSource === 'human') return c.json({ session });
     const updated = store.sessions.update(sessionId, { rigor });
-    store.history.add({
-      projectId: session.projectId,
-      sessionId,
-      kind: 'decision',
-      text: `Session ${sessionId}: the human set its rigor from ${session.rigor} to ${rigor} (dashboard).`,
-    });
+    if (session.rigor !== rigor)
+      store.history.add({
+        projectId: session.projectId,
+        sessionId,
+        kind: 'decision',
+        text: `Session ${sessionId}: the human set its rigor from ${session.rigor} to ${rigor} (dashboard).`,
+      });
     return c.json({ session: updated });
   });
 

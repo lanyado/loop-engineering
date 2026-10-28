@@ -623,6 +623,13 @@ export const MIGRATIONS: readonly Migration[] = [
     sql: `ALTER TABLE sessions ADD COLUMN plan TEXT NULL;
           ALTER TABLE sessions ADD COLUMN planned_at TEXT NULL;`,
   },
+  {
+    version: 23,
+    name: 'sessions: who set the rigor level, and why',
+    sql: `ALTER TABLE sessions ADD COLUMN rigor_source TEXT NOT NULL DEFAULT 'default'
+            CHECK (rigor_source IN ('default', 'planner', 'human'));
+          ALTER TABLE sessions ADD COLUMN rigor_reason TEXT NULL;`,
+  },
 ];
 
 /** Applies every migration newer than the database's user_version, each in its own transaction. */

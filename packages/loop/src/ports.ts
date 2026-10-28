@@ -1,6 +1,6 @@
 // Every external effect of the loop sits behind one of these interfaces; fakes.ts has a fake for each.
 import type { QuestionService } from '@loop-engineering/ask-human';
-import type { EnvFile, Provider, Repo, Request } from '@loop-engineering/core';
+import type { Effort, EnvFile, Provider, Repo, Request } from '@loop-engineering/core';
 import type { HeadlessResult, SessionRunner } from '@loop-engineering/runner';
 
 /** A repo as GitHub (`gh -R <slug>`) and the local checkout (`path`) know it. */
@@ -111,6 +111,8 @@ export interface AgentJob {
   kind: JobKind;
   provider: Provider;
   model: string;
+  /** Claude --effort, from the session's rigor level; none: the CLI's default. */
+  effort?: Effort | null;
   cwd: string;
   prompt: string;
   systemPrompt: string;

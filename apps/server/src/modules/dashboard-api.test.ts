@@ -523,6 +523,21 @@ describe('the rigor dial', () => {
     ]);
   });
 
+  it('a human choice pins the level against the Planner, even the level the Planner picked', async () => {
+    const { s1 } = seed();
+    store.sessions.setPlan(s1.id, 'plan', { rigor: 'fast', reason: 'a typo' });
+    expect(store.sessions.require(s1.id)).toMatchObject({ rigor: 'fast', rigorSource: 'planner' });
+    // Choosing the level the Planner already picked still pins it.
+    expect((await call('PATCH', `/sessions/${s1.id}`, { rigor: 'fast' })).status).toBe(200);
+    expect(store.sessions.require(s1.id)).toMatchObject({ rigorSource: 'human', rigorReason: null });
+    store.sessions.setPlan(s1.id, 'plan 2', { rigor: 'thorough', reason: 'auth' });
+    const { json } = await call('GET', '/tree');
+    const mine = json.projects
+      .flatMap((p: { sessions: { id: number }[] }) => p.sessions)
+      .find((s: { id: number }) => s.id === s1.id);
+    expect(mine).toMatchObject({ rigor: 'fast', rigorSource: 'human', rigorReason: null });
+  });
+
   it('refuses an unknown level, other fields, an unknown session and the reserved router session', async () => {
     const { s1 } = seed();
     expect((await call('PATCH', `/sessions/${s1.id}`, { rigor: 'reckless' })).status).toBe(400);
