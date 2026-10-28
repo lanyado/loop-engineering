@@ -239,8 +239,7 @@ export class Router {
     if (request.sessionId !== null) return { status: 'skipped', reason: 'already routed' };
     if (store.requests.parts(requestId).length > 0) return { status: 'skipped', reason: 'split into parts' };
     // A project given up front (dashboard form, a PR-loop fix request, or a project the router already
-    // picked before a failed start) skips selection: the request gets a new session there, whether
-    // not (naming the project is what routes it).
+    // picked before a failed start): the request gets a new session there.
     if (request.projectId !== null) {
       if (request.projectId === routerProjectId(store)) {
         this.log(`[router] request #${requestId} not routed: it names the reserved router project`);
