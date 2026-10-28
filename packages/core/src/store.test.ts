@@ -99,7 +99,6 @@ describe('projects', () => {
     expect(project).toMatchObject({
       name: 'shop',
       autoMerge: false,
-      markedForDirectInput: false,
       createdAt: '2026-10-18T09:00:00.000Z',
     });
     expect(store.projects.get(project.id)).toEqual(project);
@@ -107,10 +106,9 @@ describe('projects', () => {
     expect(store.projects.get(999)).toBeUndefined();
   });
 
-  it('lists, filters, updates and deletes', () => {
-    const other = store.projects.create({ name: 'blog', markedForDirectInput: true });
+  it('lists, updates and deletes', () => {
+    const other = store.projects.create({ name: 'blog' });
     expect(store.projects.list().map((p) => p.name)).toEqual(['blog', 'shop']);
-    expect(store.projects.list({ markedForDirectInput: true })).toEqual([other]);
 
     const updated = store.projects.update(project.id, { autoMerge: true, envFiles: [] });
     expect(updated.autoMerge).toBe(true);
@@ -213,10 +211,8 @@ describe('folder projects', () => {
       kind: 'folder',
       folderPath: '/home/me/notes',
       autoMerge: true,
-      markedForDirectInput: true,
     });
     expect(notes).toMatchObject({ kind: 'folder', folderPath: '/home/me/notes', repos: [], envFiles: [] });
-    expect(store.projects.list({ markedForDirectInput: true }).map((p) => p.name)).toContain('notes');
   });
 
   it('checks the shape: a folder project has a normalized absolute folder and no repos or env files', () => {
@@ -249,19 +245,6 @@ describe('folder projects', () => {
       folderPath: '/home/me/notes',
       autoMerge: true,
     });
-  });
-});
-
-describe('project permission mode', () => {
-  it('defaults to auto, is selectable, and rejects unknown modes', () => {
-    expect(project.permissionMode).toBe('auto');
-    for (const mode of ['manual', 'acceptEdits', 'plan', 'bypassPermissions'] as const) {
-      expect(store.projects.update(project.id, { permissionMode: mode }).permissionMode).toBe(mode);
-    }
-    expect(store.projects.create({ name: 'm', permissionMode: 'manual' }).permissionMode).toBe('manual');
-    expect(() => store.projects.update(project.id, { permissionMode: 'yolo' as 'auto' })).toThrow(
-      ValidationError,
-    );
   });
 });
 

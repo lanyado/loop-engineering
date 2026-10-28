@@ -1,13 +1,15 @@
 import {
   CliClassifier,
   Router,
-  type Classifier,
   type FolderSessions,
   type RouterConfig,
   type SessionMessenger,
   type StartSession,
 } from '@loop-engineering/router';
 import type { ServerContext, ServerModule } from '../context.js';
+
+/** What the module asks a model for: a session title, and the Plan stage's split of a task. */
+export type Titler = Pick<CliClassifier, 'title' | 'plan'>;
 
 export interface RouterModuleOptions {
   /** Default: `ctx.runner.startSession(projectId, { requestId })`. */
@@ -16,14 +18,14 @@ export interface RouterModuleOptions {
   messenger?: SessionMessenger;
   /** Default: the runner's sessionState / resume({ deliver }) / end(), for folder projects. */
   folders?: FolderSessions;
-  /** Default: CliClassifier (claude -p haiku, OpenCode fallback model from Settings). */
-  classifier?: Classifier;
+  /** Default: CliClassifier, which titles and plans (claude -p haiku, OpenCode fallback model from Settings). */
+  classifier?: Titler;
   config?: Partial<RouterConfig>;
   log?: (message: string) => void;
 }
 
 /**
- * Direct-input routing as a server module: every request.created (dashboard, other channels, PR loop)
+ * Request routing as a server module: every request.created (dashboard, PR loop)
  * gets a project and session, and requests stored while the server was down are routed on start.
  * It uses the server's one shared runner (`ctx.runner`) and never builds its own; without a runner
  * (and no startSession/messenger given) it stays off, and requests wait for a later start.
@@ -36,7 +38,7 @@ export function routerModule(options: RouterModuleOptions = {}): ServerModule & 
     name: 'router',
     router: () => router,
 
-    // Subscribes synchronously; the start-up scan (classifier calls, questions) runs in the background.
+    // Subscribes synchronously; the start-up scan (planning calls, questions) runs in the background.
     start(ctx: ServerContext) {
       const { runner } = ctx;
       const classifier =
@@ -55,9 +57,7 @@ export function routerModule(options: RouterModuleOptions = {}): ServerModule & 
         (runner
           ? async (projectId, request) => {
               const session = await runner.startSession(projectId, request);
-              if (classifier instanceof CliClassifier) {
-                void retitle(classifier, ctx, session.id, request.requestId, log);
-              }
+              void retitle(classifier, ctx, session.id, request.requestId, log);
               return session;
             }
           : undefined);
@@ -93,11 +93,10 @@ export function routerModule(options: RouterModuleOptions = {}): ServerModule & 
           store: ctx.store,
           bus: ctx.bus,
           questions: ctx.questions,
-          classifier,
           startSession,
           messenger,
           // Independent parts of a task run as separate sessions, each merging and deploying on its own.
-          ...(classifier instanceof CliClassifier ? { splitter: classifier } : {}),
+          splitter: classifier,
           ...(folders ? { folders } : {}),
           timers: ctx.timers,
           log,
@@ -124,7 +123,7 @@ export function routerModule(options: RouterModuleOptions = {}): ServerModule & 
  * nothing waits on it. Any failure keeps the first-line title.
  */
 async function retitle(
-  classifier: CliClassifier,
+  classifier: Titler,
   ctx: ServerContext,
   sessionId: number,
   requestId: number,

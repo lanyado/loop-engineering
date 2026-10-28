@@ -10,15 +10,7 @@ import {
   type Runner,
 } from '@loop-engineering/runner';
 import { extractJson } from './classification.js';
-import {
-  buildClassifierPrompt,
-  buildSplitPrompt,
-  buildTitlePrompt,
-  cleanPlan,
-  cleanTitle,
-  type Plan,
-} from './prompt.js';
-import type { Classifier, ClassifyInput } from './types.js';
+import { buildSplitPrompt, buildTitlePrompt, cleanPlan, cleanTitle, type Plan } from './prompt.js';
 
 export interface CliClassifierOptions {
   /** Model fallback when Claude is out of usage; read on every call (Settings.fallbackModel). */
@@ -45,7 +37,7 @@ export class ClassifierError extends Error {
  * json`), falling back to `opencode run --format json -m <fallback model>` while Claude is out of
  * usage. Resolves with the parsed JSON answer (unvalidated: the router validates it), or rejects.
  */
-export class CliClassifier implements Classifier {
+export class CliClassifier {
   private limitedUntil = 0;
   private readonly run: Runner;
   private readonly log: (message: string) => void;
@@ -53,10 +45,6 @@ export class CliClassifier implements Classifier {
   constructor(private readonly options: CliClassifierOptions) {
     this.run = options.run ?? runCommand;
     this.log = options.log ?? ((m) => console.log(m));
-  }
-
-  async classify(input: ClassifyInput, signal: AbortSignal): Promise<unknown> {
-    return this.askJson(buildClassifierPrompt(input), signal);
   }
 
   /** A short session title for a task, in the task's language; null when the answer has none. */
@@ -84,7 +72,7 @@ export class CliClassifier implements Classifier {
       this.limitedUntil = now + (this.options.limitCooldownMs ?? 15 * 60_000);
       if (!on.opencode)
         throw new ClassifierError(`Claude is out of usage (${claude.message}) and OpenCode is switched off`);
-      this.log(`[router] Claude is out of usage (${claude.message}); classifying with OpenCode`);
+      this.log(`[router] Claude is out of usage (${claude.message}); using OpenCode`);
     } else if (!on.opencode) {
       throw new ClassifierError('Claude is out of usage and OpenCode is switched off');
     }

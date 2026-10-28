@@ -6,7 +6,7 @@ Read SPEC.md for what we're building and PLAN.md for the build order and milesto
 - `packages/core` — data model, SQLite store, shared types, config
 - `packages/runner` — session runner (tmux + Claude CLI / OpenCode fallback, worktrees)
 - `packages/ask-human` — `ask_human` MCP server + question bus
-- `packages/router` — direct-input routing
+- `packages/router` — routes each request to a session of the project it names
 - `packages/loop` — PR loop engine (review → tests → QA → merge → deploy → cleanup)
 - `apps/server` — always-on Node server wiring the packages together (HTTP API)
 - `apps/dashboard` — Next.js dashboard (Vercel)

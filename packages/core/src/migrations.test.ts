@@ -438,6 +438,33 @@ describe('migrations', () => {
     db.close();
   });
 
+  it('migration 25 drops the direct-input mark and permission mode, keeping the rest of each project', () => {
+    const db = new Database(':memory:');
+    migrate(
+      db,
+      MIGRATIONS.filter((m) => m.version < 25),
+    );
+    db.exec(`
+      INSERT INTO projects (name, auto_merge, marked_for_direct_input, permission_mode, created_at)
+        VALUES ('p', 1, 1, 'plan', 't');
+      INSERT INTO sessions (project_id, title, model, branch, created_at) VALUES (1, 'live', 'opus', 'b', 't');
+    `);
+    expect(
+      migrate(
+        db,
+        MIGRATIONS.filter((m) => m.version <= 25),
+      ),
+    ).toEqual([25]);
+    const columns = (db.prepare('PRAGMA table_info(projects)').all() as { name: string }[]).map(
+      (c) => c.name,
+    );
+    expect(columns).not.toContain('marked_for_direct_input');
+    expect(columns).not.toContain('permission_mode');
+    expect(db.prepare('SELECT name, auto_merge FROM projects').all()).toEqual([{ name: 'p', auto_merge: 1 }]);
+    expect(db.prepare('SELECT title FROM sessions').all()).toEqual([{ title: 'live' }]);
+    db.close();
+  });
+
   it('migration 15 drops cloud and calendar/travel data: old pause reasons become manual, nothing is deleted', () => {
     const db = new Database(':memory:');
     db.pragma('foreign_keys = ON');

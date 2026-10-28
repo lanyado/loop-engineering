@@ -58,7 +58,6 @@ function seed(server) {
   const shop = store.projects.create({
     name: 'shop',
     repos: [repo('web'), repo('api')],
-    markedForDirectInput: true,
   });
   const blog = store.projects.create({ name: 'blog', repos: [repo('site')], autoMerge: true });
   const checkout = store.sessions.create({

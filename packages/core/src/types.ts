@@ -94,8 +94,7 @@ export const effortFor = (rigor: Rigor, own: Effort | null = null): Effort | nul
 
 /**
  * Claude Code permission modes (`claude --help`, --permission-mode). "manual" asks before every edit
- * or command; "auto" lets Claude's safety classifier approve routine actions. bypassPermissions is
- * never a default: a project has to select it explicitly.
+ * or command; "auto" lets Claude's safety classifier approve routine actions.
  */
 export const PERMISSION_MODES = [
   'auto',
@@ -106,7 +105,7 @@ export const PERMISSION_MODES = [
   'bypassPermissions',
 ] as const;
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
-/** Default for new projects; pending a human decision, so it is kept in this one place. */
+/** The mode every agent is launched with (kept in this one place). */
 export const DEFAULT_PERMISSION_MODE: PermissionMode = 'auto';
 
 /**
@@ -235,9 +234,6 @@ export interface Project {
   envFiles: EnvFile[];
   /** Meaningless for a folder project (it has no PRs); stored as given. */
   autoMerge: boolean;
-  markedForDirectInput: boolean;
-  /** Permission mode the project's agents are launched with. */
-  permissionMode: PermissionMode;
   createdAt: Iso;
 }
 

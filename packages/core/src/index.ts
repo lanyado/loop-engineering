@@ -8,7 +8,7 @@ export * from './semaphore.js';
 export * from './session-token.js';
 export { MIGRATIONS, migrate, type Migration } from './migrations.js';
 export { openStore, type Store, type StoreOptions } from './store.js';
-export type { NewProject, ProjectFilter, ProjectPatch, ProjectRepo } from './repos/projects.js';
+export type { NewProject, ProjectPatch, ProjectRepo } from './repos/projects.js';
 export type {
   ImportedSession,
   ModelPicks,

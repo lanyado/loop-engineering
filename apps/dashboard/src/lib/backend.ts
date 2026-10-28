@@ -29,7 +29,7 @@ export interface Backend {
   pullRequests(): Promise<PullRequest[]>;
   settings(): Promise<Settings>;
   updateSettings(patch: SettingsPatch): Promise<Settings>;
-  createRequest(input: { text: string; projectId: number | null }): Promise<TaskRequest>;
+  createRequest(input: { text: string; projectId: number }): Promise<TaskRequest>;
   /** A message for one open session (the "+" on its node); the router delivers it there. */
   messageSession(sessionId: number, text: string): Promise<TaskRequest>;
   /** Claude Code's usage limits; null until the status line has saved them. */

@@ -39,8 +39,6 @@ export const projectSchema = z.object({
   folderPath: z.string().nullable().default(null),
   repos: z.array(z.object({ name: z.string() })),
   autoMerge: z.boolean(),
-  markedForDirectInput: z.boolean(),
-  permissionMode: z.string(),
   createdAt: iso,
 });
 export type Project = z.infer<typeof projectSchema>;
@@ -334,7 +332,7 @@ export const stageTerminalInput = z.object({
 });
 export const newRequestInput = z.object({
   text: z.string().trim().min(1, 'Describe the task').max(LIMITS.request),
-  projectId: z.number().int().positive().nullable(),
+  projectId: z.number().int().positive(),
 });
 export const sessionMessageInput = z.object({
   sessionId: z.number().int().positive(),

@@ -2,7 +2,6 @@ import {
   FakeClock,
   NotFoundError,
   openStore,
-  PERMISSION_MODES,
   ValidationError,
   type PauseReason,
   type Project,
@@ -143,21 +142,14 @@ describe('startSession', () => {
     expect(s.status).toBe('active');
   });
 
-  it('takes the model from Settings or per call, effort per call, and the permission mode per project', async () => {
+  it('takes the model from Settings or per call, effort per call; agents launch in auto mode', async () => {
     const h = harness();
     h.store.settings.update({ sessionModel: 'fable' });
-    h.store.projects.update(h.shop.id, { permissionMode: 'manual' });
     const a = await h.runner.startSession(h.shop.id, { text: 'one' });
     const b = await h.runner.startSession(h.shop.id, { text: 'two' }, { model: 'sonnet', effort: 'high' });
     expect([a.model, b.model, b.effort]).toEqual(['fable', 'sonnet', 'high']);
-    expect(h.script(h.window(a.tmuxTarget))).toContain("'--model' 'fable' '--permission-mode' 'manual'");
+    expect(h.script(h.window(a.tmuxTarget))).toContain("'--model' 'fable' '--permission-mode' 'auto'");
     expect(h.script(h.window(b.tmuxTarget))).toContain("'--effort' 'high'");
-    h.store.projects.update(h.shop.id, { permissionMode: 'bypassPermissions' });
-    const c = await h.runner.startSession(h.shop.id, { text: 'three' });
-    expect(h.script(h.window(c.tmuxTarget))).toContain("'--permission-mode' 'bypassPermissions'");
-    expect(h.json(`/wt/.loop-runner/s${c.id}/opencode.json`).permission).toEqual(
-      opencodePermission('bypassPermissions'),
-    );
   });
 
   it('uses a request the router already recorded', async () => {
@@ -942,26 +934,22 @@ describe('fallbackToOpencode', () => {
     expect(await h.runner.fallbackToOpencode(s.id, line)).toBeNull(); // already switched
   });
 
-  it.each(PERMISSION_MODES)(
-    'passes model, permission and MCP servers inline (OPENCODE_CONFIG_CONTENT) in %s mode',
-    async (mode) => {
-      const h = harness();
-      h.store.projects.update(h.shop.id, { permissionMode: mode });
-      const s = await h.runner.startSession(h.shop.id, REQUEST);
-      const after = await h.runner.fallbackToOpencode(s.id, 'limit');
-      const inline = h.inlineOpencode(h.window(after?.tmuxTarget ?? null));
-      expect(inline.model).toBe('opencode/glm-5.3-flash-free');
-      expect(inline.permission).toEqual(opencodePermission(mode));
-      expect(Object.keys(inline.mcp as object).sort()).toEqual([
-        'ask_human',
-        'context7',
-        'github',
-        'playwright',
-        'tavily',
-      ]);
-      expect(JSON.stringify(inline)).not.toContain('tok-123');
-    },
-  );
+  it('passes model, permission and MCP servers inline (OPENCODE_CONFIG_CONTENT)', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    const after = await h.runner.fallbackToOpencode(s.id, 'limit');
+    const inline = h.inlineOpencode(h.window(after?.tmuxTarget ?? null));
+    expect(inline.model).toBe('opencode/glm-5.3-flash-free');
+    expect(inline.permission).toEqual(opencodePermission('auto'));
+    expect(Object.keys(inline.mcp as object).sort()).toEqual([
+      'ask_human',
+      'context7',
+      'github',
+      'playwright',
+      'tavily',
+    ]);
+    expect(JSON.stringify(inline)).not.toContain('tok-123');
+  });
 
   it('a repo tracking a permissive opencode.json cannot override the inline config, and its file is untouched', async () => {
     const h = harness();
@@ -1013,19 +1001,12 @@ describe('fallbackToOpencode', () => {
     expect(h.store.sessions.require(s.id).pauseReason).toBe('manual');
   });
 
-  it('a resumed OpenCode session continues in a private server; --auto only for auto and bypass projects', async () => {
+  it('a resumed OpenCode session continues in a private server, with --auto', async () => {
     const h = harness();
-    h.store.projects.update(h.shop.id, { permissionMode: 'manual' });
     const s = await h.runner.startSession(h.shop.id, REQUEST);
     await h.runner.fallbackToOpencode(s.id, 'limit');
     await h.runner.pause(s.id, 'usage_limit');
-    let r = await h.runner.resume(s.id, { ifReason: 'usage_limit' });
-    expect(h.script(h.window(r.tmuxTarget))).toContain(
-      "exec 'opencode' '--standalone' '--continue' '--prompt=",
-    );
-    h.store.projects.update(h.shop.id, { permissionMode: 'auto' });
-    await h.runner.pause(s.id, 'manual');
-    r = await h.runner.resume(s.id);
+    const r = await h.runner.resume(s.id, { ifReason: 'usage_limit' });
     expect(h.script(h.window(r.tmuxTarget))).toContain(
       "exec 'opencode' '--standalone' '--continue' '--auto' '--prompt=",
     );

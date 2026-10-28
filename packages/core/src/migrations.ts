@@ -638,6 +638,14 @@ export const MIGRATIONS: readonly Migration[] = [
     sql: `ALTER TABLE sessions ADD COLUMN models TEXT NULL DEFAULT NULL;
           ALTER TABLE sessions ADD COLUMN models_reason TEXT NULL;`,
   },
+  {
+    version: 25,
+    name: 'projects: drop marked_for_direct_input and permission_mode',
+    // Neither setting is exposed any more: tasks come from a session's own New button, and agents
+    // always launch with the default permission mode. The other project columns are untouched.
+    sql: `ALTER TABLE projects DROP COLUMN marked_for_direct_input;
+          ALTER TABLE projects DROP COLUMN permission_mode;`,
+  },
 ];
 
 /** Applies every migration newer than the database's user_version, each in its own transaction. */

@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import {
   BUILDER_AGENT,
+  DEFAULT_PERMISSION_MODE,
   enabledProvider,
   FolderBusyError,
   pathsOverlap,
@@ -375,7 +376,7 @@ export class SessionRunner {
     const target = await this.launch(s.id, cwd, {
       provider,
       model: launchModel,
-      permissionMode: project.permissionMode,
+      permissionMode: DEFAULT_PERMISSION_MODE,
       resume,
       agentSessionId,
       effort: options.defaults ? s.effort : effortFor(s.rigor, s.effort),
@@ -766,7 +767,7 @@ export class SessionRunner {
         provider: session.provider,
         model:
           (session.provider === 'claude' ? session.models[BUILDER_AGENT]?.model : undefined) ?? session.model,
-        permissionMode: project.permissionMode,
+        permissionMode: DEFAULT_PERMISSION_MODE,
         prompt: text,
         ...(session.agentSessionId ? { agentSessionId: session.agentSessionId } : {}),
         title: session.title,
@@ -847,7 +848,7 @@ export class SessionRunner {
       target = await this.launch(s.id, cwd, {
         provider: 'opencode',
         model: fallbackModel,
-        permissionMode: project.permissionMode,
+        permissionMode: DEFAULT_PERMISSION_MODE,
         prompt,
       });
     } catch (err) {

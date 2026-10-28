@@ -1,7 +1,7 @@
 import { FakeTimers } from '@loop-engineering/ask-human';
-import { FakeClock, openStore, type Question, type Store } from '@loop-engineering/core';
+import { FakeClock, openStore, type Store } from '@loop-engineering/core';
 import {
-  FakeClassifier,
+  FakeFolderSessions,
   FakeMessenger,
   fakeStartSession,
   deliverySentence,
@@ -32,14 +32,18 @@ let store: Store;
 let clock: FakeClock;
 let server: LoopServer;
 let url: string;
-let classifier: FakeClassifier;
 let startSession: ReturnType<typeof fakeStartSession>;
+/** No model calls: no title, and every task stays one session. */
+const noModel = {
+  title: () => Promise.resolve(null),
+  plan: () => Promise.resolve({ parts: [], question: null }),
+};
 /** Stands in for the shared SessionRunner on ctx.runner (startSession, deliverFile). */
 let runner: FakeMessenger & { startSession: typeof startSession };
 let logs: string[];
 
 async function boot(options: RouterModuleOptions = {}, withRunner = true) {
-  const router = routerModule({ classifier, log: (m) => logs.push(m), ...options });
+  const router = routerModule({ classifier: noModel, log: (m) => logs.push(m), ...options });
   server = createServer({
     config,
     store,
@@ -53,7 +57,6 @@ async function boot(options: RouterModuleOptions = {}, withRunner = true) {
 beforeEach(async () => {
   clock = new FakeClock('2026-10-18T09:00:00.000Z');
   store = openStore({ clock });
-  classifier = new FakeClassifier();
   startSession = fakeStartSession(store);
   // FakeMessenger has the runner's deliverFile(sessionId, name, content, sentence) shape.
   runner = Object.assign(new FakeMessenger(), { startSession });
@@ -86,55 +89,14 @@ async function until(cond: () => boolean | Promise<boolean>, what: string): Prom
 }
 
 describe('router module', () => {
-  it('routes a request from ctx.requests.create after the human answers the routing question over REST', async () => {
-    const shop = store.projects.create({ name: 'shop', markedForDirectInput: true });
-    const blog = store.projects.create({ name: 'blog', markedForDirectInput: true });
-    const login = store.sessions.create({
-      projectId: shop.id,
-      title: 'fix login',
-      model: 'opus',
-      branch: 'b1',
-    });
-    classifier.answer = {
-      projectId: shop.id,
-      target: { kind: 'session', sessionId: login.id },
-      confidence: 0.4,
-      candidates: [{ projectId: blog.id, target: { kind: 'new' }, confidence: 0.3 }],
-    };
-
-    const request = server.ctx.requests.create({ text: 'Make the logo bigger', source: 'telegram' });
-
-    let pending: Question[] = [];
-    await until(async () => {
-      pending = (await api<{ questions: Question[] }>('/questions?status=pending')).json.questions;
-      return pending.length === 1;
-    }, 'the routing question');
-    const [question] = pending;
-    expect(question?.text).toMatch(new RegExp(`^Route request #${request.id}: `));
-    expect(question?.options).toEqual([
-      `shop: session 'fix login' (#${login.id})`,
-      'blog: new session',
-      'shop: new session',
-      'Cancel',
-    ]);
-
-    const answered = await api<{ accepted: boolean }>(`/questions/${question!.id}/answer`, {
-      method: 'POST',
-      body: { answer: `shop: session 'fix login' (#${login.id})` },
-    });
-    expect(answered).toMatchObject({ status: 200, json: { accepted: true } });
-
-    await until(() => store.requests.require(request.id).sessionId !== null, 'routing');
-    expect(store.requests.require(request.id)).toMatchObject({ projectId: shop.id, sessionId: login.id });
-    // ctx.runner.deliverFile got the text as file content; the agent only gets the fixed sentence.
-    const name = `request-${request.id}.md`;
-    expect(runner.delivered.map(({ sessionId, name, sentence }) => ({ sessionId, name, sentence }))).toEqual([
-      { sessionId: login.id, name, sentence: deliverySentence(name) },
-    ]);
-    expect(runner.delivered[0]?.content).toContain('Make the logo bigger');
-    expect(runner.delivered[0]?.sentence).not.toContain('logo');
+  it('leaves a request that names no project unrouted, and never asks anyone or starts a session', async () => {
+    store.projects.create({ name: 'shop' });
+    const request = server.ctx.requests.create({ text: 'Make the logo bigger', source: 'dashboard' });
+    await until(() => logs.some((l) => l.includes(`request #${request.id} not routed`)), 'the log line');
+    expect(store.requests.require(request.id)).toMatchObject({ projectId: null, sessionId: null });
+    expect(store.questions.listPending()).toEqual([]);
     expect(startSession.started).toEqual([]);
-    expect(store.history.search('logo', { projectId: shop.id })[0]?.kind).toBe('decision');
+    expect(store.projects.getByName(ROUTER_PROJECT_NAME)).toBeUndefined();
   });
 
   it('gives a dashboard task that names its project a new session there', async () => {
@@ -146,14 +108,16 @@ describe('router module', () => {
     expect(created.status).toBe(201);
     await until(() => store.requests.require(created.json.request.id).sessionId !== null, 'routing');
     expect(startSession.started.map((s) => s.projectId)).toEqual([shop.id]);
-    expect(classifier.inputs).toEqual([]);
   });
 
   it('routes requests stored before the server started', async () => {
     await server.close();
-    const shop = store.projects.create({ name: 'shop', markedForDirectInput: true });
-    const early = store.requests.create({ text: 'Sent while the server was down', source: 'telegram' });
-    classifier.answer = { projectId: shop.id, target: { kind: 'new' }, confidence: 0.9, candidates: [] };
+    const shop = store.projects.create({ name: 'shop' });
+    const early = store.requests.create({
+      text: 'Sent while the server was down',
+      source: 'dashboard',
+      projectId: shop.id,
+    });
     await boot();
     await until(() => store.requests.require(early.id).sessionId !== null, 'routing');
     expect(store.requests.require(early.id).projectId).toBe(shop.id);
@@ -162,22 +126,21 @@ describe('router module', () => {
 
   it('prefers injected startSession and messenger over ctx.runner', async () => {
     await server.close();
-    const shop = store.projects.create({ name: 'shop', markedForDirectInput: true });
+    const shop = store.projects.create({ name: 'shop' });
     const login = store.sessions.create({
       projectId: shop.id,
       title: 'fix login',
       model: 'opus',
       branch: 'b1',
     });
-    classifier.answer = {
-      projectId: shop.id,
-      target: { kind: 'session', sessionId: login.id },
-      confidence: 0.9,
-      candidates: [],
-    };
     const messenger = new FakeMessenger();
-    await boot({ messenger });
-    const request = server.ctx.requests.create({ text: 'More login work', source: 'telegram' });
+    await boot({ messenger, folders: new FakeFolderSessions(store) });
+    const request = server.ctx.requests.create({
+      text: 'More login work',
+      source: 'dashboard',
+      projectId: shop.id,
+      targetSessionId: login.id,
+    });
     await until(() => store.requests.require(request.id).sessionId !== null, 'routing');
     expect(messenger.delivered.map((m) => m.sessionId)).toEqual([login.id]);
     expect(runner.delivered).toEqual([]);
@@ -202,21 +165,20 @@ describe('router module', () => {
       (
         await api(`/projects/${reserved.projectId}`, {
           method: 'PATCH',
-          body: { markedForDirectInput: true },
+          body: { autoMerge: true },
         })
       ).status,
     ).toBe(409);
-    expect(store.projects.get(reserved.projectId)?.markedForDirectInput).toBe(false);
+    expect(store.projects.get(reserved.projectId)?.autoMerge).toBe(false);
   });
 
   it('stays off without a runner, leaving requests for a later start', async () => {
     await server.close();
-    store.projects.create({ name: 'shop', markedForDirectInput: true });
+    const shop = store.projects.create({ name: 'shop' });
     await boot({}, false);
-    const request = server.ctx.requests.create({ text: 'Queued', source: 'telegram' });
+    const request = server.ctx.requests.create({ text: 'Queued', source: 'dashboard', projectId: shop.id });
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(store.requests.require(request.id)).toMatchObject({ projectId: null, sessionId: null });
-    expect(classifier.inputs).toEqual([]);
+    expect(store.requests.require(request.id)).toMatchObject({ projectId: shop.id, sessionId: null });
     expect(logs.join('\n')).toContain('[router] disabled: no session runner');
   });
 });
@@ -227,7 +189,6 @@ describe('router module on a real SessionRunner (fake tmux, git and fs)', () => 
     store.close();
     const h = runnerHarness();
     store = h.store;
-    store.projects.update(h.shop.id, { markedForDirectInput: true });
     const timers = new FakeTimers(new FakeClock('2026-10-18T09:00:00.000Z'));
     server = createServer({
       config,
@@ -235,7 +196,7 @@ describe('router module on a real SessionRunner (fake tmux, git and fs)', () => 
       timers,
       runner: () => h.runner,
       usageMonitor: false,
-      modules: [routerModule({ classifier, log: (m) => logs.push(m) })],
+      modules: [routerModule({ classifier: noModel, log: (m) => logs.push(m) })],
     });
     await server.start();
     expect(server.ctx.runner).toBe(h.runner);
@@ -249,16 +210,14 @@ describe('router module on a real SessionRunner (fake tmux, git and fs)', () => 
     await until(() => store.requests.require(fix.id).sessionId !== null, 'the fix session');
     const session = store.sessions.require(store.requests.require(fix.id).sessionId!);
     expect(session).toMatchObject({ projectId: h.shop.id, status: 'active' });
-    expect(classifier.inputs).toEqual([]);
     expect(store.sessions.list({ projectId: h.shop.id }).map((s) => s.id)).toEqual([session.id]);
 
-    classifier.answer = {
+    const follow = server.ctx.requests.create({
+      text: 'Also bump the cache TTL',
+      source: 'dashboard',
       projectId: h.shop.id,
-      target: { kind: 'session', sessionId: session.id },
-      confidence: 0.9,
-      candidates: [],
-    };
-    const follow = server.ctx.requests.create({ text: 'Also bump the cache TTL', source: 'telegram' });
+      targetSessionId: session.id,
+    });
     await until(() => store.requests.require(follow.id).sessionId === session.id, 'delivery');
 
     const cwd = session.worktrees[0]!.path;
@@ -284,7 +243,7 @@ describe('router module on a real SessionRunner (fake tmux, git and fs)', () => 
       timers: new FakeTimers(new FakeClock('2026-10-18T09:00:00.000Z')),
       runner: () => h.runner,
       usageMonitor: false,
-      modules: [routerModule({ classifier, log: (m) => logs.push(m) })],
+      modules: [routerModule({ classifier: noModel, log: (m) => logs.push(m) })],
     });
     await server.start();
     const ask = (text: string) =>

@@ -39,17 +39,11 @@ export function demoData(now: Date): DemoData {
   const at = (msAgo: number) => new Date(now.getTime() - msAgo).toISOString();
 
   const projects: Project[] = [
-    project(1, 'shop', ['web', 'api'], { autoMerge: false, markedForDirectInput: true }, at(30 * 24 * HOUR)),
-    project(2, 'blog', ['site'], { autoMerge: true, markedForDirectInput: true }, at(20 * 24 * HOUR)),
-    project(
-      3,
-      'infra',
-      ['terraform'],
-      { autoMerge: false, markedForDirectInput: false, permissionMode: 'plan' },
-      at(9 * 24 * HOUR),
-    ),
+    project(1, 'shop', ['web', 'api'], { autoMerge: false }, at(30 * 24 * HOUR)),
+    project(2, 'blog', ['site'], { autoMerge: true }, at(20 * 24 * HOUR)),
+    project(3, 'infra', ['terraform'], { autoMerge: false }, at(9 * 24 * HOUR)),
     {
-      ...project(4, 'resume', [], { autoMerge: false, markedForDirectInput: true }, at(2 * 24 * HOUR)),
+      ...project(4, 'resume', [], { autoMerge: false }, at(2 * 24 * HOUR)),
       kind: 'folder',
       folderPath: '/Users/demo/resume',
     },
@@ -672,7 +666,7 @@ function project(
   id: number,
   name: string,
   repos: string[],
-  flags: { autoMerge: boolean; markedForDirectInput: boolean; permissionMode?: string },
+  flags: { autoMerge: boolean },
   createdAt: string,
 ): Project {
   return {
@@ -682,8 +676,6 @@ function project(
     folderPath: null,
     repos: repos.map((r) => ({ name: r })),
     autoMerge: flags.autoMerge,
-    markedForDirectInput: flags.markedForDirectInput,
-    permissionMode: flags.permissionMode ?? 'auto',
     createdAt,
   };
 }

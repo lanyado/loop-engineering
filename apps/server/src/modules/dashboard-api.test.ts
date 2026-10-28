@@ -122,28 +122,20 @@ describe('projects', () => {
     expect(created.json.project).toMatchObject({
       name: 'shop',
       autoMerge: false,
-      markedForDirectInput: false,
-      permissionMode: 'auto',
     });
+    expect(created.json.project).not.toHaveProperty('markedForDirectInput');
+    expect(created.json.project).not.toHaveProperty('permissionMode');
     const id = created.json.project.id as number;
 
     expect((await call('GET', '/projects')).json.projects).toHaveLength(1);
     expect((await call('GET', `/projects/${id}`)).json.project.repos).toEqual([repo]);
 
-    const toggled = await call('PATCH', `/projects/${id}`, { autoMerge: true, markedForDirectInput: true });
-    expect(toggled.json.project).toMatchObject({ autoMerge: true, markedForDirectInput: true });
+    const toggled = await call('PATCH', `/projects/${id}`, { autoMerge: true });
+    expect(toggled.json.project).toMatchObject({ autoMerge: true });
     expect(store.projects.require(id).autoMerge).toBe(true);
-    const mode = await call('PATCH', `/projects/${id}`, { permissionMode: 'acceptEdits' });
-    expect(mode.json.project.permissionMode).toBe('acceptEdits');
-    // bypassPermissions is a local-only setting: the dashboard can never turn it on.
-    const bypass = await call('PATCH', `/projects/${id}`, { permissionMode: 'bypassPermissions' });
-    expect(bypass.status).toBe(400);
-    expect(bypass.json.error).toMatch(/only be set locally/);
-    expect((await call('POST', '/projects', { name: 'x', permissionMode: 'bypassPermissions' })).status).toBe(
-      400,
-    );
-    expect(store.projects.require(id).permissionMode).toBe('acceptEdits');
-
+    // The removed settings are unknown fields now.
+    for (const gone of [{ markedForDirectInput: true }, { permissionMode: 'plan' }])
+      expect((await call('PATCH', `/projects/${id}`, gone)).status).toBe(400);
     expect((await call('DELETE', `/projects/${id}`)).json).toEqual({ deleted: true });
     expect((await call('GET', `/projects/${id}`)).status).toBe(404);
     expect((await call('DELETE', `/projects/${id}`)).status).toBe(404);
@@ -215,8 +207,6 @@ describe('folder projects', () => {
       name: 'resume',
       kind: 'folder',
       folderPath: join(home, 'cv'),
-      markedForDirectInput: true,
-      permissionMode: 'acceptEdits',
       autoMerge: true,
     });
     expect(created.status).toBe(201);
@@ -227,8 +217,6 @@ describe('folder projects', () => {
       repos: [],
       envFiles: [],
       autoMerge: true,
-      markedForDirectInput: true,
-      permissionMode: 'acceptEdits',
     });
     const id = created.json.project.id as number;
     expect((await call('GET', '/projects')).json.projects[0]).toMatchObject({ kind: 'folder' });
@@ -239,9 +227,6 @@ describe('folder projects', () => {
       expect(res.json.error).toMatch(/cannot be changed/);
     }
     expect((await call('PATCH', `/projects/${id}`, { repos: [repo] })).json.error).toMatch(/no repos/);
-    expect((await call('PATCH', `/projects/${id}`, { permissionMode: 'bypassPermissions' })).status).toBe(
-      400,
-    );
     expect((await call('PATCH', `/projects/${id}`, { autoMerge: false })).json.project.autoMerge).toBe(false);
     expect(store.projects.require(id)).toMatchObject({ kind: 'folder', folderPath: join(home, 'resume') });
     // A git project still defaults to kind git.
@@ -274,7 +259,7 @@ describe('folder projects', () => {
       [folder(join(home, 'repo')), /git repository.*allowGitFolder/],
       [folder(join(home, 'notes'), { repos: [repo] }), /repos/],
       [folder(join(home, 'notes'), { envFiles: [] }), /envFiles/],
-      [folder(join(home, 'notes'), { permissionMode: 'bypassPermissions' }), /only be set locally/],
+      [folder(join(home, 'notes'), { permissionMode: 'plan' }), /permissionMode/],
       [folder(join(home, 'notes'), { allowGitFolder: 'yes' }), /allowGitFolder/],
       [{ name: 'p', kind: 'svn' }, /kind/],
       [{ name: 'p', kind: 'git', folderPath: join(home, 'notes') }, /folderPath/],
@@ -683,19 +668,19 @@ describe('requests', () => {
     expect((await call('GET', `/requests?projectId=${shop.id}`)).json.requests).toHaveLength(2);
   });
 
-  it('creates tasks without a project for the router to place, and announces every task', async () => {
+  it('announces every task, and refuses one that names neither a project nor a session', async () => {
     seed();
     const events: { type: string }[] = [];
     server.ctx.bus.onAny((e) => {
       events.push(e);
     });
-    const unrouted = await call('POST', '/requests', { text: 'Fix flaky CI' });
-    expect(unrouted.status).toBe(201);
-    expect(unrouted.json.request).toMatchObject({ projectId: null, source: 'dashboard' });
-    expect((await call('POST', '/requests', { text: 'x', projectId: null })).status).toBe(201);
-    expect((await call('GET', '/requests?projectId=none')).json.requests).toHaveLength(2);
+    const shop = store.projects.list()[0]!;
+    expect((await call('POST', '/requests', { text: 'Fix flaky CI' })).status).toBe(400);
+    expect((await call('POST', '/requests', { text: 'x', projectId: null })).status).toBe(400);
+    expect((await call('POST', '/requests', { text: 'x', projectId: shop.id })).status).toBe(201);
+    expect((await call('GET', '/requests?projectId=none')).json.requests).toHaveLength(0);
     // Through ctx.requests: the router hears about dashboard tasks.
-    expect(events.filter((e) => e.type === 'request.created')).toHaveLength(2);
+    expect(events.filter((e) => e.type === 'request.created')).toHaveLength(1);
   });
 
   it('rejects invalid requests', async () => {
@@ -833,7 +818,6 @@ describe('settings', () => {
       { telegramAllowlist: 123 },
       { telegramAllowlist: Array.from({ length: 201 }, (_, i) => i + 1) },
       { sessionModel: '' },
-      { permissionMode: 'auto' },
       { sessionModel: 'x', unknown: 1 },
       { dashboardLayout: [] },
       { dashboardLayout: 'x' },

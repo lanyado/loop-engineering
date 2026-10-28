@@ -257,10 +257,7 @@ describe('HttpBackend against the real server', () => {
       projectId: project!.id,
       source: 'dashboard',
     });
-    expect(await backend.createRequest({ text: 'Anywhere', projectId: null })).toMatchObject({
-      projectId: null,
-      source: 'dashboard',
-    });
+    await expect(backend.createRequest({ text: 'Anywhere', projectId: 0 })).rejects.toBeInstanceOf(Error);
   });
 
   it('turns server errors into BackendError with the server message', async () => {

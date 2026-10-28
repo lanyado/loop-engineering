@@ -1,32 +1,5 @@
 import type { Session, Store } from '@loop-engineering/core';
-import type {
-  Classifier,
-  ClassifyInput,
-  FolderSessions,
-  FolderSessionState,
-  SessionMessenger,
-  StartSession,
-} from './types.js';
-
-/** A canned answer, or a function computing one from the input. */
-type Answer = unknown;
-type AnswerFn = (input: ClassifyInput, signal: AbortSignal) => unknown;
-
-/** Classifier for tests: returns (or computes) a canned answer and records every input. */
-export class FakeClassifier implements Classifier {
-  readonly inputs: ClassifyInput[] = [];
-
-  constructor(public answer: Answer = null) {}
-
-  classify(input: ClassifyInput, signal: AbortSignal): Promise<unknown> {
-    this.inputs.push(input);
-    const answer = this.answer;
-    // Like an async function: a throwing answer function becomes a rejection.
-    return new Promise((resolve) =>
-      resolve(typeof answer === 'function' ? (answer as AnswerFn)(input, signal) : answer),
-    );
-  }
-}
+import type { FolderSessions, FolderSessionState, SessionMessenger, StartSession } from './types.js';
 
 /** Messenger for tests: keeps each delivered file and sentence in memory; `fail` makes it throw. */
 export class FakeMessenger implements SessionMessenger {
