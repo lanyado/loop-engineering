@@ -18,7 +18,7 @@ Why this order: M1 fixes the data model every other piece shares. M2–M4 and M7
 
 ## Follow-ups (non-blocking review notes, not yet done)
 
-- Runner: escalate actions blocked by the permission mode to ask_human (pending human decision on the permission mode).
+- Runner: escalate actions blocked by the permission mode to ask_human.
 - Runner: switch a session back from OpenCode to Claude when the usage limit resets.
 - Runner: verify on the first real fallback that `OPENCODE_CONFIG_CONTENT` wins over a repo's `opencode.json`, including keys the runner doesn't set (e.g. `github_*`).
 - Runner: OpenCode tool timeout for a 15-minute blocking ask_human is unconfirmed.

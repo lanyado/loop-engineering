@@ -240,7 +240,7 @@ export class Router {
     if (store.requests.parts(requestId).length > 0) return { status: 'skipped', reason: 'split into parts' };
     // A project given up front (dashboard form, a PR-loop fix request, or a project the router already
     // picked before a failed start) skips selection: the request gets a new session there, whether
-    // or not the project is marked for direct input (naming it is an explicit choice).
+    // not (naming the project is what routes it).
     if (request.projectId !== null) {
       if (request.projectId === routerProjectId(store)) {
         this.log(`[router] request #${requestId} not routed: it names the reserved router project`);

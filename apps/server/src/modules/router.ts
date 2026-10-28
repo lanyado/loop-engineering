@@ -25,7 +25,7 @@ export interface RouterModuleOptions {
 }
 
 /**
- * Direct-input routing as a server module: every request.created (dashboard, PR loop)
+ * Request routing as a server module: every request.created (dashboard, PR loop)
  * gets a project and session, and requests stored while the server was down are routed on start.
  * It uses the server's one shared runner (`ctx.runner`) and never builds its own; without a runner
  * (and no startSession/messenger given) it stays off, and requests wait for a later start.
