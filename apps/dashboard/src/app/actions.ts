@@ -128,10 +128,10 @@ export async function applyEdits(edits: unknown): Promise<ActionResult> {
   });
 }
 
-export async function createRequest(text: string, projectId: number | null): Promise<ActionResult> {
+export async function createRequest(text: string, projectId: number): Promise<ActionResult> {
   return write(newRequestInput, { text, projectId }, async (d, backend) => {
-    const request = await backend.createRequest(d);
-    return request.projectId === null ? 'Sent. The router will pick a project.' : 'Sent.';
+    await backend.createRequest(d);
+    return 'Sent.';
   });
 }
 

@@ -32,7 +32,7 @@ export function ensureRouterSession(store: Store): Session {
     // Project names are unique; a user project may already have the usual name.
     let name = ROUTER_PROJECT_NAME;
     for (let n = 2; store.projects.getByName(name); n++) name = `${ROUTER_PROJECT_NAME} ${n}`;
-    const project = store.projects.create({ name, markedForDirectInput: false });
+    const project = store.projects.create({ name });
     const session = store.sessions.create({
       projectId: project.id,
       title: ROUTER_SESSION_TITLE,

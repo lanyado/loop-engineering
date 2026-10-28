@@ -5,7 +5,6 @@ import type {
   Timers,
   Unsubscribe,
 } from '@loop-engineering/ask-human';
-import { basename } from 'node:path';
 import {
   errorMessage,
   FolderBusyError,
@@ -18,36 +17,19 @@ import {
   type Store,
 } from '@loop-engineering/core';
 import type { Plan, RequestPart } from './prompt.js';
-import { validateClassification, type Verdict } from './classification.js';
 import { buildOptions, CANCEL_OPTION, decodeAnswer, type Decoded } from './options.js';
 import { ensureRouterSession, findRouterSession, routerProjectId } from './system.js';
-import type {
-  Classifier,
-  ClassifyInput,
-  FolderSessions,
-  RouteChoice,
-  SessionMessenger,
-  StartSession,
-} from './types.js';
+import type { FolderSessions, RouteChoice, SessionMessenger, StartSession } from './types.js';
 
 export interface RouterConfig {
-  /** Classifier confidence at or above which the router routes without asking. Default 0.75. */
-  confidenceThreshold: number;
-  /** A classification that takes longer counts as unclear. Default 60 s. */
+  /** The Plan stage's planning call gives up after this long (one session). Default 60 s. */
   classifierTimeoutMs: number;
-  /** Routing questions per request: one, plus one re-ask if the answer matched nothing. Default 2. */
-  maxQuestionsPerRequest: number;
-  /** Latest requests per project shown to the classifier. Default 5. */
-  recentRequests: number;
   /**
-   * Classifications and deliveries (session starts) running at once, so a backlog does not start
+   * Plans and deliveries (session starts) running at once, so a backlog does not start
    * many sessions (git worktree adds, agents) together. Waiting for a human holds no slot. Default 2.
    */
   concurrency: number;
-  /**
-   * How often requests without a project are retried, e.g. once a project is marked for direct
-   * input. 0 turns it off. Default 5 minutes.
-   */
+  /** How often requests still waiting (a busy folder) are retried. 0 turns it off. Default 5 minutes. */
   rescanIntervalMs: number;
   /**
    * How long the human has to answer a clarifying question from the planner (Plan stage); the
@@ -58,10 +40,7 @@ export interface RouterConfig {
 }
 
 export const DEFAULT_ROUTER_CONFIG: RouterConfig = {
-  confidenceThreshold: 0.75,
   classifierTimeoutMs: 60_000,
-  maxQuestionsPerRequest: 2,
-  recentRequests: 5,
   concurrency: 2,
   rescanIntervalMs: 5 * 60_000,
   planTimeoutMs: 5 * 60_000,
@@ -71,7 +50,6 @@ export interface RouterDeps {
   store: Store;
   bus: QuestionBus;
   questions: QuestionService;
-  classifier: Classifier;
   startSession: StartSession;
   messenger: SessionMessenger;
   /**
@@ -91,10 +69,7 @@ export interface RouterDeps {
 }
 
 /** How a routing decision was made, for the history entry. */
-type How =
-  | { by: 'preset' }
-  | { by: 'classifier'; confidence: number; reason: string | null }
-  | { by: 'human'; question: Question };
+type How = { by: 'preset' } | { by: 'human'; question: Question };
 
 export type RouteOutcome =
   | { status: 'routed'; projectId: number; sessionId: number; newSession: boolean }
@@ -103,7 +78,7 @@ export type RouteOutcome =
   | { status: 'cancelled' }
   /** Split into parts, each routed as its own request (`parts`: their ids). */
   | { status: 'split'; projectId: number; parts: number[] }
-  /** Not routed this time (nothing eligible, a failure, or the router stopped); a later run retries. */
+  /** Not routed this time (it names no project, a failure, or the router stopped); a later run retries. */
   | { status: 'unrouted'; reason: string };
 
 /** Work that waits for the human: runs outside every slot, and takes a slot again for its own work. */
@@ -135,7 +110,7 @@ export const END_AND_START_FRESH = 'End it and start fresh';
 const REQUEST_EXCERPT = 2000;
 /** Rounds a folder request gets (deliver, resume, end-then-start, start races) before the human is asked. */
 const FOLDER_ATTEMPTS = 4;
-const NO_MARKED = 'no project is marked for direct input';
+const NO_PROJECT = 'the request names no project';
 
 /** Where the runner's deliverFile puts a file, relative to the agent's working folder. */
 export const DELIVERY_DIR = '.loop';
@@ -146,9 +121,9 @@ export function deliverySentence(name: string): string {
 }
 
 /**
- * Routes each new request (dashboard, other channels, PR loop) to a project and session: a request that
- * names its project gets a new session there; otherwise the classifier picks among the projects
- * marked for direct input, and the human is asked when it is unsure.
+ * Routes each new request (dashboard, PR loop) to a project and session: a request names its project
+ * (and optionally one of its sessions) and gets a session there. A request that names no project is
+ * left unrouted: nothing guesses a project for it.
  *
  * Routing state lives in the store, so it survives restarts: a request is routed once it has a
  * session; a routing question is linked to its request (questions.request_id). Within one process, a
@@ -188,7 +163,7 @@ export class Router {
     return this.routePending();
   }
 
-  /** Stops listening; in-flight classifications and question waits end (their requests stay unrouted). */
+  /** Stops listening; in-flight plans and question waits end (their requests stay unrouted). */
   async stop(): Promise<void> {
     this.unsubscribe?.();
     this.unsubscribe = null;
@@ -204,8 +179,8 @@ export class Router {
   }
 
   /**
-   * Routes every request without a session (`onlyUnrouted`: only those without a project too, plus
-   * those queued for a busy folder project), except ones already settled: cancelled by the human, or
+   * Routes every request without a session (`onlyUnrouted`: only those queued for a busy folder
+   * project; a request without a project is never retried), except ones already settled: cancelled by the human, or
    * given up after unmatched answers.
    */
   routePending(onlyUnrouted = false): Promise<RouteOutcome[]> {
@@ -222,24 +197,23 @@ export class Router {
         (r) =>
           r.sessionId === null &&
           store.requests.parts(r.id).length === 0 &&
-          (!onlyUnrouted || r.projectId === null || folderProjects.has(r.projectId)) &&
+          (!onlyUnrouted || (r.projectId !== null && folderProjects.has(r.projectId))) &&
           !this.isSettled(r),
       );
-    return Promise.all(pending.map((r) => this.route(r.id, true))).then((outcomes) => {
-      const waiting = outcomes.filter((o) => o.status === 'unrouted' && o.reason === NO_MARKED).length;
-      if (waiting > 0) this.log(`[router] ${waiting} request(s) not routed: ${NO_MARKED}`);
+    return Promise.all(pending.map((r) => this.route(r.id))).then((outcomes) => {
+      const waiting = outcomes.filter((o) => o.status === 'unrouted' && o.reason === NO_PROJECT).length;
+      if (waiting > 0) this.log(`[router] ${waiting} request(s) not routed: ${NO_PROJECT}`);
       return outcomes;
     });
   }
 
   /**
-   * Routes one request. Never throws; concurrent calls for the same request share one run. `inScan`:
-   * the caller (a scan) logs the "no marked project" case once for all its requests.
+   * Routes one request. Never throws; concurrent calls for the same request share one run.
    */
-  route(requestId: number, inScan = false): Promise<RouteOutcome> {
+  route(requestId: number): Promise<RouteOutcome> {
     const running = this.inFlight.get(requestId);
     if (running) return running;
-    const run = this.routeNow(requestId, inScan)
+    const run = this.routeNow(requestId)
       .catch((error: unknown): RouteOutcome => {
         this.log(`[router] request #${requestId}: ${errorMessage(error)}`);
         return { status: 'unrouted', reason: errorMessage(error) };
@@ -258,7 +232,7 @@ export class Router {
     }, this.config.rescanIntervalMs);
   }
 
-  private async routeNow(requestId: number, inScan: boolean): Promise<RouteOutcome> {
+  private async routeNow(requestId: number): Promise<RouteOutcome> {
     const { store } = this.deps;
     const request = store.requests.get(requestId);
     if (!request) return { status: 'skipped', reason: 'no such request' };
@@ -277,7 +251,7 @@ export class Router {
       const asked = this.routingQuestions(requestId).filter((q) => !this.isPlanQuestion(q));
       if (this.isSettled(request)) return { status: 'cancelled' };
       if (asked[0]?.status === 'pending') {
-        return this.afterQuestion(request, await this.settled(asked[0]), asked.length);
+        return this.afterQuestion(request, await this.settled(asked[0]));
       }
       // Addressed to one session (dashboard "+" on it): deliver there. If it has ended since,
       // deliver() gives the request a new session in the same project, so it is never dropped.
@@ -297,32 +271,13 @@ export class Router {
         ? { status: 'cancelled' }
         : { status: 'unrouted', reason: 'no routing questions left; answers matched no option' };
     }
-    if (latest) return this.onAnswered(request, await this.settled(latest), asked.length);
+    if (latest) return this.onAnswered(request, await this.settled(latest));
 
-    const eligible = this.eligible();
-    if (eligible.length === 0) {
-      if (!inScan) this.log(`[router] request #${requestId} not routed: ${NO_MARKED}`);
-      return { status: 'unrouted', reason: NO_MARKED };
-    }
-    const input = this.classifyInput(request, eligible);
-    const verdict = await this.withSlot(() => this.classify(input));
-    if (this.abort.signal.aborted) return { status: 'unrouted', reason: 'router stopped' };
-    if (verdict.kind === 'confident') {
-      return this.apply(request, verdict.choice, {
-        by: 'classifier',
-        confidence: verdict.confidence,
-        reason: verdict.reason,
-      });
-    }
-    const question = this.ask(request, verdict.candidates, verdict.why, 0, eligible);
-    return this.onAnswered(request, await this.settled(question), 1);
+    this.log(`[router] request #${requestId} not routed: ${NO_PROJECT}`);
+    return { status: 'unrouted', reason: NO_PROJECT };
   }
 
-  private async onAnswered(
-    request: Request,
-    question: Question | null,
-    asked: number,
-  ): Promise<RouteOutcome> {
+  private async onAnswered(request: Request, question: Question | null): Promise<RouteOutcome> {
     if (!question) return { status: 'unrouted', reason: 'router stopped' };
     const answer = question.answer ?? question.recommendedOption;
     const decoded = this.decode(question);
@@ -331,17 +286,12 @@ export class Router {
       return { status: 'cancelled' };
     }
     if (decoded.kind === 'route') return this.apply(request, decoded.choice, { by: 'human', question });
-    if (asked >= this.config.maxQuestionsPerRequest) {
-      this.log(`[router] request #${request.id} not routed: answer "${answer}" matched no option`);
-      this.recordUnrouted(
-        request,
-        `Left request #${request.id} unrouted: answer "${answer}" matched no option.`,
-      );
-      return { status: 'unrouted', reason: `answer "${answer}" matched no option` };
-    }
-    const why = `"${answer.slice(0, 200)}" did not match an option`;
-    const next = this.ask(request, [], why, asked, this.eligible());
-    return this.onAnswered(request, await this.settled(next), asked + 1);
+    this.log(`[router] request #${request.id} not routed: answer "${answer}" matched no option`);
+    this.recordUnrouted(
+      request,
+      `Left request #${request.id} unrouted: answer "${answer}" matched no option.`,
+    );
+    return { status: 'unrouted', reason: `answer "${answer}" matched no option` };
   }
 
   private decode(question: Question): Decoded {
@@ -349,20 +299,13 @@ export class Router {
     return decodeAnswer(answer, question.options, this.projects(), this.deps.store);
   }
 
-  /** Cancelled, or given up after the last allowed question: the scans leave it alone. */
+  /** Cancelled, or answered with something that matched no option: the scans leave it alone. */
   private isSettled(request: Request): boolean {
-    // Filter out Plan questions so they don't inflate maxQuestionsPerRequest accounting
-    // and don't get decoded (they decode as 'unknown').
-    const asked = this.routingQuestions(request.id).filter((q) => !this.isPlanQuestion(q));
-    const latest = asked[0];
+    // Plan questions are not routing questions (they would decode as 'unknown').
+    const latest = this.routingQuestions(request.id).find((q) => !this.isPlanQuestion(q));
     if (!latest || latest.status === 'pending') return false;
-    const decoded = this.decode(latest);
-    // A request with a project is only ever asked about when its folder could not take it.
-    if (request.projectId !== null) return decoded.kind === 'cancel';
-    return (
-      decoded.kind === 'cancel' ||
-      (decoded.kind === 'unknown' && asked.length >= this.config.maxQuestionsPerRequest)
-    );
+    // An answer that matched no option is final too: the request stays unrouted.
+    return this.decode(latest).kind !== 'route';
   }
 
   /** The question once answered or defaulted; null if the router stopped first. */
@@ -374,30 +317,6 @@ export class Router {
       if (this.abort.signal.aborted) return null;
       throw error;
     }
-  }
-
-  private ask(
-    request: Request,
-    candidates: RouteChoice[],
-    why: string,
-    askedBefore: number,
-    eligible: { project: Project; sessions: Session[] }[],
-  ): Question {
-    const { store, questions } = this.deps;
-    const { options, recommended } = buildOptions(candidates, eligible, store);
-    const excerpt =
-      request.text.length > REQUEST_EXCERPT ? `${request.text.slice(0, REQUEST_EXCERPT)}…` : request.text;
-    const again = askedBefore > 0 ? ' (asked again)' : '';
-    const { question } = questions.ask({
-      sessionId: ensureRouterSession(store).id,
-      requestId: request.id,
-      origin: 'router',
-      text: `Route request #${request.id}${again}: which project and session should it go to?\n\n${excerpt}`,
-      context: `From ${request.source}. Not routed automatically: ${why}.`,
-      options,
-      recommendedOption: recommended,
-    });
-    return question;
   }
 
   /** Routing questions asked for a request, newest first. */
@@ -441,34 +360,6 @@ export class Router {
     return question.text.startsWith(PLAN_QUESTION_MARKER);
   }
 
-  private async classify(input: ClassifyInput): Promise<Verdict> {
-    const { timers, classifier } = this.deps;
-    const controller = new AbortController();
-    const onStop = () => controller.abort(this.abort.signal.reason);
-    this.abort.signal.addEventListener('abort', onStop, { once: true });
-    let timer: TimerHandle | undefined;
-    const timedOut = new Promise<'timeout'>((resolve) => {
-      timer = timers.setTimeout(() => {
-        controller.abort(new Error('classifier timed out'));
-        resolve('timeout');
-      }, this.config.classifierTimeoutMs);
-    });
-    try {
-      // Raced, so a classifier that ignores its signal still cannot hold the request.
-      const raw = await Promise.race([classifier.classify(input, controller.signal), timedOut]);
-      if (raw === 'timeout') {
-        return { kind: 'unclear', candidates: [], why: 'the classifier timed out' };
-      }
-      return validateClassification(raw, input, this.config.confidenceThreshold);
-    } catch (error) {
-      this.log(`[router] classifier failed for request #${input.request.id}: ${errorMessage(error)}`);
-      return { kind: 'unclear', candidates: [], why: 'the classifier failed' };
-    } finally {
-      if (timer !== undefined) timers.clearTimeout(timer);
-      this.abort.signal.removeEventListener('abort', onStop);
-    }
-  }
-
   private apply(request: Request, choice: RouteChoice, how: How): Promise<RouteOutcome> {
     return this.inSlot(() => this.deliver(request, choice, how));
   }
@@ -495,10 +386,10 @@ export class Router {
 
   /** Handles an answered routing question: a manual-pause question or a destination question.
    * Plan questions are filtered out in routeNow before calling this, so they never reach here. */
-  private afterQuestion(request: Request, question: Question | null, asked: number): Promise<RouteOutcome> {
+  private afterQuestion(request: Request, question: Question | null): Promise<RouteOutcome> {
     if (!question) return Promise.resolve({ status: 'unrouted', reason: 'router stopped' });
     if (question.options.includes(RESUME_AND_DELIVER)) return this.onManualPauseAnswer(request, question);
-    return this.onAnswered(request, question, asked);
+    return this.onAnswered(request, question);
   }
 
   /**
@@ -742,12 +633,7 @@ export class Router {
     });
     return {
       status: 'deferred',
-      next: async () =>
-        this.onAnswered(
-          request,
-          await this.settled(question),
-          this.routingQuestions(request.id).filter((q) => !this.isPlanQuestion(q)).length,
-        ),
+      next: async () => this.onAnswered(request, await this.settled(question)),
     };
   }
 
@@ -944,42 +830,6 @@ export class Router {
     const reserved = routerProjectId(this.deps.store);
     return this.deps.store.projects.list().filter((p) => p.id !== reserved);
   }
-
-  /** Projects marked for direct input, each with its open sessions (newest first). */
-  private eligible(): { project: Project; sessions: Session[] }[] {
-    const { store } = this.deps;
-    const reserved = routerProjectId(store);
-    return store.projects
-      .list({ markedForDirectInput: true })
-      .filter((p) => p.id !== reserved)
-      .map((project) => ({
-        project,
-        sessions: store.sessions.list({ projectId: project.id, status: ['active', 'paused'] }),
-      }));
-  }
-
-  private classifyInput(
-    request: Request,
-    eligible: { project: Project; sessions: Session[] }[],
-  ): ClassifyInput {
-    const { store } = this.deps;
-    return {
-      request: { id: request.id, text: request.text },
-      projects: eligible.map(({ project, sessions }) => ({
-        id: project.id,
-        name: project.name,
-        kind: project.kind,
-        ...(project.kind === 'folder' && project.folderPath ? { folder: basename(project.folderPath) } : {}),
-        repos: project.repos.map((r) => r.name),
-        recentRequests: store.requests
-          .list({ projectId: project.id })
-          .slice(-this.config.recentRequests)
-          .reverse()
-          .map((r) => (r.text.trim().split('\n')[0] ?? '').slice(0, 120)),
-        sessions: sessions.map((s) => ({ id: s.id, title: s.title, branch: s.branch, status: s.status })),
-      })),
-    };
-  }
 }
 
 /** The file an open session reads. */
@@ -998,9 +848,6 @@ function describeHow(how: How, request: Request): string {
     return request.targetSessionId === null
       ? 'The request named its project.'
       : 'The human addressed it to this session.';
-  if (how.by === 'classifier') {
-    return `Classifier, ${Math.round(how.confidence * 100)}% sure${how.reason ? `: ${how.reason}` : '.'}`;
-  }
   return `${capitalize(answeredBy(how.question))}.`;
 }
 

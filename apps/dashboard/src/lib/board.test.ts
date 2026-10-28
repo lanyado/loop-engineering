@@ -47,8 +47,6 @@ const project = (id: number, sessions: TreeSession[], kind: 'git' | 'folder' = '
   folderPath: kind === 'folder' ? `/Users/me/p${id}` : null,
   repos: kind === 'git' ? [{ name: 'web' }] : [],
   autoMerge: false,
-  markedForDirectInput: true,
-  permissionMode: 'auto',
   createdAt: '2026-10-01T00:00:00.000Z',
   sessions,
 });

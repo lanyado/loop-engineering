@@ -1,4 +1,4 @@
-import type { ProjectKind, Session, SessionStatus } from '@loop-engineering/core';
+import type { Session } from '@loop-engineering/core';
 
 /** Where a request goes inside its project: an open session, or a new one. */
 export type RouteTarget = { kind: 'session'; sessionId: number } | { kind: 'new' };
@@ -7,52 +7,6 @@ export type RouteTarget = { kind: 'session'; sessionId: number } | { kind: 'new'
 export interface RouteChoice {
   projectId: number;
   target: RouteTarget;
-}
-
-export interface ClassifierSession {
-  id: number;
-  title: string;
-  branch: string;
-  status: SessionStatus;
-}
-
-export interface ClassifierProject {
-  id: number;
-  name: string;
-  /** "folder": a plain folder of files edited in place (no repos, at most one open session). */
-  kind: ProjectKind;
-  /** A folder project's folder name (last path segment, e.g. "resume"); absent for git projects. */
-  folder?: string;
-  /** Repo names (none for a folder project). */
-  repos: string[];
-  /** First lines of the project's latest requests, newest first. */
-  recentRequests: string[];
-  /** Open (active or paused) sessions, newest first. */
-  sessions: ClassifierSession[];
-}
-
-/** What the classifier sees: the request and the projects marked for direct input. */
-export interface ClassifyInput {
-  request: { id: number; text: string };
-  projects: ClassifierProject[];
-}
-
-/**
- * The output the classifier is asked for. A classifier's answer is untrusted: the router checks it
- * with validateClassification() and treats anything malformed, or any unknown id, as unclear.
- */
-export interface ClassifierOutput {
-  projectId: number | null;
-  target: RouteTarget;
-  confidence: number;
-  candidates: { projectId: number; target: RouteTarget; confidence?: number }[];
-  reason?: string;
-}
-
-/** Picks the project and session for a request. The real one is CliClassifier; FakeClassifier in tests. */
-export interface Classifier {
-  /** Resolves with the raw (unvalidated) output. Should stop work when `signal` aborts. */
-  classify(input: ClassifyInput, signal: AbortSignal): Promise<unknown>;
 }
 
 /**

@@ -1,6 +1,6 @@
-export { extractJson, sameChoice, validateClassification, type Verdict } from './classification.js';
+export { extractJson, sameChoice } from './classification.js';
 export { CliClassifier, ClassifierError, type CliClassifierOptions } from './cli-classifier.js';
-export { FakeClassifier, FakeFolderSessions, FakeMessenger, fakeStartSession } from './fakes.js';
+export { FakeFolderSessions, FakeMessenger, fakeStartSession } from './fakes.js';
 export {
   buildOptions,
   CANCEL_OPTION,
@@ -9,16 +9,7 @@ export {
   optionLabel,
   type Decoded,
 } from './options.js';
-export {
-  buildClassifierPrompt,
-  buildSplitPrompt,
-  cleanParts,
-  cleanPlan,
-  CLASSIFICATION_SCHEMA,
-  MAX_PARTS,
-  type Plan,
-  type RequestPart,
-} from './prompt.js';
+export { buildSplitPrompt, cleanParts, cleanPlan, MAX_PARTS, type Plan, type RequestPart } from './prompt.js';
 export {
   DEFAULT_ROUTER_CONFIG,
   DELIVERY_DIR,
@@ -38,11 +29,6 @@ export {
   routerProjectId,
 } from './system.js';
 export type {
-  Classifier,
-  ClassifierOutput,
-  ClassifierProject,
-  ClassifierSession,
-  ClassifyInput,
   FolderSessions,
   FolderSessionState,
   RouteChoice,

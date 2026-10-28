@@ -17,7 +17,6 @@ Hierarchy: Projects → Sessions → Subagents.
 - Searchable history of past sessions (transcripts + decisions) that new sessions can search
 - ENV VARS: local .env files on the Mac, copied into each session's worktree
 - Auto-merge on/off
-- Marked for direct input on/off (set manually in the dashboard)
 
 ## Session (main context window)
 - Main ownership; runs on the strongest model
@@ -31,7 +30,7 @@ Hierarchy: Projects → Sessions → Subagents.
 1. **Input.** Questions from subagents are shown in every channel that is set up; the first answer wins and the others get an "answered: X" confirmation. Proactive notifications only when a question is waiting.
    1. Other channels (private local add-ins): answer questions and send new tasks (routed per step 2).
    2. Web dashboard (usable from phone): pending questions inbox; projects → sessions → subagents tree; PR pipeline (tests, review, QA, merge); loop metrics per PR (cost, tokens, rounds, failures, outcome); settings toggles (auto-merge, marked for direct input, …).
-2. **Direct input (AI)** to the right project among marked projects, and to an open session or a new one. If unclear, ask the human with the likely projects/sessions as options.
+2. **Input to a project**: a task names its project (the session's own + button, or an add-in) and gets a new session there, or goes into its open session. The Planner asks the human only when the task is genuinely ambiguous.
 3. **Tests:** run relevant existing unit & integration tests, add more if needed. The builder writes tests for its changes as part of building. If tests fail, back to the building agent.
 4. **Code review agent** writes comments on the PR; runs only after tests pass. The reviewer also has the user's request and checks everything in it was handled. Stops when the reviewer has no comments left, or after 5 rounds, when the PR is sent to the human with the open comments/failures.
 5. **Manual QA** with Playwright MCP, when the AI judges the PR needs it **(AI)**. Runs after review approves.

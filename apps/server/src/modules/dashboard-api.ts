@@ -5,7 +5,6 @@ import {
   checkReposAgainstFolders,
   HISTORY_KINDS,
   secretValues,
-  PERMISSION_MODES,
   PR_STAGES,
   BUILDER_AGENT,
   isAgentId,
@@ -32,11 +31,10 @@ import { idParam as id } from '../ids.js';
  * The dashboard's read/write API, mounted under the authenticated /api (DASHBOARD_TOKEN):
  *
  *   GET    /projects                         { projects }
- *   POST   /projects                         git project: { name, kind?: 'git', repos?, envFiles?, autoMerge?,
- *                                              markedForDirectInput?, permissionMode? }
+ *   POST   /projects                         git project: { name, kind?: 'git', repos?, envFiles?, autoMerge? }
  *                                            folder project: { name, kind: 'folder', folderPath,
- *                                              markedForDirectInput?, permissionMode?, autoMerge? (kept,
- *                                              unused: no PRs), allowGitFolder?, allowOutsideHome? }
+ *                                              autoMerge? (kept, unused: no PRs), allowGitFolder?,
+ *                                              allowOutsideHome? }
  *                                            -> 201 { project }; 409 if the name is taken. The folder
  *                                            must exist and pass checkFolderProjectPath (no /, no home
  *                                            folder, clear of WORKTREES_ROOT and of other projects, no
@@ -68,7 +66,7 @@ import { idParam as id } from '../ids.js';
  *                                              pendingQuestions, subagents: [...], latestRequestAt }] }] }, sessions
  *                                            newest first; session.source "import" marks imported ones
  *   GET    /requests[?projectId=N|none&sessionId=N]   { requests }, newest first
- *   POST   /requests                         { text, projectId? | sessionId? } -> 201 { request } (source
+ *   POST   /requests                         { text, projectId | sessionId } -> 201 { request } (source
  *                                            "dashboard"); sessionId addresses one open session (the
  *                                            request takes its project); 409 once it has ended
  *   GET    /prs[?projectId=&stage=a,b&open=true|false] { pullRequests: [{ ...pr, request, metrics }] }
@@ -148,10 +146,6 @@ const projectFields = {
   repos: z.array(repo).max(20),
   envFiles: z.array(envFile).max(50),
   autoMerge: z.boolean(),
-  markedForDirectInput: z.boolean(),
-  permissionMode: z.enum(PERMISSION_MODES).refine((m) => m !== 'bypassPermissions', {
-    message: 'bypassPermissions can only be set locally, not from the dashboard',
-  }),
 };
 const newProject = z.strictObject({
   ...projectFields,
@@ -159,16 +153,12 @@ const newProject = z.strictObject({
   repos: projectFields.repos.optional(),
   envFiles: projectFields.envFiles.optional(),
   autoMerge: projectFields.autoMerge.optional(),
-  markedForDirectInput: projectFields.markedForDirectInput.optional(),
-  permissionMode: projectFields.permissionMode.optional(),
 });
 const newFolderProject = z.strictObject({
   name: projectFields.name,
   kind: z.literal('folder'),
   folderPath: absolutePath,
   autoMerge: projectFields.autoMerge.optional(),
-  markedForDirectInput: projectFields.markedForDirectInput.optional(),
-  permissionMode: projectFields.permissionMode.optional(),
   allowGitFolder: z.boolean().optional(),
   allowOutsideHome: z.boolean().optional(),
 });
@@ -472,7 +462,8 @@ export function dashboardRoutes(ctx: ServerContext, options: DashboardApiOptions
     if (input.projectId != null && isReserved(input.projectId)) {
       return c.json({ error: 'tasks cannot target the project reserved for routing questions' }, 400);
     }
-    const request = createDashboardRequest(ctx, { text: input.text, projectId: input.projectId ?? null });
+    if (input.projectId == null) throw new ValidationError('a task needs a projectId or a sessionId');
+    const request = createDashboardRequest(ctx, { text: input.text, projectId: input.projectId });
     return c.json({ request }, 201);
   });
 

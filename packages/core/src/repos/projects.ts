@@ -1,18 +1,9 @@
 import { resolve } from 'node:path';
 import { isoNow, type Clock } from '../clock.js';
 import { NotFoundError, ValidationError } from '../errors.js';
-import { deleteById, fromBool, parseJson, toBool, toJson, updateById, where, type Db } from '../sql.js';
+import { deleteById, fromBool, parseJson, toBool, toJson, updateById, type Db } from '../sql.js';
 import { isSafeBranchName, isSafeRelativePath, isSafeRepoName } from '../names.js';
-import {
-  DEFAULT_PERMISSION_MODE,
-  PERMISSION_MODES,
-  PROJECT_KINDS,
-  type EnvFile,
-  type PermissionMode,
-  type Project,
-  type ProjectKind,
-  type Repo,
-} from '../types.js';
+import { PROJECT_KINDS, type EnvFile, type Project, type ProjectKind, type Repo } from '../types.js';
 
 export interface NewProject {
   name: string;
@@ -26,17 +17,10 @@ export interface NewProject {
   repos?: Repo[];
   envFiles?: EnvFile[];
   autoMerge?: boolean;
-  markedForDirectInput?: boolean;
-  /** Default DEFAULT_PERMISSION_MODE. */
-  permissionMode?: PermissionMode;
 }
 
 /** A project's kind and folder are fixed at creation. */
 export type ProjectPatch = Partial<Omit<NewProject, 'kind' | 'folderPath'>>;
-
-export interface ProjectFilter {
-  markedForDirectInput?: boolean;
-}
 
 interface ProjectRow {
   id: number;
@@ -46,8 +30,6 @@ interface ProjectRow {
   repos: string;
   env_files: string;
   auto_merge: number;
-  marked_for_direct_input: number;
-  permission_mode: PermissionMode;
   created_at: string;
 }
 
@@ -59,8 +41,6 @@ const toProject = (r: ProjectRow): Project => ({
   repos: parseJson<Repo[]>(r.repos),
   envFiles: parseJson<EnvFile[]>(r.env_files),
   autoMerge: toBool(r.auto_merge),
-  markedForDirectInput: toBool(r.marked_for_direct_input),
-  permissionMode: r.permission_mode,
   createdAt: r.created_at,
 });
 
@@ -110,11 +90,6 @@ function validateKind(
   if (envFiles.length > 0) throw new ValidationError('a folder project has no env files');
 }
 
-function validatePermissionMode(mode: PermissionMode): void {
-  if (!PERMISSION_MODES.includes(mode))
-    throw new ValidationError(`unknown permission mode "${String(mode)}"`);
-}
-
 export class ProjectRepo {
   constructor(
     private readonly db: Db,
@@ -133,12 +108,10 @@ export class ProjectRepo {
     ) {
       throw new ValidationError(`another project already uses the folder ${input.folderPath}`);
     }
-    const permissionMode = input.permissionMode ?? DEFAULT_PERMISSION_MODE;
-    validatePermissionMode(permissionMode);
     const info = this.db
       .prepare(
-        `INSERT INTO projects (name, kind, folder_path, repos, env_files, auto_merge, marked_for_direct_input, permission_mode, created_at)
-         VALUES (@name, @kind, @folderPath, @repos, @envFiles, @autoMerge, @marked, @permissionMode, @createdAt)`,
+        `INSERT INTO projects (name, kind, folder_path, repos, env_files, auto_merge, created_at)
+         VALUES (@name, @kind, @folderPath, @repos, @envFiles, @autoMerge, @createdAt)`,
       )
       .run({
         name: input.name,
@@ -147,8 +120,6 @@ export class ProjectRepo {
         repos: JSON.stringify(repos),
         envFiles: JSON.stringify(envFiles),
         autoMerge: fromBool(input.autoMerge ?? false),
-        marked: fromBool(input.markedForDirectInput ?? false),
-        permissionMode,
         createdAt: isoNow(this.clock),
       });
     return this.require(Number(info.lastInsertRowid));
@@ -170,14 +141,8 @@ export class ProjectRepo {
     return row && toProject(row);
   }
 
-  list(filter: ProjectFilter = {}): Project[] {
-    const { clause, params } = where({
-      marked_for_direct_input: fromBool(filter.markedForDirectInput),
-    });
-    return this.db
-      .prepare<[Record<string, unknown>], ProjectRow>(`SELECT * FROM projects ${clause} ORDER BY name`)
-      .all(params)
-      .map(toProject);
+  list(): Project[] {
+    return this.db.prepare<[], ProjectRow>('SELECT * FROM projects ORDER BY name').all().map(toProject);
   }
 
   update(id: number, patch: ProjectPatch): Project {
@@ -189,15 +154,12 @@ export class ProjectRepo {
     const envFiles = patch.envFiles ?? current.envFiles;
     validate(patch.name ?? current.name, repos, envFiles);
     validateKind(current.kind, current.folderPath ?? undefined, repos, envFiles);
-    if (patch.permissionMode !== undefined) validatePermissionMode(patch.permissionMode);
     if (patch.repos) this.checkRemovedReposUnused(id, current.repos, patch.repos);
     updateById(this.db, 'projects', 'project', id, {
       name: patch.name,
       repos: toJson(patch.repos),
       env_files: toJson(patch.envFiles),
       auto_merge: fromBool(patch.autoMerge),
-      marked_for_direct_input: fromBool(patch.markedForDirectInput),
-      permission_mode: patch.permissionMode,
     });
     return this.require(id);
   }

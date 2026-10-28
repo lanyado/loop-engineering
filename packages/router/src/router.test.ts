@@ -16,7 +16,7 @@ import {
   type Store,
 } from '@loop-engineering/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { FakeClassifier, FakeFolderSessions, FakeMessenger, fakeStartSession } from './fakes.js';
+import { FakeFolderSessions, FakeMessenger, fakeStartSession } from './fakes.js';
 import { CANCEL_OPTION } from './options.js';
 import type { Plan } from './prompt.js';
 import {
@@ -27,7 +27,6 @@ import {
   type RouterConfig,
 } from './router.js';
 import { ensureRouterSession, findRouterSession, routerProjectId, ROUTER_PROJECT_NAME } from './system.js';
-import type { ClassifierOutput } from './types.js';
 
 let clock: FakeClock;
 let timers: FakeTimers;
@@ -36,7 +35,6 @@ let bus: QuestionBus;
 let questions: QuestionService;
 let requests: RequestService;
 let sweeper: DeadlineSweeper;
-let classifier: FakeClassifier;
 let messenger: FakeMessenger;
 let folders: FakeFolderSessions;
 let startSession: ReturnType<typeof fakeStartSession>;
@@ -51,7 +49,6 @@ function makeRouter(config: Partial<RouterConfig> = {}) {
       store,
       bus,
       questions,
-      classifier,
       startSession,
       messenger,
       folders,
@@ -74,13 +71,12 @@ beforeEach(() => {
   questions = new QuestionService(store, bus);
   requests = new RequestService(store, bus);
   sweeper = new DeadlineSweeper(questions, { timers });
-  classifier = new FakeClassifier();
   messenger = new FakeMessenger();
   folders = new FakeFolderSessions(store);
   startSession = fakeStartSession(store);
   logs = [];
-  shop = store.projects.create({ name: 'shop', markedForDirectInput: true });
-  blog = store.projects.create({ name: 'blog', markedForDirectInput: true });
+  shop = store.projects.create({ name: 'shop' });
+  blog = store.projects.create({ name: 'blog' });
   router = makeRouter();
 });
 
@@ -103,26 +99,10 @@ const routingQuestions = (): Question[] => {
   const session = findRouterSession(store);
   return session ? store.questions.list({ sessionId: session.id }) : [];
 };
-const noIdea = { projectId: null, target: { kind: 'new' }, confidence: 0, candidates: [] } as const;
-const reservedDecisions = () => {
-  const projectId = routerProjectId(store);
-  return projectId === null ? [] : store.history.list({ projectId, kind: 'decision' });
-};
 const pendingQuestion = async (): Promise<Question> => {
   await until(() => routingQuestions().some((q) => q.status === 'pending'), 'a routing question');
   return routingQuestions().find((q) => q.status === 'pending')!;
 };
-const confident = (
-  projectId: number,
-  target: ClassifierOutput['target'],
-  confidence = 0.9,
-): ClassifierOutput => ({
-  projectId,
-  target,
-  confidence,
-  candidates: [],
-  reason: 'matches the project',
-});
 const openSession = (project: Project, title: string) =>
   store.sessions.create({
     projectId: project.id,
@@ -132,100 +112,9 @@ const openSession = (project: Project, title: string) =>
   });
 const decisions = (project: Project) => store.history.list({ projectId: project.id, kind: 'decision' });
 
-describe('confident classifications', () => {
-  it('starts a new session in the chosen project and records the decision', async () => {
-    classifier.answer = confident(shop.id, { kind: 'new' });
-    void router.start();
-    const request = requests.create({ text: 'Add a checkout page', source: 'telegram' });
-    await until(() => store.requests.require(request.id).sessionId !== null, 'routing');
-    await router.idle();
-
-    expect(startSession.started).toHaveLength(1);
-    const routed = store.requests.require(request.id);
-    expect(routed.projectId).toBe(shop.id);
-    expect(routed.sessionId).toBe(startSession.started[0]!.id);
-    expect(messenger.delivered).toEqual([]);
-    expect(routingQuestions()).toEqual([]);
-    // Recorded after a successful launch, with the new session.
-    const [decision] = decisions(shop);
-    expect(decision?.sessionId).toBe(routed.sessionId);
-    expect(decision?.text).toContain(`to shop: a new session #${routed.sessionId} ('Add a checkout page')`);
-    expect(decision?.text).toContain(`Routed request #${request.id}`);
-    expect(decision?.text).toContain('Classifier, 90% sure');
-    expect(store.history.search('checkout', { projectId: shop.id })).toHaveLength(1);
-  });
-
-  it('delivers to an open session as a file plus a fixed sentence, never the text itself', async () => {
-    const login = openSession(shop, 'fix login');
-    classifier.answer = confident(shop.id, { kind: 'session', sessionId: login.id });
-    void router.start();
-    const request = requests.create({ text: 'Also handle expired tokens', source: 'telegram' });
-    await until(() => store.requests.require(request.id).sessionId !== null, 'routing');
-
-    const name = `request-${request.id}.md`;
-    expect(messenger.delivered).toEqual([
-      {
-        sessionId: login.id,
-        name,
-        content: `# Request #${request.id} (from telegram, ${request.createdAt})\n\nAlso handle expired tokens\n`,
-        sentence: deliverySentence(name),
-      },
-    ]);
-    expect(deliverySentence(name)).toBe(
-      `A new request from the human was routed to this session. Read the file .loop/${name} and handle that request.`,
-    );
-    expect(startSession.started).toEqual([]);
-    expect(store.requests.require(request.id)).toMatchObject({ projectId: shop.id, sessionId: login.id });
-    expect(decisions(shop)[0]?.text).toContain(`session 'fix login' (#${login.id})`);
-  });
-
-  it('shows the classifier the marked projects, their open sessions and recent requests', async () => {
-    store.projects.update(shop.id, {
-      repos: [{ name: 'web', path: '/w', remote: 'git@x:web.git', defaultBranch: 'main' }],
-    });
-    const login = openSession(shop, 'fix login');
-    const old = openSession(shop, 'old');
-    store.sessions.end(old.id);
-    store.requests.create({
-      text: 'Earlier task\nwith details',
-      source: 'dashboard',
-      projectId: shop.id,
-      sessionId: login.id,
-    });
-    store.projects.create({ name: 'secret', markedForDirectInput: false });
-    classifier.answer = confident(shop.id, { kind: 'new' });
-    const request = requests.create({ text: 'Something', source: 'telegram' });
-    await router.route(request.id);
-
-    const input = classifier.inputs[0]!;
-    expect(input.request).toEqual({ id: request.id, text: 'Something' });
-    expect(input.projects.map((p) => p.name)).toEqual(['blog', 'shop']);
-    expect(input.projects[1]).toEqual({
-      id: shop.id,
-      name: 'shop',
-      kind: 'git',
-      repos: ['web'],
-      recentRequests: ['Earlier task'],
-      sessions: [{ id: login.id, title: 'fix login', branch: 'loop/fix-login', status: 'active' }],
-    });
-  });
-
-  it('starts a new session when the chosen session cannot take the request', async () => {
-    const login = openSession(shop, 'fix login');
-    classifier.answer = confident(shop.id, { kind: 'session', sessionId: login.id });
-    messenger.fail = new Error('session is paused');
-    const request = requests.create({ text: 'More login work', source: 'telegram' });
-    const outcome = await router.route(request.id);
-
-    expect(outcome).toMatchObject({ status: 'routed', newSession: true });
-    expect(startSession.started).toHaveLength(1);
-    expect(decisions(shop)[0]?.text).toContain('could not take it (session is paused)');
-  });
-});
-
 describe('a request that names its project', () => {
   it('skips the classifier and gets a new session there, marked or not', async () => {
-    const private_ = store.projects.create({ name: 'private', markedForDirectInput: false });
+    const private_ = store.projects.create({ name: 'private' });
     openSession(private_, 'existing work');
     void router.start();
     const request = requests.create({
@@ -234,14 +123,12 @@ describe('a request that names its project', () => {
       projectId: private_.id,
     });
     await until(() => store.requests.require(request.id).sessionId !== null, 'routing');
-
-    expect(classifier.inputs).toEqual([]);
     expect(startSession.started.map((s) => s.projectId)).toEqual([private_.id]);
     expect(decisions(private_)[0]?.text).toContain('The request named its project.');
   });
 
   it('delivers a request addressed to one session there, skipping the classifier', async () => {
-    const private_ = store.projects.create({ name: 'private', markedForDirectInput: false });
+    const private_ = store.projects.create({ name: 'private' });
     openSession(private_, 'other work');
     const voice = openSession(private_, 'voice cloning');
     const request = requests.create({
@@ -258,7 +145,6 @@ describe('a request that names its project', () => {
       sessionId: voice.id,
       newSession: false,
     });
-    expect(classifier.inputs).toEqual([]);
     expect(startSession.started).toEqual([]);
     expect(messenger.delivered.map((d) => d.sessionId)).toEqual([voice.id]);
     expect(store.requests.require(request.id)).toMatchObject({
@@ -330,211 +216,21 @@ describe('a request that names its project', () => {
   });
 });
 
-describe('unclear classifications', () => {
-  it('asks with the likely destinations, then routes on the answer', async () => {
-    const login = openSession(shop, 'fix login');
-    classifier.answer = {
-      projectId: shop.id,
-      target: { kind: 'session', sessionId: login.id },
-      confidence: 0.5,
-      candidates: [{ projectId: blog.id, target: { kind: 'new' }, confidence: 0.3 }],
-      reason: 'could be either',
-    } satisfies ClassifierOutput;
-    void router.start();
-    const request = requests.create({ text: 'Make the header smaller', source: 'telegram' });
-    const question = await pendingQuestion();
-
-    expect(question.text).toMatch(new RegExp(`^Route request #${request.id}: `));
-    expect(question.text).toContain('Make the header smaller');
-    expect(question.context).toBe(
-      'From telegram. Not routed automatically: the classifier is only 50% sure (could be either).',
-    );
-    expect(question.requestId).toBe(request.id);
-    expect(question.options).toEqual([
-      `shop: session 'fix login' (#${login.id})`,
-      'blog: new session',
-      'shop: new session',
-      CANCEL_OPTION,
-    ]);
-    expect(question.recommendedOption).toBe(`shop: session 'fix login' (#${login.id})`);
-    expect(store.requests.require(request.id).sessionId).toBeNull();
-
-    questions.answer(question.id, 'blog: new session', 'telegram');
-    await until(() => store.requests.require(request.id).sessionId !== null, 'routing');
-    expect(startSession.started.map((s) => s.projectId)).toEqual([blog.id]);
-    expect(decisions(blog)[0]?.text).toContain(
-      `The human chose "blog: new session" (question #${question.id}, via telegram)`,
-    );
-  });
-
-  it('takes the recommended option when nobody answers in 15 minutes', async () => {
-    const login = openSession(shop, 'fix login');
-    classifier.answer = { ...confident(shop.id, { kind: 'session', sessionId: login.id }), confidence: 0.6 };
-    sweeper.start();
-    void router.start();
-    const request = requests.create({ text: 'Tweak the login copy', source: 'telegram' });
-    const question = await pendingQuestion();
-
-    timers.advance(QUESTION_TIMEOUT_MS);
-    await until(() => store.requests.require(request.id).sessionId !== null, 'routing');
-    expect(store.questions.require(question.id).status).toBe('defaulted');
-    expect(messenger.delivered.map((m) => m.sessionId)).toEqual([login.id]);
-    expect(decisions(shop)[0]?.text).toContain('No answer to question');
-  });
-
-  it('accepts a free-text answer naming a project', async () => {
-    classifier.answer = noIdea;
-    const request = requests.create({ text: 'Do the thing', source: 'telegram' });
-    const routing = router.route(request.id);
-    const question = await pendingQuestion();
-    questions.answer(question.id, '  BLOG ', 'telegram');
-    expect(await routing).toMatchObject({ status: 'routed', projectId: blog.id, newSession: true });
-  });
-
-  it('asks again once when the answer matches nothing, then gives up', async () => {
-    classifier.answer = noIdea;
-    const request = requests.create({ text: 'Do the thing', source: 'telegram' });
-    const routing = router.route(request.id);
-    questions.answer((await pendingQuestion()).id, 'no idea', 'telegram');
-    await until(() => routingQuestions().length === 2, 'the second question');
-    const second = routingQuestions()[0]!;
-    expect(second.text).toMatch(new RegExp(`^Route request #${request.id} \\(asked again\\)`));
-    expect(second.context).toContain('"no idea" did not match an option');
-    questions.answer(second.id, 'still no idea', 'dashboard');
-
-    expect(await routing).toEqual({ status: 'unrouted', reason: 'answer "still no idea" matched no option' });
-    expect(routingQuestions()).toHaveLength(2);
-    // A later start does not ask a third time.
-    expect(await router.route(request.id)).toMatchObject({ status: 'unrouted' });
-    expect(routingQuestions()).toHaveLength(2);
-  });
-
-  it('leaves a cancelled request unrouted for good', async () => {
-    classifier.answer = noIdea;
-    const request = requests.create({ text: 'Never mind', source: 'telegram' });
-    const routing = router.route(request.id);
-    questions.answer((await pendingQuestion()).id, CANCEL_OPTION, 'dashboard');
-    expect(await routing).toEqual({ status: 'cancelled' });
-
-    expect(await makeRouter().route(request.id)).toEqual({ status: 'cancelled' });
-    expect(routingQuestions()).toHaveLength(1);
-    expect(classifier.inputs).toHaveLength(1);
-    expect(store.requests.require(request.id)).toMatchObject({ projectId: null, sessionId: null });
-    // Recorded once, in the reserved project, and left out of later scans.
-    expect(reservedDecisions().map((d) => d.text)).toEqual([
-      expect.stringContaining(`Cancelled request #${request.id}: the human chose "Cancel"`),
-    ]);
-    expect(await makeRouter().routePending()).toEqual([]);
-  });
-
-  it('offers at most 10 options, Cancel included', async () => {
-    for (let i = 0; i < 6; i++) {
-      const p = store.projects.create({ name: `p${i}`, markedForDirectInput: true });
-      openSession(p, `work ${i}`);
-    }
-    classifier.answer = noIdea;
-    const request = requests.create({ text: 'Anything', source: 'telegram' });
-    void router.route(request.id);
-    const question = await pendingQuestion();
-    expect(question.options).toHaveLength(10);
-    expect(question.options.at(-1)).toBe(CANCEL_OPTION);
-    expect(question.options.slice(0, 8).every((o) => o.endsWith(': new session'))).toBe(true);
-  });
-});
-
-describe('invalid classifier output counts as unclear', () => {
-  const cases: [string, () => unknown][] = [
-    ['not an object', () => 'shop, new session'],
-    ['undefined (no JSON)', () => undefined],
-    ['an unknown project id', () => confident(9999, { kind: 'new' })],
-    [
-      'a project not marked for direct input',
-      () => confident(store.projects.create({ name: 'x' }).id, { kind: 'new' }),
-    ],
-    ['an unknown session id', () => confident(shop.id, { kind: 'session', sessionId: 9999 })],
-    [
-      'a session of another project',
-      () => confident(blog.id, { kind: 'session', sessionId: openSession(shop, 's').id }),
-    ],
-    [
-      'an ended session',
-      () => {
-        const s = openSession(shop, 'done');
-        store.sessions.end(s.id);
-        return confident(shop.id, { kind: 'session', sessionId: s.id });
-      },
-    ],
-    // A valid destination with a bad confidence is still a proposal: it is offered and recommended.
-    ['a confidence above 1', () => confident(shop.id, { kind: 'new' }, 1.5)],
-    ['a confidence that is a string', () => ({ ...confident(shop.id, { kind: 'new' }), confidence: '0.9' })],
-    ['an unknown target kind', () => ({ ...confident(shop.id, { kind: 'new' }), target: { kind: 'other' } })],
-    ['the router project', () => confident(ensureRouterSession(store).projectId, { kind: 'new' })],
-  ];
-
-  it.each(cases)('%s', async (name, make) => {
-    classifier.answer = make();
-    const request = requests.create({ text: 'Classify me', source: 'telegram' });
-    void router.route(request.id);
-    const question = await pendingQuestion();
-    expect(startSession.started).toEqual([]);
-    expect(messenger.delivered).toEqual([]);
-    const proposedShop = name.startsWith('a confidence');
-    expect(question.recommendedOption).toBe(proposedShop ? 'shop: new session' : CANCEL_OPTION);
-    expect(question.options).toContain('shop: new session');
-    expect(question.options).toContain('blog: new session');
-  });
-
-  it('a classifier that throws', async () => {
-    classifier.answer = () => {
-      throw new Error('boom');
-    };
-    const request = requests.create({ text: 'Classify me', source: 'telegram' });
-    void router.route(request.id);
-    const question = await pendingQuestion();
-    expect(question.context).toContain('the classifier failed');
-    expect(logs.some((l) => l.includes('boom'))).toBe(true);
-  });
-
-  it('a classifier that times out', async () => {
-    classifier.answer = () => new Promise(() => undefined); // never settles, ignores its signal
-    let aborted = false;
-    const slow = classifier.answer as () => Promise<never>;
-    classifier.answer = (_input: unknown, signal: AbortSignal) => {
-      signal.addEventListener('abort', () => (aborted = true));
-      return slow();
-    };
-    router = makeRouter({ classifierTimeoutMs: 30_000 });
-    const request = requests.create({ text: 'Classify me', source: 'telegram' });
-    void router.route(request.id);
-    await until(() => classifier.inputs.length === 1, 'the classifier call');
-    timers.advance(29_999);
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(routingQuestions()).toEqual([]);
-    timers.advance(1);
-    const question = await pendingQuestion();
-    expect(question.context).toContain('the classifier timed out');
-    expect(aborted).toBe(true);
-  });
-});
-
-describe('no marked projects', () => {
-  it('leaves the request unrouted without asking', async () => {
-    store.projects.update(shop.id, { markedForDirectInput: false });
-    store.projects.update(blog.id, { markedForDirectInput: false });
-    const request = requests.create({ text: 'Where does this go?', source: 'telegram' });
+describe('a request that names no project', () => {
+  it('is left unrouted without asking anyone, and no session starts', async () => {
+    const request = requests.create({ text: 'Where does this go?', source: 'dashboard' });
     expect(await router.route(request.id)).toEqual({
       status: 'unrouted',
-      reason: 'no project is marked for direct input',
+      reason: 'the request names no project',
     });
-    expect(classifier.inputs).toEqual([]);
     expect(routingQuestions()).toEqual([]);
-    expect(logs.join('\n')).toContain('no project is marked for direct input');
+    expect(startSession.started).toEqual([]);
+    expect(logs.join('\n')).toContain('the request names no project');
   });
 });
 
 describe('start-up and idempotency', () => {
-  it('routes requests stored while no router ran: unrouted ones and ones with a project but no session', async () => {
-    const unrouted = store.requests.create({ text: 'From Telegram while down', source: 'telegram' });
+  it('routes requests stored while no router ran that have a project but no session', async () => {
     const preset = store.requests.create({ text: 'Dashboard task', source: 'dashboard', projectId: blog.id });
     const login = openSession(shop, 'fix login');
     const done = store.requests.create({
@@ -543,47 +239,12 @@ describe('start-up and idempotency', () => {
       projectId: shop.id,
       sessionId: login.id,
     });
-    classifier.answer = confident(shop.id, { kind: 'new' });
 
     const outcomes = await router.start();
-    expect(outcomes).toHaveLength(2);
-    expect(store.requests.require(unrouted.id).projectId).toBe(shop.id);
+    expect(outcomes).toHaveLength(1);
     expect(store.requests.require(preset.id).projectId).toBe(blog.id);
-    expect(startSession.started).toHaveLength(2);
-    expect(store.requests.require(done.id).sessionId).toBe(login.id);
-    expect(classifier.inputs.map((i) => i.request.id)).toEqual([unrouted.id]);
-  });
-
-  it('re-attaches to a routing question left pending by a previous run instead of asking again', async () => {
-    classifier.answer = noIdea;
-    const request = requests.create({ text: 'Asked before a restart', source: 'telegram' });
-    void router.route(request.id);
-    const question = await pendingQuestion();
-    await router.stop();
-    expect(store.requests.require(request.id).sessionId).toBeNull();
-
-    router = makeRouter();
-    const scan = router.start();
-    await new Promise((resolve) => setImmediate(resolve));
-    questions.answer(question.id, 'shop: new session', 'dashboard');
-    await scan;
-    expect(routingQuestions()).toHaveLength(1);
-    expect(classifier.inputs).toHaveLength(1);
-    expect(store.requests.require(request.id).projectId).toBe(shop.id);
-  });
-
-  it('applies an answer given while the router was down', async () => {
-    classifier.answer = noIdea;
-    const request = requests.create({ text: 'Answered while down', source: 'telegram' });
-    void router.route(request.id);
-    const question = await pendingQuestion();
-    await router.stop();
-    questions.answer(question.id, 'blog: new session', 'telegram');
-
-    router = makeRouter();
-    await router.start();
-    expect(store.requests.require(request.id).projectId).toBe(blog.id);
     expect(startSession.started).toHaveLength(1);
+    expect(store.requests.require(done.id).sessionId).toBe(login.id);
   });
 
   it('gives one session when the start-up scan and the creation event fire for the same request', async () => {
@@ -602,34 +263,30 @@ describe('start-up and idempotency', () => {
   });
 
   it('routes a request once, however often it is triggered', async () => {
-    classifier.answer = confident(shop.id, { kind: 'new' });
     void router.start();
-    const request = requests.create({ text: 'Once only', source: 'telegram' });
+    const request = requests.create({ text: 'Once only', source: 'dashboard', projectId: shop.id });
     bus.emit({ type: 'request.created', request });
     const [a, b] = await Promise.all([router.route(request.id), router.route(request.id)]);
     expect(a).toBe(b);
     await router.idle();
     expect(startSession.started).toHaveLength(1);
-    expect(classifier.inputs).toHaveLength(1);
     expect(await router.route(request.id)).toEqual({ status: 'skipped', reason: 'already routed' });
     expect(await router.routePending()).toEqual([]);
     expect(decisions(shop)).toHaveLength(1);
   });
 
   it('keeps the project when a session cannot start, so the next start retries', async () => {
-    classifier.answer = confident(shop.id, { kind: 'new' });
     const failing = Object.assign(() => Promise.reject(new Error('no repos')), { started: [] });
     router = new Router({
       store,
       bus,
       questions,
-      classifier,
       startSession: failing,
       messenger,
       timers,
       log: (m) => logs.push(m),
     });
-    const request = requests.create({ text: 'Will fail first', source: 'telegram' });
+    const request = requests.create({ text: 'Will fail first', source: 'dashboard', projectId: shop.id });
     expect(await router.route(request.id)).toEqual({
       status: 'unrouted',
       reason: 'could not start a session: no repos',
@@ -639,7 +296,6 @@ describe('start-up and idempotency', () => {
     router = makeRouter();
     await router.start();
     expect(store.requests.require(request.id).sessionId).toBe(startSession.started[0]!.id);
-    expect(classifier.inputs).toHaveLength(1);
   });
 
   it('creates its reserved project and session once, ended and not marked', () => {
@@ -649,13 +305,12 @@ describe('start-up and idempotency', () => {
     expect(a.status).toBe('ended');
     expect(store.projects.require(a.projectId)).toMatchObject({
       name: ROUTER_PROJECT_NAME,
-      markedForDirectInput: false,
     });
     expect(store.settings.getRouterSessionId()).toBe(a.id);
   });
 
   it('finds its reserved project by id: a rename keeps it, a user project with its name is left alone', () => {
-    const mine = store.projects.create({ name: ROUTER_PROJECT_NAME, markedForDirectInput: true });
+    const mine = store.projects.create({ name: ROUTER_PROJECT_NAME });
     const reserved = ensureRouterSession(store);
     expect(reserved.projectId).not.toBe(mine.id);
     expect(store.projects.require(reserved.projectId).name).toBe(`${ROUTER_PROJECT_NAME} 2`);
@@ -673,52 +328,10 @@ describe('start-up and idempotency', () => {
   });
 
   it('stops listening after stop()', async () => {
-    classifier.answer = confident(shop.id, { kind: 'new' });
     void router.start();
     await router.stop();
-    requests.create({ text: 'After stop', source: 'telegram' });
+    requests.create({ text: 'After stop', source: 'dashboard', projectId: shop.id });
     await new Promise((resolve) => setImmediate(resolve));
-    expect(classifier.inputs).toEqual([]);
-  });
-});
-
-describe('the default when nobody answers', () => {
-  it('is Cancel when the classifier proposed nothing, so no session starts by default', async () => {
-    classifier.answer = noIdea;
-    sweeper.start();
-    const request = requests.create({ text: 'Who knows', source: 'telegram' });
-    const routing = router.route(request.id);
-    const question = await pendingQuestion();
-    expect(question.recommendedOption).toBe(CANCEL_OPTION);
-    timers.advance(QUESTION_TIMEOUT_MS);
-    expect(await routing).toEqual({ status: 'cancelled' });
-    expect(startSession.started).toEqual([]);
-    expect(reservedDecisions()[0]?.text).toContain(`Cancelled request #${request.id}: no answer to question`);
-  });
-
-  it('is the top candidate when the classifier proposed one', async () => {
-    classifier.answer = {
-      ...noIdea,
-      candidates: [{ projectId: blog.id, target: { kind: 'new' }, confidence: 0.4 }],
-    };
-    sweeper.start();
-    const request = requests.create({ text: 'Probably the blog', source: 'telegram' });
-    const routing = router.route(request.id);
-    expect((await pendingQuestion()).recommendedOption).toBe('blog: new session');
-    timers.advance(QUESTION_TIMEOUT_MS);
-    expect(await routing).toMatchObject({ status: 'routed', projectId: blog.id, newSession: true });
-  });
-
-  it('is Cancel on a re-ask, whatever the first question recommended', async () => {
-    classifier.answer = {
-      ...noIdea,
-      candidates: [{ projectId: blog.id, target: { kind: 'new' }, confidence: 0.4 }],
-    };
-    const request = requests.create({ text: 'Probably the blog', source: 'telegram' });
-    void router.route(request.id);
-    questions.answer((await pendingQuestion()).id, 'hmm', 'telegram');
-    await until(() => routingQuestions().length === 2, 'the second question');
-    expect(routingQuestions()[0]!.recommendedOption).toBe(CANCEL_OPTION);
   });
 });
 
@@ -745,8 +358,7 @@ describe('the reserved project', () => {
       options: ['shop: new session', CANCEL_OPTION],
       recommendedOption: CANCEL_OPTION,
     });
-    classifier.answer = confident(shop.id, { kind: 'new' });
-    const request = requests.create({ text: 'Real request', source: 'telegram' });
+    const request = requests.create({ text: 'Real request', source: 'dashboard', projectId: shop.id });
     expect(request.id).toBe(1);
     expect(await router.route(request.id)).toMatchObject({ status: 'routed', projectId: shop.id });
   });
@@ -757,7 +369,7 @@ describe('a failed start', () => {
     let fail = true;
     const flaky = (projectId: number, request: { requestId: number }) =>
       fail ? Promise.reject(new Error('no repos')) : startSession(projectId, request);
-    router = new Router({ store, bus, questions, classifier, startSession: flaky, messenger, timers });
+    router = new Router({ store, bus, questions, startSession: flaky, messenger, timers });
     const request = store.requests.create({ text: 'Flaky start', source: 'dashboard', projectId: shop.id });
     expect(await router.route(request.id)).toMatchObject({ status: 'unrouted' });
     expect(decisions(shop).map((d) => d.text)).toEqual([
@@ -800,7 +412,7 @@ describe('start-up backlog', () => {
       store.requests.create({ text: `Backlog ${i}`, source: 'dashboard', projectId: shop.id });
     }
     router = new Router(
-      { store, bus, questions, classifier, startSession: slow, messenger, timers, log: (m) => logs.push(m) },
+      { store, bus, questions, startSession: slow, messenger, timers, log: (m) => logs.push(m) },
       { concurrency: 2 },
     );
     const scan = router.start();
@@ -816,34 +428,15 @@ describe('start-up backlog', () => {
 });
 
 describe('rescan', () => {
-  it('logs "no marked project" once per scan, not once per request', async () => {
-    store.projects.update(shop.id, { markedForDirectInput: false });
-    store.projects.update(blog.id, { markedForDirectInput: false });
-    for (let i = 0; i < 3; i++) store.requests.create({ text: `Waiting ${i}`, source: 'telegram' });
+  it('logs the "no project" case once per start-up scan, and never retries such requests on the rescan', async () => {
+    for (let i = 0; i < 3; i++) store.requests.create({ text: `Waiting ${i}`, source: 'dashboard' });
     await router.start();
     timers.advance(5 * 60_000);
     await router.idle();
     await new Promise((resolve) => setImmediate(resolve));
-    const lines = logs.filter((l) => l.includes('no project is marked'));
-    expect(lines).toEqual([
-      '[router] 3 request(s) not routed: no project is marked for direct input',
-      '[router] 3 request(s) not routed: no project is marked for direct input',
+    expect(logs.filter((l) => l.includes('3 request(s) not routed'))).toEqual([
+      '[router] 3 request(s) not routed: the request names no project',
     ]);
-  });
-
-  it('routes a waiting request once a project is marked, without a restart', async () => {
-    store.projects.update(shop.id, { markedForDirectInput: false });
-    store.projects.update(blog.id, { markedForDirectInput: false });
-    classifier.answer = confident(shop.id, { kind: 'new' });
-    void router.start();
-    const request = requests.create({ text: 'Waiting for a marked project', source: 'telegram' });
-    await router.idle();
-    expect(store.requests.require(request.id).sessionId).toBeNull();
-
-    store.projects.update(shop.id, { markedForDirectInput: true });
-    timers.advance(5 * 60_000);
-    await until(() => store.requests.require(request.id).sessionId !== null, 'routing on rescan');
-    expect(store.requests.require(request.id).projectId).toBe(shop.id);
   });
 
   it('does not retry failed starts (requests with a project) on the rescan, only on start', async () => {
@@ -852,7 +445,7 @@ describe('rescan', () => {
       calls++;
       return Promise.reject(new Error('no repos'));
     };
-    router = new Router({ store, bus, questions, classifier, startSession: counting, messenger, timers });
+    router = new Router({ store, bus, questions, startSession: counting, messenger, timers });
     store.requests.create({ text: 'Fails', source: 'dashboard', projectId: shop.id });
     await router.start();
     expect(calls).toBe(1);
@@ -869,7 +462,6 @@ describe('folder projects', () => {
       name: 'cv',
       kind: 'folder',
       folderPath: '/home/me/resume',
-      markedForDirectInput: true,
     });
   });
   const decisionsOf = (p: Project) => store.history.list({ projectId: p.id, kind: 'decision' });
@@ -883,32 +475,10 @@ describe('folder projects', () => {
     });
   const named = (text: string) => store.requests.create({ text, source: 'dashboard', projectId: resume.id });
 
-  it('are eligible, and the classifier sees their kind and folder name (not the full path)', async () => {
-    classifier.answer = confident(resume.id, { kind: 'new' });
-    const request = requests.create({ text: 'Update my resume', source: 'telegram' });
+  it('a request for a folder project gets a new session there', async () => {
+    const request = named('Update my resume');
     const outcome = await router.route(request.id);
     expect(outcome).toMatchObject({ status: 'routed', projectId: resume.id, newSession: true });
-    const shown = classifier.inputs[0]!.projects.find((p) => p.id === resume.id);
-    expect(shown).toEqual({
-      id: resume.id,
-      name: 'cv',
-      kind: 'folder',
-      folder: 'resume',
-      repos: [],
-      recentRequests: [],
-      sessions: [],
-    });
-    expect(JSON.stringify(classifier.inputs[0])).not.toContain('/home/me');
-    expect(classifier.inputs[0]!.projects.find((p) => p.id === shop.id)).not.toHaveProperty('folder');
-  });
-
-  it('still validates classifier output: an unknown id is unclear, not routed', async () => {
-    classifier.answer = confident(999, { kind: 'new' });
-    const request = requests.create({ text: 'Update my resume', source: 'telegram' });
-    void router.route(request.id);
-    const q = await pendingQuestion();
-    expect(q.requestId).toBe(request.id);
-    expect(startSession.started).toEqual([]);
   });
 
   it('a request needing a new session goes to the live open session instead', async () => {
@@ -971,10 +541,9 @@ describe('folder projects', () => {
 
   it('when the chosen session cannot take it, the folder flow handles it, never a second agent', async () => {
     const open = openFolderSession();
-    classifier.answer = confident(resume.id, { kind: 'session', sessionId: open.id });
     messenger.fail = new Error('agent gone');
     folders.states.set(open.id, 'live');
-    const request = requests.create({ text: 'Fix the dates', source: 'telegram' });
+    const request = requests.create({ text: 'Fix the dates', source: 'dashboard', projectId: resume.id });
     void router.route(request.id);
     // Every delivery fails: after the attempts, the human is asked (once), Cancel being the default.
     const q = await pendingQuestion();
@@ -1001,7 +570,6 @@ describe('folder projects', () => {
       store,
       bus,
       questions,
-      classifier,
       startSession: racing,
       messenger,
       folders,
@@ -1083,7 +651,6 @@ describe('folder projects', () => {
         name,
         kind: 'folder',
         folderPath: `/home/me/${name}`,
-        markedForDirectInput: true,
       });
       const s = store.sessions.create({ projectId: p.id, title: `${name} work`, model: 'opus', branch: '' });
       folders.states.set(s.id, 'live');
@@ -1107,8 +674,7 @@ describe('folder projects', () => {
         questions.answer(q.id, q.options[0]!, 'dashboard');
       }
       // An unrelated git-project request arrives meanwhile and still routes.
-      classifier.answer = confident(shop.id, { kind: 'new' });
-      const r3 = requests.create({ text: 'three', source: 'telegram' });
+      const r3 = requests.create({ text: 'three', source: 'dashboard', projectId: shop.id });
       expect(await router.route(r3.id)).toMatchObject({
         status: 'routed',
         projectId: shop.id,
@@ -1141,8 +707,7 @@ describe('folder projects', () => {
         () => routingQuestions().filter((q) => q.status === 'pending').length === 3,
         'three questions',
       );
-      classifier.answer = confident(shop.id, { kind: 'new' });
-      const other = requests.create({ text: 'unrelated', source: 'telegram' });
+      const other = requests.create({ text: 'unrelated', source: 'dashboard', projectId: shop.id });
       expect(await router.route(other.id)).toMatchObject({ status: 'routed', projectId: shop.id });
       // Answering with a destination re-takes the single slot without deadlock.
       for (const q of routingQuestions().filter((x) => x.status === 'pending'))
@@ -1179,7 +744,6 @@ const makePlanRouter = (
       store,
       bus,
       questions,
-      classifier,
       startSession,
       messenger,
       folders,

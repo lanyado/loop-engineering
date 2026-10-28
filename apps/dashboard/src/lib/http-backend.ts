@@ -90,7 +90,7 @@ export class HttpBackend implements Backend {
     return (await this.send('PATCH', '/settings', patch, responses.settings)).settings;
   }
 
-  async createRequest(input: { text: string; projectId: number | null }) {
+  async createRequest(input: { text: string; projectId: number }) {
     return (await this.send('POST', '/requests', input, responses.request)).request;
   }
 
