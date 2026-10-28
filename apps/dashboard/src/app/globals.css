@@ -1568,8 +1568,8 @@ button.icon-button,
   }
 }
 
-/* A check the session's rigor does not run: faded, its tile saying "off" (over any state colour). */
-.node.node-off {
+/* A check that never ran at the merged head: faded, its tile saying "not run" (over any state colour). */
+.node.node-not-run {
   opacity: 0.5;
   border-style: dashed;
   border-color: var(--border-strong);
@@ -1577,12 +1577,12 @@ button.icon-button,
   box-shadow: none;
   animation: none;
 }
-.node.node-off .node-icon {
+.node.node-not-run .node-icon {
   background: var(--surface-2);
   color: var(--muted);
 }
-.node.node-off .node-title,
-.node.node-off .node-detail {
+.node.node-not-run .node-title,
+.node.node-not-run .node-detail {
   color: var(--muted);
 }
 .session-title {

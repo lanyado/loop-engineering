@@ -382,6 +382,26 @@ describe('pause / resume / stop / end', () => {
     expect(h.tmux.windows.size).toBe(1);
   });
 
+  it("resume runs the builder at the rigor level's effort, read at that moment; Standard keeps its own", async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST, { effort: 'xhigh' });
+    h.store.sessions.update(s.id, { rigor: 'fast' });
+    await h.runner.pause(s.id, 'manual');
+    const fast = await h.runner.resume(s.id);
+    const script = h.script(h.window(fast.tmuxTarget));
+    expect(script).toContain("'--effort' 'low'");
+    expect(script).not.toContain("'--effort' 'xhigh'");
+    expect(fast.effort).toBe('xhigh'); // the session's own setting is kept for Standard
+    await h.runner.pause(s.id, 'manual');
+    h.store.sessions.update(s.id, { rigor: 'standard' });
+    const standard = await h.runner.resume(s.id);
+    expect(h.script(h.window(standard.tmuxTarget))).toContain("'--effort' 'xhigh'");
+    await h.runner.pause(s.id, 'manual');
+    h.store.sessions.update(s.id, { rigor: 'thorough' });
+    const top = await h.runner.resume(s.id);
+    expect(h.script(h.window(top.tmuxTarget))).toContain("'--effort' 'max'");
+  });
+
   it('resume relaunches an "active" session whose window is gone', async () => {
     const h = harness();
     const s = await h.runner.startSession(h.shop.id, REQUEST);

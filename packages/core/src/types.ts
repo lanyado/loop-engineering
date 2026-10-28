@@ -13,19 +13,39 @@ export const SESSION_SOURCES = ['runner', 'import'] as const;
 export type SessionSource = (typeof SESSION_SOURCES)[number];
 
 /**
- * How much checking a session's PRs get, one dial from fast and cheap to slow and safe: fast runs
- * none of the pipeline's checks, light only tests and review, standard the pipeline as it is,
- * thorough all of it with QA on every PR. The policy itself is in packages/loop/src/rigor.ts.
+ * How much effort a session's PRs get, one dial from fast and cheap to slow and safe. Every level
+ * runs every stage: fast and light check quickly (related tests only, a short review, a quick QA),
+ * standard is the pipeline as it is, thorough adds tests for every change and QA on every PR. The
+ * policy itself is in packages/loop/src/rigor.ts.
  */
 export const RIGOR_LEVELS = ['fast', 'light', 'standard', 'thorough'] as const;
 export type Rigor = (typeof RIGOR_LEVELS)[number];
 export const DEFAULT_RIGOR: Rigor = 'standard';
+
+/** Who set a session's level: nobody yet, the Planner (submit_plan), or the human (which pins it). */
+export const RIGOR_SOURCES = ['default', 'planner', 'human'] as const;
+export type RigorSource = (typeof RIGOR_SOURCES)[number];
 
 export const PROVIDERS = ['claude', 'opencode'] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 export type Effort = (typeof EFFORTS)[number];
+
+/**
+ * The Claude --effort each rigor level runs the agents at. Standard sets none: the session's own
+ * effort (or the CLI's default, high) stays, as it was before the dial.
+ */
+export const RIGOR_EFFORT: Record<Rigor, Effort | null> = {
+  fast: 'low',
+  light: 'medium',
+  standard: null,
+  thorough: 'max',
+};
+
+/** The effort for an agent of a session at `rigor`: the level's, else `own` (the session's setting). */
+export const effortFor = (rigor: Rigor, own: Effort | null = null): Effort | null =>
+  RIGOR_EFFORT[rigor] ?? own;
 
 /**
  * Claude Code permission modes (`claude --help`, --permission-mode). "manual" asks before every edit
@@ -204,6 +224,9 @@ export interface Session {
   source: SessionSource;
   /** How much checking the PR loop gives this session's PRs. */
   rigor: Rigor;
+  rigorSource: RigorSource;
+  /** Why the Planner chose the level (only while rigorSource is "planner"). */
+  rigorReason: string | null;
   /** The planner's latest plan (submit_plan), and when it came: the newest task's plan wins. */
   plan: string | null;
   plannedAt: Iso | null;

@@ -60,12 +60,14 @@ export const transcriptSchema = z.object({ createdAt: iso, text: z.string() });
 export type Transcript = z.infer<typeof transcriptSchema>;
 
 /**
- * The rigor dial (core's RIGOR_LEVELS): how much checking the PR loop gives a session's PRs, from
- * fast and cheap to slow and safe. Which checks each level runs comes from the server (the pipeline
- * view's `rigor`), never from here.
+ * The rigor dial (core's RIGOR_LEVELS): how much effort the PR loop and the agents give a session's
+ * PRs, from fast and cheap to slow and safe. Every level runs every stage.
  */
 export const RIGOR_LEVELS = ['fast', 'light', 'standard', 'thorough'] as const;
 export type Rigor = (typeof RIGOR_LEVELS)[number];
+/** Who chose a session's level (core's RIGOR_SOURCES). */
+export const RIGOR_SOURCES = ['default', 'planner', 'human'] as const;
+export type RigorSource = (typeof RIGOR_SOURCES)[number];
 
 export const treeSessionSchema = z.object({
   id: z.number(),
@@ -81,6 +83,9 @@ export const treeSessionSchema = z.object({
   source: z.string().default('runner'),
   // Older servers have no dial (and so run the pipeline as it is); an unknown level reads the same.
   rigor: z.enum(RIGOR_LEVELS).catch('standard').default('standard'),
+  // Who chose the level: "planner" (with its reason) or "human" pin it; older servers send neither.
+  rigorSource: z.enum(RIGOR_SOURCES).catch('default').default('default'),
+  rigorReason: z.string().nullable().default(null),
   // The planner's latest plan (submit_plan) and when its newest task came; older servers send none.
   plan: z.string().nullable().default(null),
   plannedAt: iso.nullable().default(null),
@@ -242,14 +247,6 @@ export const stageChoicesSchema = z.object({
   reserved: z.array(z.string()),
 });
 export type StageChoices = z.infer<typeof stageChoicesSchema>;
-/** The checks of the pipeline each rigor level runs (the loop's policy, computed by the server). */
-export const rigorMapSchema = z.object({
-  fast: z.array(z.string()),
-  light: z.array(z.string()),
-  standard: z.array(z.string()),
-  thorough: z.array(z.string()),
-});
-export type RigorMap = z.infer<typeof rigorMapSchema>;
 export const pipelineViewSchema = z.object({
   pipeline: pipelineSchema,
   stages: z.array(stageSchema),
@@ -258,8 +255,6 @@ export const pipelineViewSchema = z.object({
   /** The Planner's instructions (planner.md), the same way; absent from older servers. */
   planner: stageSchema.optional(),
   choices: stageChoicesSchema,
-  /** Absent from older servers: then every level draws the whole pipeline. */
-  rigor: rigorMapSchema.optional(),
 });
 export type PipelineView = z.infer<typeof pipelineViewSchema>;
 

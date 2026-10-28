@@ -1,7 +1,6 @@
 import { ValidationError } from '@loop-engineering/core';
 import {
   RESERVED_STAGE_IDS,
-  rigorByLevel,
   STAGE_ACCESS,
   STAGE_ICONS,
   STAGE_RUNS,
@@ -20,10 +19,8 @@ import { idParam } from '../ids.js';
  *   GET /pipeline   { pipeline: { checks, deploy, guardian }, stages: [{ id, title, label, icon, access,
  *                     runs, prompt, builtin, overridden }], guardian: <the Guardian's instructions, the
  *                     same shape>, planner: <the Planner's instructions, the same shape>,
- *                     choices: { icons, access, runs, reserved },
- *                     rigor: { fast, light, standard, thorough } }
- *                   (choices: the values a stage may take and the ids it may not, for the editor;
- *                   rigor: the checks of the pipeline each rigor level runs, from the loop's policy)
+ *                     choices: { icons, access, runs, reserved } }
+ *                   (choices: the values a stage may take and the ids it may not, for the editor)
  *   POST /prs/:id/skip  { check, skip } -> { pullRequest }: skips one check of the pipeline for one PR,
  *                   or brings it back (packages/loop/src/skip.ts); 400 for a PR not at a check or a
  *                   check outside the pipeline. Works with the loop off; a running loop steps that PR at once
@@ -79,7 +76,6 @@ export function pipelineModule({
       guardian: stages.guardian(),
       planner: stages.planner(),
       choices,
-      rigor: rigorByLevel(pipeline.checks),
     };
   };
   return {

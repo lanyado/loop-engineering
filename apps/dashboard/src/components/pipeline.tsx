@@ -260,7 +260,6 @@ function Node({
   chip,
   testId = 'node',
   stage,
-  off = false,
   notRun = false,
   children,
 }: {
@@ -273,19 +272,17 @@ function Node({
   chip?: ReactNode;
   testId?: string;
   stage?: string;
-  /** The session's rigor does not run this check (or it never ran at a merged head): drawn dimmed. */
-  off?: boolean;
+  /** The check never ran at the merged head: drawn dimmed. */
   notRun?: boolean;
   children?: ReactNode;
 }) {
   const shown = questions.length > 0 ? 'waiting' : state;
   return (
     <div
-      className={`node node-${shown} node-${kind}${off ? ' node-off' : ''}`}
+      className={`node node-${shown} node-${kind}${notRun ? ' node-not-run' : ''}`}
       data-testid={testId}
       data-stage={stage ?? kind}
       data-state={shown}
-      data-off={(off && !notRun) || undefined}
       data-not-run={notRun || undefined}
     >
       <span className="node-icon">
@@ -317,11 +314,9 @@ const edgeInto = (state: NodeState): NodeState =>
 const nodeDetail = (node: StageNode): string =>
   node.questions.length > 0
     ? 'waiting on you'
-    : node.off
-      ? 'off'
-      : node.notRun
-        ? 'not run'
-        : (node.problem ?? (node.skipped ? 'skipped' : STATE_WORDS[node.state]));
+    : node.notRun
+      ? 'not run'
+      : (node.problem ?? (node.skipped ? 'skipped' : STATE_WORDS[node.state]));
 
 /** The deploy node also carries where the lane ended: shipped, merged, or how it stopped. */
 function deployDetail(node: StageNode, lane: Lane): string {
@@ -347,12 +342,11 @@ function guardianDetail(node: StageNode, lane: Lane): string {
 
 /**
  * Stages whose agent job has a terminal (its log): review, tests, QA and custom stages, once they have
- * run. Not a check the session's rigor turned off: the loop passes over it without a job.
+ * run.
  */
 const JOB_STAGES = new Set<NodeStage>(['review', 'tests', 'qa']);
 function stageTerminal(lane: Lane, node: StageNode): TerminalTarget | null {
-  if (!lane.pr || !(node.custom || JOB_STAGES.has(node.stage)) || node.state === 'todo' || node.off)
-    return null;
+  if (!lane.pr || !(node.custom || JOB_STAGES.has(node.stage)) || node.state === 'todo') return null;
   return { kind: 'stage', prId: lane.pr.id, stage: node.stage };
 }
 
@@ -432,7 +426,6 @@ function LaneView({
               kind={node.icon}
               stage={node.stage}
               state={node.state}
-              off={node.off || node.notRun}
               notRun={node.notRun}
               title={node.label}
               detail={
@@ -538,6 +531,13 @@ function PlanSection({ session, planning, now }: { session: TreeSession; plannin
       ) : (
         <p className="muted small">
           {planning ? 'Planning: the plan shows here once it is ready.' : 'No plan was recorded.'}
+        </p>
+      )}
+      {session.rigorSource !== 'default' && (
+        <p className="muted small" data-testid="session-rigor-source">
+          {session.rigorSource === 'human'
+            ? 'Rigor set by you'
+            : `Rigor set by the Planner${session.rigorReason ? `: ${session.rigorReason}` : ''}`}
         </p>
       )}
     </section>
@@ -726,6 +726,8 @@ export function PipelineRow({
               sessionId={session.id}
               title={session.title}
               rigor={session.rigor}
+              source={session.rigorSource}
+              reason={session.rigorReason}
               readOnly={readOnly}
               preview={edit !== undefined}
             />

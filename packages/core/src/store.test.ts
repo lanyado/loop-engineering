@@ -289,6 +289,8 @@ describe('sessions', () => {
       worktrees: [{ repo: 'web', path: '/wt/web' }],
       source: 'runner',
       rigor: 'standard',
+      rigorSource: 'default',
+      rigorReason: null,
       plan: null,
       plannedAt: null,
       createdAt: '2026-10-18T09:00:00.000Z',
@@ -310,6 +312,34 @@ describe('sessions', () => {
     expect(store.sessions.update(s.id, { title: 'renamed' }).plan).toBe('Goal: refunds.');
     expect(() => store.sessions.setPlan(s.id, '  ')).toThrow(ValidationError);
     expect(() => store.sessions.setPlan(999, 'x')).toThrow(NotFoundError);
+  });
+
+  it('the Planner picks the level until the human chooses one, then never again', () => {
+    const s = store.sessions.create({ projectId: project.id, title: 't', model: 'm', branch: 'b' });
+    expect(store.sessions.setPlan(s.id, 'plan', { rigor: 'fast', reason: 'a typo' })).toMatchObject({
+      rigor: 'fast',
+      rigorSource: 'planner',
+      rigorReason: 'a typo',
+    });
+    // A plan without a pick leaves the level alone; a later pick replaces the Planner's own.
+    expect(store.sessions.setPlan(s.id, 'plan 2')).toMatchObject({ rigor: 'fast', rigorSource: 'planner' });
+    expect(store.sessions.setPlan(s.id, 'plan 3', { rigor: 'thorough', reason: 'auth' })).toMatchObject({
+      rigor: 'thorough',
+      rigorReason: 'auth',
+    });
+    expect(store.sessions.update(s.id, { rigor: 'light' })).toMatchObject({
+      rigor: 'light',
+      rigorSource: 'human',
+      rigorReason: null,
+    });
+    expect(store.sessions.setPlan(s.id, 'plan 4', { rigor: 'fast', reason: 'again' })).toMatchObject({
+      rigor: 'light',
+      rigorSource: 'human',
+      plan: 'plan 4',
+    });
+    expect(() => store.sessions.setPlan(s.id, 'x', { rigor: 'yolo' as never, reason: '' })).toThrow(
+      ValidationError,
+    );
   });
 
   it('sets the rigor dial and refuses an unknown level', () => {

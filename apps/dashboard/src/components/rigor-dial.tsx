@@ -2,7 +2,8 @@
 
 import { useOptimistic, useRef, useState, useTransition, type KeyboardEvent, type ReactNode } from 'react';
 import { setRigor } from '../app/actions';
-import { RIGOR_LEVELS, type Rigor } from '../lib/schemas';
+import { rigorHint } from '../lib/format';
+import { RIGOR_LEVELS, type Rigor, type RigorSource } from '../lib/schemas';
 
 const NAMES: Record<Rigor, string> = {
   fast: 'Fast',
@@ -13,10 +14,10 @@ const NAMES: Record<Rigor, string> = {
 
 /** One line on what the level does to this session's PRs (the loop's policy: packages/loop/src/rigor.ts). */
 export const RIGOR_CAPTIONS: Record<Rigor, string> = {
-  fast: 'no checks, merges once CI passes',
-  light: 'tests and code review only, 2 rounds at most',
+  fast: 'same stages, low effort, quick checks, no new tests, 1 review round',
+  light: 'same stages, medium effort, quick checks, no new tests, 2 rounds at most',
   standard: 'the pipeline as it is',
-  thorough: 'every check, QA on every PR, tests for every change',
+  thorough: 'same stages, maximum effort, tests for every change, QA on every PR',
 };
 
 /** How fast a level ships (out of 5) and how deeply it checks (out of 4): one move trades them. */
@@ -94,14 +95,15 @@ function LevelIcon({ level }: { level: Rigor }) {
 
 /**
  * The rigor dial above a session's pipeline: one choice from fast and cheap to slow and safe. A
- * radiogroup (arrow keys move and choose, like any radio group); a choice is saved at once and the
- * pipeline under it redraws with the checks that level leaves out turned off. Read-only in demo
- * mode; inert in the editor's preview.
+ * radiogroup (arrow keys move and choose, like any radio group); a choice is saved at once, and from
+ * then on the Planner no longer changes it. Read-only in demo mode; inert in the editor's preview.
  */
 export function RigorDial({
   sessionId,
   title,
   rigor,
+  source = 'default',
+  reason = null,
   readOnly,
   preview = false,
 }: {
@@ -109,21 +111,28 @@ export function RigorDial({
   /** The session's title, for the group's accessible name. */
   title: string;
   rigor: Rigor;
+  /** Who chose the level: choosing the shown level still saves while the human has not (it pins it). */
+  source?: RigorSource;
+  /** Why the Planner chose the level. */
+  reason?: string | null;
   readOnly: boolean;
   /** The editor's preview: drawn, never changed. */
   preview?: boolean;
 }) {
   const [shown, setShown] = useOptimistic(rigor);
+  const [pinned, setPinned] = useOptimistic(source === 'human');
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const stops = useRef<(HTMLButtonElement | null)[]>([]);
   const locked = readOnly || preview;
+  const hint = rigorHint(shown === rigor, pinned, source, reason);
 
   const choose = (level: Rigor) => {
-    if (locked || level === shown) return;
+    if (locked || (level === shown && pinned)) return;
     setError(null);
     start(async () => {
       setShown(level);
+      setPinned(true);
       const result = await setRigor(sessionId, level);
       if (!result.ok) setError(result.error);
     });
@@ -171,7 +180,7 @@ export function RigorDial({
             data-testid={`rigor-${level}`}
             // Not `disabled`: in demo mode the group stays reachable by keyboard; choose() ignores it.
             aria-disabled={readOnly || undefined}
-            title={`${NAMES[level]}: ${RIGOR_CAPTIONS[level]}`}
+            title={`${NAMES[level]}: ${RIGOR_CAPTIONS[level]}${level === shown ? hint : ''}`}
             onClick={() => choose(level)}
           >
             <span className="rigor-name">
@@ -189,6 +198,7 @@ export function RigorDial({
       {/* The words for the chosen level, for screen readers; sighted users read the meters (and hover). */}
       <p className="rigor-caption sr-only" id={`rigor-caption-${sessionId}`} data-testid="rigor-caption">
         <strong>{NAMES[shown]}:</strong> {RIGOR_CAPTIONS[shown]}
+        {hint}
       </p>
       {error && (
         <p className="error small rigor-note" role="alert">

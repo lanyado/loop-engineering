@@ -120,7 +120,11 @@ test('a new task sends the session back to planning, and submit_plan brings its 
   try {
     const result = await client.callTool({
       name: 'submit_plan',
-      arguments: { plan: 'Goal: Google Pay too.\n\nFiles: web/src/checkout/PaymentSheet.tsx' },
+      arguments: {
+        plan: 'Goal: Google Pay too.\n\nFiles: web/src/checkout/PaymentSheet.tsx',
+        rigor: 'fast',
+        rigorReason: 'A small change in one file.',
+      },
     });
     expect(result.content).toEqual([{ type: 'text', text: 'Plan recorded. Now build it.' }]);
   } finally {
@@ -130,7 +134,67 @@ test('a new task sends the session back to planning, and submit_plan brings its 
   await expect(planner.locator('.node-detail')).toHaveText('planned');
   await expect(checkout.getByTestId('session-plan-text')).toContainText('Goal: Google Pay too.');
   await expect(planner.getByTestId('node-ask')).toHaveCount(0);
+  // The Planner's level flips the dial live, with its reason in the details and on the dial.
+  const dial = checkout.getByTestId('rigor-dial');
+  await expect(dial).toHaveAttribute('data-rigor', 'fast');
+  await expect(checkout.getByTestId('session-rigor-source')).toHaveText(
+    'Rigor set by the Planner: A small change in one file.',
+  );
+  await expect(dial.getByTestId('rigor-fast')).toHaveAttribute('title', /Set by the Planner: A small change/);
   await snap(page, info, 'live-planned');
+
+  // The human's choice replaces the Planner's and is shown as theirs.
+  await dial.getByRole('radio', { name: 'Thorough', exact: true }).click();
+  await expect(dial).toHaveAttribute('data-rigor', 'thorough');
+  await expect(checkout.getByTestId('session-rigor-source')).toHaveText('Rigor set by you');
+  await expect(dial.getByTestId('rigor-thorough')).not.toHaveAttribute('title', /Planner/);
+});
+
+test('clicking the level the Planner picked pins it, and a later plan leaves it alone', async ({ page }) => {
+  await open(page);
+  const checkout = page.getByTestId('session-row').filter({ hasText: 'Apple Pay checkout' });
+  const dial = checkout.getByTestId('rigor-dial');
+  const submit = async (rigor: string, rigorReason: string) => {
+    const client = new Client({ name: 'e2e-agent', version: '0.0.0' });
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`${E2E.serverUrl}/mcp`), {
+        requestInit: {
+          headers: {
+            Authorization: `Bearer ${sessionToken(E2E.mcpToken, ids.checkout)}`,
+            'X-Loop-Session-Id': String(ids.checkout),
+          },
+        },
+      }),
+    );
+    try {
+      await client.callTool({
+        name: 'submit_plan',
+        arguments: { plan: `Plan for ${rigor}`, rigor, rigorReason },
+      });
+    } finally {
+      await client.close();
+    }
+  };
+  await checkout.getByTestId('planner-node').getByTestId('session-more').click();
+  await submit('light', 'A small change.');
+  await expect(dial).toHaveAttribute('data-rigor', 'light');
+  await expect(dial.getByTestId('rigor-light')).toHaveAttribute(
+    'title',
+    /Set by the Planner: A small change/,
+  );
+
+  // The same level, clicked: saved as the human's, and the hint says so.
+  await dial.getByRole('radio', { name: 'Light', exact: true }).click();
+  await expect(dial.getByTestId('rigor-light')).toHaveAttribute('title', /Set by you/);
+  await expect(checkout.getByTestId('session-rigor-source')).toHaveText('Rigor set by you');
+  await page.reload();
+  await expect(dial.getByTestId('rigor-light')).toHaveAttribute('title', /Set by you/);
+
+  // A later plan, with another pick, changes nothing.
+  await submit('thorough', 'Payments.');
+  await page.reload();
+  await expect(dial).toHaveAttribute('data-rigor', 'light');
+  await expect(dial.getByTestId('rigor-light')).not.toHaveAttribute('title', /Planner/);
 });
 
 test('answers with free text', async ({ page }) => {
@@ -694,10 +758,7 @@ test('a skip the server never gets flips the node back and reopens the pop-up wi
   await expect(qa).not.toContainText('skipped');
 });
 
-test('the rigor dial saves a level, and the lane under it runs those checks again', async ({
-  page,
-}, info) => {
-  // An open PR: a finished one keeps showing the checks it ran, whatever the level.
+test('the rigor dial saves a level, and every level draws every stage', async ({ page }, info) => {
   await testRoute('/test/pr', {
     sessionId: ids.rss,
     pr: { projectId: ids.blog, repo: 'site', number: 46, stage: 'tests', round: 1 },
@@ -716,13 +777,19 @@ test('the rigor dial saves a level, and the lane under it runs those checks agai
     return projects.find((p) => p.name === 'blog')?.sessions.find((s) => s.id === ids.rss)?.rigor;
   };
   await expect(dial).toHaveAttribute('data-rigor', 'fast');
-  await expect(dial.getByTestId('rigor-caption')).toContainText('Fast: no checks');
-  await expect(lane.locator('[data-off]')).toHaveCount(3);
-  await expect(lane.locator('[data-stage="qa"]')).toContainText('off');
+  await expect(dial.getByTestId('rigor-caption')).toContainText('Fast: same stages, low effort');
+  const stages = await lane
+    .locator('[data-stage]')
+    .evaluateAll((els) => els.map((e) => e.getAttribute('data-stage')));
+  expect(stages).toEqual(expect.arrayContaining(['tests', 'review', 'qa']));
+  const sameStages = async () =>
+    expect(
+      await lane.locator('[data-stage]').evaluateAll((els) => els.map((e) => e.getAttribute('data-stage'))),
+    ).toEqual(stages);
 
   await dial.getByRole('radio', { name: 'Thorough', exact: true }).click();
   await expect(dial).toHaveAttribute('data-rigor', 'thorough');
-  await expect(lane.locator('[data-off]')).toHaveCount(0);
+  await sameStages();
   await expect.poll(stored).toBe('thorough');
   await page.reload();
   await expect(dial).toHaveAttribute('data-rigor', 'thorough');
@@ -730,7 +797,7 @@ test('the rigor dial saves a level, and the lane under it runs those checks agai
     'aria-checked',
     'true',
   );
-  await expect(lane.locator('[data-off]')).toHaveCount(0);
+  await sameStages();
 
   // The keyboard moves along the dial like any radio group, and each step is saved.
   await dial.getByRole('radio', { name: 'Thorough', exact: true }).focus();
@@ -739,7 +806,7 @@ test('the rigor dial saves a level, and the lane under it runs those checks agai
   await expect(dial).toHaveAttribute('data-rigor', 'light');
   await expect(dial.getByRole('radio', { name: 'Light', exact: true })).toBeFocused();
   await expect.poll(stored).toBe('light');
-  await expect(lane.locator('[data-off]')).toHaveCount(1);
+  await sameStages();
   await expect(lane).toContainText('round 1');
   await expect(lane).not.toContainText('round 1/');
   await snap(page, info, 'rigor');

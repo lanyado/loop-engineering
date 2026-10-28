@@ -144,6 +144,7 @@ export function buildJobCommand(
       '--verbose',
       '--model',
       job.model,
+      ...(job.effort ? ['--effort', job.effort] : []),
       '--permission-mode',
       'dontAsk',
       '--no-session-persistence',

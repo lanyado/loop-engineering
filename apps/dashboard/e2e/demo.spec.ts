@@ -701,7 +701,7 @@ test('a check node offers Skip behind a confirmation pop-up; demo data cannot be
   await expect(skip).toBeFocused();
 });
 
-test('a rigor dial sits above each git session pipeline, and the lane dims what its level does not run', async ({
+test('a rigor dial sits above each git session pipeline; every level draws every stage', async ({
   page,
 }, info) => {
   await open(page);
@@ -717,9 +717,23 @@ test('a rigor dial sits above each git session pipeline, and the lane dims what 
   );
   // The caption, for screen readers.
   await expect(dial.getByTestId('rigor-caption')).toHaveText(
-    'Thorough: every check, QA on every PR, tests for every change',
+    /^Thorough: same stages, maximum effort, tests for every change, QA on every PR\s+Set by the Planner: Touches payments/,
   );
-  await expect(checkout.locator('[data-off]')).toHaveCount(0);
+  await expect(dial.getByRole('radio', { name: 'Thorough', exact: true })).toHaveAttribute(
+    'title',
+    /Set by the Planner: Touches payments and webhooks/,
+  );
+  // Only the chosen level carries the hint.
+  await expect(dial.getByRole('radio', { name: 'Fast', exact: true })).not.toHaveAttribute(
+    'title',
+    /Planner/,
+  );
+  // The Planner's pick, in the Plan section of the Planner node's details.
+  await checkout.getByTestId('planner-node').getByTestId('session-more').click();
+  await expect(checkout.getByTestId('session-rigor-source')).toHaveText(
+    'Rigor set by the Planner: Touches payments and webhooks, where a mistake costs money.',
+  );
+  await checkout.getByTestId('planner-node').getByTestId('session-more').click();
   // Demo data: read-only, yet reachable by keyboard; clicks and arrows change nothing.
   for (const radio of await dial.getByRole('radio').all())
     await expect(radio).toHaveAttribute('aria-disabled', 'true');
@@ -731,35 +745,32 @@ test('a rigor dial sits above each git session pipeline, and the lane dims what 
   await expect(dial.getByRole('radio', { name: 'Standard', exact: true })).toBeFocused();
   await expect(dial).toHaveAttribute('data-rigor', 'thorough');
 
-  // Light: QA is off (dimmed, no Skip), tests and review run; two rounds at most.
+  // Light: every stage is there, none dimmed or marked off; two rounds at most.
   const rss = row('RSS feed + dark mode');
   await expect(rss.getByTestId('rigor-dial')).toHaveAttribute('data-rigor', 'light');
   const qa = rss.locator('[data-stage="qa"]');
-  await expect(qa).toHaveAttribute('data-off', 'true');
-  await expect(qa).toContainText('off');
-  await expect(qa.getByTestId('skip-check')).toHaveCount(0);
-  expect(Number(await qa.evaluate((el) => getComputedStyle(el).opacity))).toBeLessThan(1);
-  await expect(rss.locator('[data-stage="tests"]')).not.toHaveAttribute('data-off', 'true');
+  await expect(qa).not.toContainText('off');
+  await expect(qa.getByTestId('skip-check')).toBeVisible();
+  expect(Number(await qa.evaluate((el) => getComputedStyle(el).opacity))).toBe(1);
   // Light cuts the PR's budget by its own rule: the round shows without a denominator.
   await expect(rss.getByTestId('lane')).toContainText('round 2');
   await expect(rss.getByTestId('lane')).not.toContainText('round 2/');
 
-  // Fast: every check of its open PR off; its merged PR still shows the checks it ran.
+  // Fast: the open PR draws all its checks; its merged PR still says which did not run at its head.
   const cdn = row('Image CDN migration');
   await expect(cdn.getByTestId('rigor-dial')).toHaveAttribute('data-rigor', 'fast');
   for (const stage of ['tests', 'review', 'qa'])
-    await expect(cdn.locator(`[data-pr-number="41"] [data-stage="${stage}"]`)).toHaveAttribute(
-      'data-off',
-      'true',
-    );
-  await expect(cdn.locator('[data-pr-number="44"] [data-off]')).toHaveCount(0);
-  // It merged at Fast: no check passed at its merged head, and its lane says so.
+    await expect(cdn.locator(`[data-pr-number="41"] [data-stage="${stage}"]`)).not.toContainText('off');
   await expect(cdn.locator('[data-pr-number="44"] [data-not-run]')).toHaveCount(3);
   await expect(cdn.locator('[data-pr-number="44"] [data-stage="qa"]')).toContainText('not run');
+  // Chosen by the human: nothing says the Planner picked it.
+  await expect(cdn.getByTestId('rigor-fast')).not.toHaveAttribute('title', /Planner/);
+  await cdn.getByTestId('planner-node').getByTestId('session-more').click();
+  await expect(cdn.getByTestId('session-rigor-source')).toHaveText('Rigor set by you');
+  await cdn.getByTestId('planner-node').getByTestId('session-more').click();
 
   // Standard draws the pipeline as it is; a folder project has no PRs and no dial.
   await expect(row('Search relevance').getByTestId('rigor-dial')).toHaveAttribute('data-rigor', 'standard');
-  await expect(row('Search relevance').locator('[data-off]')).toHaveCount(0);
   await expect(page.locator('[data-project="resume"]').getByTestId('rigor-dial')).toHaveCount(0);
 
   // It fits a phone: inside the window, and the page does not scroll sideways.

@@ -7,6 +7,7 @@ import {
   type PauseReason,
   type Provider,
   type Rigor,
+  type RigorSource,
   type Session,
   type SessionSource,
   type SessionStatus,
@@ -77,6 +78,8 @@ interface SessionRow {
   worktrees: string;
   source: SessionSource;
   rigor: Rigor;
+  rigor_source: RigorSource;
+  rigor_reason: string | null;
   plan: string | null;
   planned_at: string | null;
   created_at: string;
@@ -98,6 +101,8 @@ const toSession = (r: SessionRow): Session => ({
   worktrees: parseJson<Worktree[]>(r.worktrees),
   source: r.source,
   rigor: r.rigor,
+  rigorSource: r.rigor_source,
+  rigorReason: r.rigor_reason,
   plan: r.plan,
   plannedAt: r.planned_at,
   createdAt: r.created_at,
@@ -259,15 +264,31 @@ export class SessionRepo {
       branch: patch.branch,
       worktrees: toJson(patch.worktrees),
       rigor: patch.rigor,
+      // A level chosen here is the human's: it pins the level against the Planner.
+      rigor_source: patch.rigor === undefined ? undefined : 'human',
+      rigor_reason: patch.rigor === undefined ? undefined : null,
       ended_at: endedAt,
     });
     return this.require(id);
   }
 
-  /** Records the planner's plan, stamped now; a later plan replaces it. */
-  setPlan(id: number, plan: string): Session {
+  /**
+   * Records the planner's plan, stamped now; a later plan replaces it. Its level pick applies only
+   * while the human has not chosen one: the human's choice is never overridden.
+   */
+  setPlan(id: number, plan: string, pick?: { rigor: Rigor; reason: string | null }): Session {
     if (plan.trim() === '') throw new ValidationError('the plan must not be empty');
-    updateById(this.db, 'sessions', 'session', id, { plan, planned_at: isoNow(this.clock) });
+    if (pick && !RIGOR_LEVELS.includes(pick.rigor)) {
+      throw new ValidationError(`unknown rigor "${String(pick.rigor)}"`);
+    }
+    const apply = pick && this.require(id).rigorSource !== 'human';
+    updateById(this.db, 'sessions', 'session', id, {
+      plan,
+      planned_at: isoNow(this.clock),
+      rigor: apply ? pick.rigor : undefined,
+      rigor_source: apply ? 'planner' : undefined,
+      rigor_reason: apply ? pick.reason || null : undefined,
+    });
     return this.require(id);
   }
 

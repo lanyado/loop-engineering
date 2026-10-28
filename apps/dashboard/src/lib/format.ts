@@ -1,4 +1,5 @@
 /** Display helpers shared by server and client components. Pure functions, unit tested. */
+import type { RigorSource } from './schemas';
 
 export const REVIEW_ROUND_CAP = 5;
 
@@ -10,15 +11,15 @@ export function usageTone(usedPercentage: number): 'active' | 'waiting' | 'bad' 
 }
 
 /**
- * "round 2/5": out of the PR's own budget (Continue adds to it). At rigor Light the loop cuts that
- * budget by its own rule, so no denominator is shown rather than one the dashboard would have to guess.
+ * "round 2/5": out of the PR's own budget (Continue adds to it). At rigor Fast and Light the loop cuts
+ * that budget by its own rule, so no denominator is shown rather than one the dashboard would have to guess.
  */
 export function roundLabel(
   round: number,
   maxRounds: number | undefined = REVIEW_ROUND_CAP,
   rigor = 'standard',
 ): string {
-  return rigor === 'light' ? `round ${round}` : `round ${round}/${maxRounds}`;
+  return rigor === 'light' || rigor === 'fast' ? `round ${round}` : `round ${round}/${maxRounds}`;
 }
 
 const PAUSE_LABELS: Record<string, string> = {
@@ -132,4 +133,16 @@ export function formatPrMetrics(m: {
     plural(m.rounds, 'round'),
     ...(m.failures > 0 ? [plural(m.failures, 'failure')] : []),
   ].join(' · ');
+}
+
+/** The words after the chosen level's caption: who chose it (nothing for an untouched default). */
+export function rigorHint(
+  current: boolean,
+  pinned: boolean,
+  source: RigorSource,
+  reason: string | null,
+): string {
+  if (!current || source === 'default') return '';
+  if (pinned) return ' Set by you.';
+  return reason ? ` Set by the Planner: ${reason}` : ' Set by the Planner.';
 }

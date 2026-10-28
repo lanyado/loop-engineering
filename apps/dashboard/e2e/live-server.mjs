@@ -82,7 +82,7 @@ function seed(server) {
     provider: 'opencode',
     branch: 'loop/rss',
   });
-  // The rigor dial at Fast: its lane draws every check off.
+  // The rigor dial at Fast, chosen by the human.
   store.sessions.update(rss.id, { rigor: 'fast' });
   // A past Claude Code conversation, as the importer stores it.
   store.sessions.importEnded({
