@@ -7,6 +7,9 @@ import {
   secretValues,
   PERMISSION_MODES,
   PR_STAGES,
+  BUILDER_AGENT,
+  isAgentId,
+  isModelName,
   RIGOR_LEVELS,
   SESSION_STATUSES,
   ValidationError,
@@ -17,6 +20,7 @@ import {
   type Session,
   type Subagent,
 } from '@loop-engineering/core';
+import type { StageLibrary } from '@loop-engineering/loop';
 import { routerProjectId } from '@loop-engineering/router';
 import { Hono, type Context } from 'hono';
 import * as z from 'zod';
@@ -51,6 +55,12 @@ import { idParam as id } from '../ids.js';
  *                                            how much checking the PR loop gives its PRs, from the next
  *                                            step on (packages/loop/src/rigor.ts); 404 for an unknown
  *                                            session, 409 for the router's reserved one
+ *   PUT    /sessions/:id/models/:agent        { model: string | null } -> { session }: the model one agent
+ *                                            ("builder", a check's stage id, "conflict") uses from its next
+ *                                            job (the builder: next resume); null goes back to the default.
+ *                                            The human's choice: the Planner no longer changes it. 400 on a
+ *                                            name that is not letters, digits and . - _ / : or starts with -;
+ *                                            409 on an ended session; 400 on an agent outside the pipeline
  *   GET    /sessions/:id/transcript           { transcript: { createdAt, text } | null }: the latest
  *                                            stored transcript of a past session (the View button
  *                                            of a finished row), redacted like search results
@@ -83,6 +93,8 @@ export interface DashboardApiOptions {
   protectedRoots?: string[];
   /** Default os.homedir(). */
   home?: string;
+  /** The pipeline: a session's model can only be set for the builder, the conflict fixer or its checks. */
+  stages?: StageLibrary;
 }
 
 export function dashboardApi(options: DashboardApiOptions = {}): ServerModule {
@@ -162,6 +174,14 @@ const newFolderProject = z.strictObject({
 });
 const endSession = z.strictObject({ force: z.boolean().optional() });
 const sessionPatch = z.strictObject({ rigor: z.enum(RIGOR_LEVELS) });
+const agentModelBody = z.strictObject({
+  model: z
+    .string()
+    .trim()
+    .refine(isModelName, 'model must be letters, digits and . - _ / : (80 at most), not starting with a dash')
+    .nullable(),
+});
+const agentId = z.string().refine(isAgentId, 'unknown agent');
 const nonEmpty = <T extends object>(o: T) => Object.keys(o).length > 0;
 const projectPatch = z.strictObject(projectFields).partial().refine(nonEmpty, 'nothing to update');
 const settingsPatch = z
@@ -363,6 +383,30 @@ export function dashboardRoutes(ctx: ServerContext, options: DashboardApiOptions
         kind: 'decision',
         text: `Session ${sessionId}: the human set its rigor from ${session.rigor} to ${rigor} (dashboard).`,
       });
+    return c.json({ session: updated });
+  });
+
+  // One agent's model (the builder, a check): the human's choice, which the Planner never overrides.
+  api.put('/sessions/:id/models/:agent', async (c) => {
+    const sessionId = parse(id, c.req.param('id'));
+    const agent = parse(agentId, c.req.param('agent'));
+    const { model } = parse(agentModelBody, await body(c));
+    const session = store.sessions.require(sessionId);
+    if (isReserved(session.projectId)) return reserved(c);
+    if (session.status === 'ended')
+      return c.json({ error: `session ${sessionId} has ended; its agents no longer run` }, 409);
+    // Like submit_plan: the builder, the conflict fixer, or a check of the current pipeline.
+    if (options.stages && ![BUILDER_AGENT, 'conflict', ...options.stages.pipeline().checks].includes(agent))
+      return c.json({ error: `"${agent}" is not an agent of the pipeline` }, 400);
+    const before = session.models[agent];
+    if (before?.model === model && before.by === 'human') return c.json({ session });
+    const updated = store.sessions.setAgentModel(sessionId, agent, model);
+    store.history.add({
+      projectId: session.projectId,
+      sessionId,
+      kind: 'decision',
+      text: `Session ${sessionId}: the human ${model === null ? `reset the model of ${agent} to the default` : `set the model of ${agent} to ${model}`} (dashboard).`,
+    });
     return c.json({ session: updated });
   });
 

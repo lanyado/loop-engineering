@@ -785,3 +785,70 @@ test('a rigor dial sits above each git session pipeline; every level draws every
   await page.goto('/edit');
   await expect(page.getByTestId('rigor-dial').first()).toHaveAttribute('inert', '');
 });
+
+test('each agent node shows its model name on top; in demo mode it is read-only', async ({ page }, info) => {
+  await open(page);
+  const row = (title: string) => page.getByTestId('session-row').filter({ hasText: title });
+  const name = (r: ReturnType<typeof row>, stage: string) =>
+    r.locator(`[data-stage="${stage}"]`).first().getByTestId('node-model-name');
+
+  // The Planner's picks, on the Builder and on each check of the lane.
+  const checkout = row('Apple Pay checkout');
+  await expect(name(checkout, 'builder')).toHaveText('opus');
+  await expect(name(checkout, 'tests')).toHaveText('haiku');
+  await expect(name(checkout, 'review')).toHaveText('opus');
+  await expect(name(checkout, 'qa')).toHaveText('sonnet');
+  await expect(checkout.locator('[data-stage="tests"]').first().getByTestId('node-model')).toHaveAttribute(
+    'title',
+    'haiku (chosen by the Planner)',
+  );
+  // Only agents have one: not Approval, Merge, Deploy, Guardian or the Planner.
+  for (const stage of ['awaiting_approval', 'merge', 'deploying', 'guardian'])
+    await expect(checkout.locator(`[data-stage="${stage}"]`).first().getByTestId('node-model')).toHaveCount(
+      0,
+    );
+  await expect(checkout.getByTestId('planner-node').getByTestId('node-model')).toHaveCount(0);
+
+  // On top: the caption sits on the node's top edge, centered over it.
+  const node = await checkout.locator('[data-stage="tests"]').first().boundingBox();
+  const tag = await checkout.locator('[data-stage="tests"]').first().getByTestId('node-model').boundingBox();
+  expect(tag!.y).toBeLessThan(node!.y + 4);
+  expect(tag!.y + tag!.height).toBeLessThan(node!.y + node!.height / 2);
+  expect(Math.abs(tag!.x + tag!.width / 2 - (node!.x + node!.width / 2))).toBeLessThan(2);
+
+  // The human's pick reads as theirs; an agent with no pick shows the default.
+  const search = row('Search relevance');
+  await expect(name(search, 'review')).toHaveText('opus');
+  await expect(search.locator('[data-stage="review"]').first().getByTestId('node-model')).toHaveAttribute(
+    'title',
+    'opus (set by you)',
+  );
+  await expect(name(search, 'builder')).toHaveText('sonnet');
+  await expect(search.locator('[data-stage="tests"]').first().getByTestId('node-model')).toHaveAttribute(
+    'title',
+    'opus (the default)',
+  );
+  // An OpenCode session runs its checks on the fallback model; the long name keeps its tail.
+  const rss = row('RSS feed + dark mode');
+  await expect(name(rss, 'review')).toHaveText('glm-5.3-flash-free');
+  await expect(rss.locator('[data-stage="review"]').first().getByTestId('node-model')).toHaveAttribute(
+    'title',
+    'opencode/glm-5.3-flash-free (the default)',
+  );
+
+  // Demo mode: plain text, no button to change anything.
+  await expect(page.getByTestId('node-model-button')).toHaveCount(0);
+
+  // The Plan details list the picks with their reason, and what you changed.
+  await search.getByTestId('planner-node').getByTestId('session-more').click();
+  await expect(search.getByTestId('session-models-planner')).toHaveText(
+    'Models picked by the Planner: builder sonnet: A contained ranking change: a lighter builder is enough.',
+  );
+  await expect(search.getByTestId('session-models-human')).toHaveText('Models set by you: review opus');
+  await snap(page, info, 'models');
+
+  // The editor's preview draws the names, not as buttons.
+  await page.goto('/edit');
+  await expect(page.getByTestId('node-model').first()).toBeVisible();
+  await expect(page.getByTestId('node-model-button')).toHaveCount(0);
+});

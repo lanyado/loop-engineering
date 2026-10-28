@@ -11,6 +11,7 @@ export { openStore, type Store, type StoreOptions } from './store.js';
 export type { NewProject, ProjectFilter, ProjectPatch, ProjectRepo } from './repos/projects.js';
 export type {
   ImportedSession,
+  ModelPicks,
   NewSession,
   SessionFilter,
   SessionPatch,

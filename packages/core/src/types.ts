@@ -26,6 +26,51 @@ export const DEFAULT_RIGOR: Rigor = 'standard';
 export const RIGOR_SOURCES = ['default', 'planner', 'human'] as const;
 export type RigorSource = (typeof RIGOR_SOURCES)[number];
 
+/** The agents of a session that can have their own model: the builder, the PR loop's checks and the conflict fixer. */
+export const BUILDER_AGENT = 'builder';
+export const AGENT_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
+/** An agent id, but never a name every object has ("constructor"): ids are keys of a plain object. */
+export const isAgentId = (id: string): boolean => AGENT_ID.test(id) && !(id in Object.prototype);
+/** Most agents one session can hold a model for. */
+export const MAX_AGENT_MODELS = 20;
+
+/** Claude aliases that always resolve to the newest model of that tier. */
+export const MODEL_ALIASES = ['opus', 'sonnet', 'haiku'] as const;
+export const MODEL_NAME_MAX = 80;
+/**
+ * A model name the Planner or the dashboard may pick: letters, digits and . - _ / :, starting with a
+ * letter or digit. Names are free text (new ones appear), so this only keeps option injection out of
+ * the CLI command line: no leading "-", no spaces, no shell characters.
+ */
+export const isModelName = (name: string): boolean =>
+  name.length <= MODEL_NAME_MAX && /^[A-Za-z0-9][A-Za-z0-9._/:-]*$/.test(name);
+
+/** Who chose an agent's model: the Planner (submit_plan) or the human (which pins it against the Planner). */
+export const MODEL_SOURCES = ['planner', 'human'] as const;
+export type ModelSource = (typeof MODEL_SOURCES)[number];
+export interface AgentModel {
+  model: string;
+  by: ModelSource;
+}
+/** Agent id (BUILDER_AGENT, a check's stage id, or "conflict") -> its model. An agent without an entry uses the default. */
+export type AgentModels = Record<string, AgentModel>;
+
+/** Throws for a model that a CLI would read as an option; the launchers call it before building a command. */
+export function assertModelArg(model: string): string {
+  if (model === '' || model.startsWith('-') || /[\s\0]/.test(model))
+    throw new Error(`refusing to launch with the model name ${JSON.stringify(model)}`);
+  return model;
+}
+
+/**
+ * The models the Planner and the dashboard offer for the Claude agents: the aliases and the session
+ * model. The OpenCode models are left out: a pick only applies on Claude, and `claude --model
+ * opencode/...` fails.
+ */
+export function allowedModels(settings: Pick<Settings, 'sessionModel'>): string[] {
+  return [...new Set([...MODEL_ALIASES, settings.sessionModel])].filter(isModelName);
+}
+
 export const PROVIDERS = ['claude', 'opencode'] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
@@ -227,6 +272,10 @@ export interface Session {
   rigorSource: RigorSource;
   /** Why the Planner chose the level (only while rigorSource is "planner"). */
   rigorReason: string | null;
+  /** Models chosen per agent (the builder, each check); none: Settings' defaults. Applies from the agent's next job or resume. */
+  models: AgentModels;
+  /** Why the Planner chose its models (null once none of the entries is the Planner's). */
+  modelsReason: string | null;
   /** The planner's latest plan (submit_plan), and when it came: the newest task's plan wins. */
   plan: string | null;
   plannedAt: Iso | null;

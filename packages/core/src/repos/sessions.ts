@@ -3,6 +3,10 @@ import { NotFoundError, ValidationError } from '../errors.js';
 import { parseJson, toJson, updateById, where, type Db } from '../sql.js';
 import {
   RIGOR_LEVELS,
+  isAgentId,
+  isModelName,
+  MAX_AGENT_MODELS,
+  type AgentModels,
   type Effort,
   type PauseReason,
   type Provider,
@@ -57,6 +61,21 @@ export type SessionPatch = Partial<
   > & { pauseReason: PauseReason }
 >;
 
+/** The Planner's model picks for a task (agent id -> model) and its one-line reason. */
+export interface ModelPicks {
+  models: Record<string, string>;
+  reason: string | null;
+}
+
+function checkAgentModel(agent: string, model: string): void {
+  if (!isAgentId(agent)) throw new ValidationError(`unknown agent "${agent}"`);
+  if (!isModelName(model)) {
+    throw new ValidationError(
+      `"${model}" is not a model name: letters, digits and . - _ / : (80 at most), not starting with a dash`,
+    );
+  }
+}
+
 export interface SessionFilter {
   projectId?: number;
   status?: SessionStatus | SessionStatus[];
@@ -80,6 +99,8 @@ interface SessionRow {
   rigor: Rigor;
   rigor_source: RigorSource;
   rigor_reason: string | null;
+  models: string | null;
+  models_reason: string | null;
   plan: string | null;
   planned_at: string | null;
   created_at: string;
@@ -103,6 +124,8 @@ const toSession = (r: SessionRow): Session => ({
   rigor: r.rigor,
   rigorSource: r.rigor_source,
   rigorReason: r.rigor_reason,
+  models: r.models === null ? {} : parseJson<AgentModels>(r.models),
+  modelsReason: r.models_reason,
   plan: r.plan,
   plannedAt: r.planned_at,
   createdAt: r.created_at,
@@ -276,18 +299,63 @@ export class SessionRepo {
    * Records the planner's plan, stamped now; a later plan replaces it. Its level pick applies only
    * while the human has not chosen one: the human's choice is never overridden.
    */
-  setPlan(id: number, plan: string, pick?: { rigor: Rigor; reason: string | null }): Session {
+  setPlan(
+    id: number,
+    plan: string,
+    pick?: { rigor: Rigor; reason: string | null },
+    modelPicks?: ModelPicks,
+  ): Session {
     if (plan.trim() === '') throw new ValidationError('the plan must not be empty');
     if (pick && !RIGOR_LEVELS.includes(pick.rigor)) {
       throw new ValidationError(`unknown rigor "${String(pick.rigor)}"`);
     }
-    const apply = pick && this.require(id).rigorSource !== 'human';
+    for (const [agent, model] of Object.entries(modelPicks?.models ?? {})) checkAgentModel(agent, model);
+    const current = this.require(id);
+    const apply = pick && current.rigorSource !== 'human';
+    // New picks replace the Planner's earlier ones (they are per task); the human's entries stay.
+    let models: AgentModels | undefined;
+    if (modelPicks) {
+      models = Object.fromEntries(Object.entries(current.models).filter(([, m]) => m.by === 'human'));
+      for (const [agent, model] of Object.entries(modelPicks.models))
+        if (!models[agent]) models[agent] = { model, by: 'planner' };
+    }
+    if (models && Object.keys(models).length > MAX_AGENT_MODELS)
+      throw new ValidationError(`a session holds models for ${MAX_AGENT_MODELS} agents at most`);
+    const planned = models && Object.values(models).some((m) => m.by === 'planner');
     updateById(this.db, 'sessions', 'session', id, {
       plan,
       planned_at: isoNow(this.clock),
       rigor: apply ? pick.rigor : undefined,
       rigor_source: apply ? 'planner' : undefined,
       rigor_reason: apply ? pick.reason || null : undefined,
+      ...(models
+        ? {
+            models: Object.keys(models).length > 0 ? toJson(models) : null,
+            models_reason: planned ? modelPicks?.reason || null : null,
+          }
+        : {}),
+    });
+    return this.require(id);
+  }
+
+  /**
+   * Sets one agent's model, or with `model` null clears it (back to the default). A human's choice
+   * pins the agent against the Planner; clearing it frees the agent for the Planner again.
+   */
+  setAgentModel(id: number, agent: string, model: string | null): Session {
+    if (model !== null) checkAgentModel(agent, model);
+    else if (!isAgentId(agent)) throw new ValidationError(`unknown agent "${agent}"`);
+    const models = { ...this.require(id).models };
+    if (model === null) delete models[agent];
+    else {
+      if (!(agent in models) && Object.keys(models).length >= MAX_AGENT_MODELS)
+        throw new ValidationError(`a session holds models for ${MAX_AGENT_MODELS} agents at most`);
+      models[agent] = { model, by: 'human' };
+    }
+    const planned = Object.values(models).some((m) => m.by === 'planner');
+    updateById(this.db, 'sessions', 'session', id, {
+      models: Object.keys(models).length > 0 ? toJson(models) : null,
+      ...(planned ? {} : { models_reason: null }),
     });
     return this.require(id);
   }

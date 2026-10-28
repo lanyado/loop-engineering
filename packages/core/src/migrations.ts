@@ -632,6 +632,12 @@ export const MIGRATIONS: readonly Migration[] = [
           -- A level other than the default was the human's choice: the Planner must not override it.
           UPDATE sessions SET rigor_source = 'human' WHERE rigor <> 'standard';`,
   },
+  {
+    version: 24,
+    name: 'sessions: the model of each agent, and why the Planner chose them',
+    sql: `ALTER TABLE sessions ADD COLUMN models TEXT NULL DEFAULT NULL;
+          ALTER TABLE sessions ADD COLUMN models_reason TEXT NULL;`,
+  },
 ];
 
 /** Applies every migration newer than the database's user_version, each in its own transaction. */

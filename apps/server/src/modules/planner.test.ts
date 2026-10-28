@@ -1,11 +1,13 @@
 import type { BusEvent } from '@loop-engineering/ask-human';
 import { FakeClock, openStore, sessionToken, type Store } from '@loop-engineering/core';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { StageLibrary } from '@loop-engineering/loop';
+import type { SessionRunner } from '@loop-engineering/runner';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ServerConfig } from '../config.js';
 import { createServer, type LoopServer } from '../server.js';
 import { dashboardApi } from './dashboard-api.js';
-import { PLAN_MAX, plannerModule, RIGOR_REASON_MAX, SUBMIT_PLAN_TOOL } from './planner.js';
+import { MODELS_REASON_MAX, PLAN_MAX, plannerModule, RIGOR_REASON_MAX, SUBMIT_PLAN_TOOL } from './planner.js';
 
 const DASHBOARD_TOKEN = 'dashboard-token-for-tests-0001';
 const MCP_TOKEN = 'mcp-token-for-tests-00000000001';
@@ -26,6 +28,7 @@ let clients: Client[];
 let events: BusEvent[];
 let mine: number;
 let other: number;
+let relaunched: [number, string][];
 
 beforeEach(() => {
   clock = new FakeClock('2026-10-26T09:00:00.000Z');
@@ -33,7 +36,24 @@ beforeEach(() => {
   const shop = store.projects.create({ name: 'shop' }).id;
   mine = store.sessions.create({ projectId: shop, title: 'login', model: 'opus', branch: 'loop/login' }).id;
   other = store.sessions.create({ projectId: shop, title: 'cart', model: 'opus', branch: 'loop/cart' }).id;
-  server = createServer({ config, store, modules: [dashboardApi(), plannerModule()] });
+  const calls: [number, string][] = (relaunched = []);
+  const runner = {
+    protectedRoots: () => [],
+    relaunch: (id: number, why: string) => {
+      calls.push([id, why]);
+      return Promise.resolve(store.sessions.require(id));
+    },
+  } as unknown as SessionRunner;
+  const stages = {
+    pipeline: () => ({ checks: ['tests', 'security', 'review', 'qa'], deploy: false, guardian: false }),
+  } as unknown as StageLibrary;
+  server = createServer({
+    config,
+    store,
+    runner: () => runner,
+    usageMonitor: false,
+    modules: [dashboardApi(), plannerModule({ stages, relaunchDelayMs: 0 })],
+  });
   events = [];
   server.ctx.bus.onAny((e) => {
     events.push(e);
@@ -180,5 +200,199 @@ describe('submit_plan', () => {
     store.sessions.end(mine);
     await expect(mcpClient(mine)).rejects.toThrow(/401|unauthorized/i);
     expect(store.sessions.require(mine).plan).toBeNull();
+  });
+
+  describe('models', () => {
+    it("stores the Planner's model per agent with its reason, tells the dashboard and logs the pick", async () => {
+      const client = await mcpClient(mine);
+      const res = await client.callTool({
+        name: SUBMIT_PLAN_TOOL,
+        arguments: {
+          plan: 'Rework the payment webhook.',
+          models: { builder: 'opus', tests: 'haiku', review: 'claude-opus-4-8', security: 'sonnet' },
+          modelsReason: '  Payments: strong builder and reviewer.  ',
+        },
+      });
+      expect(res.isError).toBeFalsy();
+      expect(text(res)).toBe('Plan recorded. Now build it.');
+      expect(store.sessions.require(mine)).toMatchObject({
+        models: {
+          builder: { model: 'opus', by: 'planner' },
+          tests: { model: 'haiku', by: 'planner' },
+          review: { model: 'claude-opus-4-8', by: 'planner' },
+          security: { model: 'sonnet', by: 'planner' },
+        },
+        modelsReason: 'Payments: strong builder and reviewer.',
+      });
+      expect(events.at(-1)).toEqual({ type: 'session.planned', session: store.sessions.require(mine) });
+      expect(store.history.list({ sessionId: mine }).map((e) => e.text)).toEqual([
+        `Planner chose models for session ${mine}: builder opus, tests haiku, review claude-opus-4-8, security sonnet: Payments: strong builder and reviewer..`,
+      ]);
+    });
+
+    it('a later plan picks again for the new task; one without models leaves them alone', async () => {
+      const client = await mcpClient(mine);
+      await client.callTool({
+        name: SUBMIT_PLAN_TOOL,
+        arguments: { plan: 'p1', models: { review: 'opus' } },
+      });
+      await client.callTool({ name: SUBMIT_PLAN_TOOL, arguments: { plan: 'p2' } });
+      expect(store.sessions.require(mine).models).toEqual({ review: { model: 'opus', by: 'planner' } });
+      await client.callTool({
+        name: SUBMIT_PLAN_TOOL,
+        arguments: { plan: 'p3', models: { tests: 'haiku' } },
+      });
+      expect(store.sessions.require(mine).models).toEqual({ tests: { model: 'haiku', by: 'planner' } });
+    });
+
+    it('refuses names that are not model names, and stores nothing', async () => {
+      const client = await mcpClient(mine);
+      const bad = [
+        { builder: '--dangerously-skip-permissions' },
+        { builder: '-opus' },
+        { review: 'opus sonnet' },
+        { review: 'opus;rm -rf /' },
+        { review: '$(id)' },
+        { review: '' },
+        { review: 'a'.repeat(81) },
+      ];
+      for (const models of bad) {
+        const res = await client.callTool({ name: SUBMIT_PLAN_TOOL, arguments: { plan: 'p', models } });
+        expect(res.isError, JSON.stringify(models)).toBe(true);
+      }
+      const long = await client.callTool({
+        name: SUBMIT_PLAN_TOOL,
+        arguments: { plan: 'p', models: { review: 'opus' }, modelsReason: 'x'.repeat(MODELS_REASON_MAX + 1) },
+      });
+      expect(long.isError).toBe(true);
+      expect(store.sessions.require(mine)).toMatchObject({ plan: null, models: {}, modelsReason: null });
+      expect(events).toEqual([]);
+    });
+
+    it('ignores agents that are not in the pipeline, and says so', async () => {
+      const client = await mcpClient(mine);
+      const res = await client.callTool({
+        name: SUBMIT_PLAN_TOOL,
+        arguments: { plan: 'p', models: { review: 'sonnet', deploy: 'opus', lint: 'haiku' } },
+      });
+      expect(res.isError).toBeFalsy();
+      expect(text(res)).toBe('Plan recorded. Ignored unknown agents: deploy, lint. Now build it.');
+      expect(store.sessions.require(mine).models).toEqual({ review: { model: 'sonnet', by: 'planner' } });
+    });
+
+    it('ignores malformed agent ids, "constructor" included, and names them; the rest still applies', async () => {
+      const client = await mcpClient(mine);
+      const res = await client.callTool({
+        name: SUBMIT_PLAN_TOOL,
+        arguments: {
+          plan: 'p',
+          models: { review: 'sonnet', 'Bad Agent': 'opus', constructor: 'opus', '-x': 'opus' },
+        },
+      });
+      expect(res.isError).toBeFalsy();
+      expect(text(res)).toBe(
+        'Plan recorded. Ignored unknown agents: Bad Agent, constructor, -x. Now build it.',
+      );
+      expect(store.sessions.require(mine).models).toEqual({ review: { model: 'sonnet', by: 'planner' } });
+    });
+
+    it("never overrides the human's choice for an agent, and says so; the others still apply", async () => {
+      const client = await mcpClient(mine);
+      store.sessions.setAgentModel(mine, 'review', 'haiku'); // the dashboard
+      const res = await client.callTool({
+        name: SUBMIT_PLAN_TOOL,
+        arguments: { plan: 'p', models: { review: 'opus', tests: 'sonnet' }, modelsReason: 'risky' },
+      });
+      expect(text(res)).toBe('Plan recorded. The human chose the model for review; it stays. Now build it.');
+      expect(store.sessions.require(mine).models).toEqual({
+        review: { model: 'haiku', by: 'human' },
+        tests: { model: 'sonnet', by: 'planner' },
+      });
+    });
+
+    it('relaunches the live builder when the plan changes its model or effort, and only then', async () => {
+      const client = await mcpClient(mine);
+      await client.callTool({ name: SUBMIT_PLAN_TOOL, arguments: { plan: 'p', models: { review: 'opus' } } });
+      await client.callTool({ name: SUBMIT_PLAN_TOOL, arguments: { plan: 'p', rigor: 'standard' } });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(relaunched).toEqual([]); // a check's model is not the builder's
+      await client.callTool({
+        name: SUBMIT_PLAN_TOOL,
+        arguments: { plan: 'p', models: { builder: 'sonnet' } },
+      });
+      await vi.waitFor(() => expect(relaunched.map(([id]) => id)).toEqual([mine]));
+      expect(relaunched[0]?.[1]).toMatch(/new model or effort/);
+      // The same pick again changes nothing; a new effort does.
+      await client.callTool({
+        name: SUBMIT_PLAN_TOOL,
+        arguments: { plan: 'p', models: { builder: 'sonnet' } },
+      });
+      await client.callTool({ name: SUBMIT_PLAN_TOOL, arguments: { plan: 'p', rigor: 'fast' } });
+      await vi.waitFor(() => expect(relaunched).toHaveLength(2));
+    });
+
+    describe('with a delay before the relaunch', () => {
+      const slow = async () => {
+        await server.close();
+        server = createServer({
+          config,
+          store,
+          runner: () =>
+            ({
+              protectedRoots: () => [],
+              relaunch: (id: number, why: string) => {
+                relaunched.push([id, why]);
+                return Promise.resolve(store.sessions.require(id));
+              },
+            }) as unknown as SessionRunner,
+          usageMonitor: false,
+          modules: [dashboardApi(), plannerModule({ relaunchDelayMs: 150 })],
+        });
+      };
+
+      it('two plans in a row make one relaunch: the later one replaces the pending timer', async () => {
+        await slow();
+        const client = await mcpClient(mine);
+        await client.callTool({
+          name: SUBMIT_PLAN_TOOL,
+          arguments: { plan: 'p', models: { builder: 'sonnet' } },
+        });
+        await client.callTool({
+          name: SUBMIT_PLAN_TOOL,
+          arguments: { plan: 'p', models: { builder: 'haiku' } },
+        });
+        await new Promise((r) => setTimeout(r, 400));
+        expect(relaunched).toHaveLength(1);
+      });
+
+      it('a pending relaunch is dropped when the server shuts down, or the session is gone', async () => {
+        await slow();
+        const client = await mcpClient(mine);
+        await client.callTool({
+          name: SUBMIT_PLAN_TOOL,
+          arguments: { plan: 'p', models: { builder: 'sonnet' } },
+        });
+        await server.close();
+        await new Promise((r) => setTimeout(r, 300));
+        expect(relaunched).toEqual([]);
+      });
+    });
+
+    it('does not relaunch a paused session or one on OpenCode: the pick applies at its next resume', async () => {
+      const client = await mcpClient(mine);
+      store.sessions.update(mine, { status: 'paused' });
+      await client.callTool({
+        name: SUBMIT_PLAN_TOOL,
+        arguments: { plan: 'p', models: { builder: 'sonnet' } },
+      });
+      store.sessions.update(mine, { status: 'active', provider: 'opencode' });
+      await client.callTool({
+        name: SUBMIT_PLAN_TOOL,
+        arguments: { plan: 'p', models: { builder: 'haiku' } },
+      });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(relaunched).toEqual([]);
+      expect(store.sessions.require(mine).models.builder).toEqual({ model: 'haiku', by: 'planner' });
+    });
   });
 });

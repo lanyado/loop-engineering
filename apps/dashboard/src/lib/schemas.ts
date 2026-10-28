@@ -69,6 +69,16 @@ export type Rigor = (typeof RIGOR_LEVELS)[number];
 export const RIGOR_SOURCES = ['default', 'planner', 'human'] as const;
 export type RigorSource = (typeof RIGOR_SOURCES)[number];
 
+/** Who chose an agent's model (core's MODEL_SOURCES). */
+export const MODEL_SOURCES = ['planner', 'human'] as const;
+export type ModelSource = (typeof MODEL_SOURCES)[number];
+/** Agent id ("builder", a check's stage id, "conflict") -> its model; an agent without an entry uses the default. */
+const agentModelsSchema = z.record(
+  z.string(),
+  z.object({ model: z.string(), by: z.enum(MODEL_SOURCES).catch('planner') }),
+);
+export type AgentModels = z.infer<typeof agentModelsSchema>;
+
 export const treeSessionSchema = z.object({
   id: z.number(),
   projectId: z.number(),
@@ -86,6 +96,9 @@ export const treeSessionSchema = z.object({
   // Who chose the level: "planner" (with its reason) or "human" pin it; older servers send neither.
   rigorSource: z.enum(RIGOR_SOURCES).catch('default').default('default'),
   rigorReason: z.string().nullable().default(null),
+  // The model chosen per agent, and why the Planner chose them; older servers send none (all defaults).
+  models: agentModelsSchema.catch({}).default({}),
+  modelsReason: z.string().nullable().default(null),
   // The planner's latest plan (submit_plan) and when its newest task came; older servers send none.
   plan: z.string().nullable().default(null),
   plannedAt: iso.nullable().default(null),
@@ -274,6 +287,7 @@ export const responses = {
   request: z.object({ request: requestSchema }),
   session: z.object({ session: z.object({ id: z.number(), status: z.string() }) }),
   rigor: z.object({ session: z.object({ id: z.number(), rigor: z.enum(RIGOR_LEVELS) }) }),
+  agentModel: z.object({ session: z.object({ id: z.number() }) }),
   transcript: z.object({ transcript: transcriptSchema.nullable() }),
   error: z.object({ error: z.string() }),
 };
@@ -292,6 +306,22 @@ export const projectToggleInput = z.object({
 });
 export const endSessionInput = z.object({ sessionId: z.number().int().positive() });
 export const rigorInput = z.object({ sessionId: z.number().int().positive(), rigor: z.enum(RIGOR_LEVELS) });
+/** A model name the server accepts (core's isModelName): no leading dash, no spaces or shell characters. */
+export const MODEL_NAME_MAX = 80;
+export const isModelName = (name: string): boolean =>
+  name.length <= MODEL_NAME_MAX && /^[A-Za-z0-9][A-Za-z0-9._/:-]*$/.test(name);
+export const agentModelInput = z.object({
+  sessionId: z.number().int().positive(),
+  agent: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9-]{0,31}$/, 'Unknown agent')
+    .refine((id) => !(id in Object.prototype), 'Unknown agent'),
+  model: z
+    .string()
+    .trim()
+    .refine(isModelName, 'Use letters, digits and . - _ / : only, not starting with a dash (80 at most)')
+    .nullable(),
+});
 export const skipCheckInput = z.object({
   prId: z.number().int().positive(),
   check: z.string().min(1).max(32),

@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import type { Board, ProjectBoard } from '../lib/board';
 import { shows, type Layout } from '../lib/layout';
+import type { ModelDefaults } from '../lib/models';
 import { FinishedGroup } from './finished-sessions';
 import { PipelineRow } from './pipeline';
 import { FolderPath, KindChip } from './project-kind';
@@ -40,6 +41,7 @@ export function BoardView({
   now,
   readOnly,
   settings,
+  models,
 }: {
   board: Board;
   /** pipeline.json cannot be read: the PR loop waits. */
@@ -51,6 +53,8 @@ export function BoardView({
   readOnly: boolean;
   /** What a project's slider icon opens. */
   settings: (p: ProjectBoard) => ReactNode;
+  /** The model captions' defaults and choices; none: the captions are left out. */
+  models?: ModelDefaults | undefined;
 }) {
   return (
     <>
@@ -90,6 +94,7 @@ export function BoardView({
                   hidden={layout.hiddenDetails}
                   readOnly={readOnly}
                   now={now}
+                  models={models}
                 />
               ))}
             </ul>

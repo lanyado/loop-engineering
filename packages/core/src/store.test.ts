@@ -291,6 +291,8 @@ describe('sessions', () => {
       rigor: 'standard',
       rigorSource: 'default',
       rigorReason: null,
+      models: {},
+      modelsReason: null,
       plan: null,
       plannedAt: null,
       createdAt: '2026-10-18T09:00:00.000Z',
@@ -340,6 +342,54 @@ describe('sessions', () => {
     expect(() => store.sessions.setPlan(s.id, 'x', { rigor: 'yolo' as never, reason: '' })).toThrow(
       ValidationError,
     );
+  });
+
+  it("the Planner's model picks replace its earlier ones per task and never touch the human's", () => {
+    const s = store.sessions.create({ projectId: project.id, title: 't', model: 'm', branch: 'b' });
+    expect(store.sessions.require(s.id)).toMatchObject({ models: {}, modelsReason: null });
+    expect(
+      store.sessions.setPlan(s.id, 'plan', undefined, {
+        models: { builder: 'opus', review: 'sonnet' },
+        reason: 'auth work',
+      }),
+    ).toMatchObject({
+      models: { builder: { model: 'opus', by: 'planner' }, review: { model: 'sonnet', by: 'planner' } },
+      modelsReason: 'auth work',
+    });
+    // The human changes one; a later plan picks again for all, but that one stays.
+    store.sessions.setAgentModel(s.id, 'review', 'haiku');
+    const next = store.sessions.setPlan(s.id, 'plan 2', undefined, {
+      models: { review: 'opus', tests: 'haiku' },
+      reason: 'a copy change',
+    });
+    expect(next.models).toEqual({
+      review: { model: 'haiku', by: 'human' },
+      tests: { model: 'haiku', by: 'planner' },
+    });
+    expect(next.modelsReason).toBe('a copy change');
+    // A plan without picks leaves them alone.
+    expect(store.sessions.setPlan(s.id, 'plan 3').models).toEqual(next.models);
+    // Nothing of the Planner's left: the reason goes with it.
+    store.sessions.setAgentModel(s.id, 'tests', null);
+    expect(store.sessions.require(s.id)).toMatchObject({
+      models: { review: { model: 'haiku', by: 'human' } },
+      modelsReason: null,
+    });
+  });
+
+  it('clearing the last model stores null, and bad agents or names are refused', () => {
+    const s = store.sessions.create({ projectId: project.id, title: 't', model: 'm', branch: 'b' });
+    store.sessions.setAgentModel(s.id, 'builder', 'claude-opus-4-8');
+    expect(store.sessions.setAgentModel(s.id, 'builder', null).models).toEqual({});
+    for (const name of ['-opus', '--effort=low', 'opus sonnet', 'opus;ls', '$(id)', '', 'a'.repeat(81)])
+      expect(() => store.sessions.setAgentModel(s.id, 'builder', name)).toThrow(ValidationError);
+    for (const agent of ['Builder!', 'constructor', 'toString'])
+      expect(() => store.sessions.setAgentModel(s.id, agent, 'opus')).toThrow(ValidationError);
+    expect(() =>
+      store.sessions.setPlan(s.id, 'x', undefined, { models: { builder: '-x' }, reason: null }),
+    ).toThrow(ValidationError);
+    expect(store.sessions.require(s.id).plan).toBeNull();
+    expect(() => store.sessions.setAgentModel(999, 'builder', 'opus')).toThrow(NotFoundError);
   });
 
   it('sets the rigor dial and refuses an unknown level', () => {

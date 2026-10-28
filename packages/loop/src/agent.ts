@@ -1,6 +1,7 @@
 import { createWriteStream, mkdirSync, type WriteStream } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { assertModelArg } from '@loop-engineering/core';
 import {
   opencodePermission,
   parseClaudeOutput,
@@ -143,7 +144,7 @@ export function buildJobCommand(
       'stream-json',
       '--verbose',
       '--model',
-      job.model,
+      assertModelArg(job.model),
       ...(job.effort ? ['--effort', job.effort] : []),
       '--permission-mode',
       'dontAsk',
@@ -178,7 +179,7 @@ export function buildJobCommand(
   const message = `${job.systemPrompt}\n\n${job.prompt}`;
   return {
     bin: bins.opencode,
-    args: ['run', '--standalone', '--format', 'json', '-m', job.model, '--', message],
+    args: ['run', '--standalone', '--format', 'json', '-m', assertModelArg(job.model), '--', message],
     env: { OPENCODE_CONFIG_CONTENT: JSON.stringify(config) },
   };
 }

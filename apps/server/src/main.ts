@@ -51,7 +51,7 @@ const server = createServer({
   // it asks a routing question, and before the loop, so it hears the loop's fix requests. It stays off
   // without ctx.runner. History and the planner come last: they only add MCP tools (and a sweep).
   modules: [
-    dashboardApi(),
+    dashboardApi({ stages }),
     pipelineModule({ stages, pokePr: (id) => loop?.engine()?.pokePr(id) }),
     claudeUsageModule(),
     terminalModule(),
@@ -60,7 +60,7 @@ const server = createServer({
     routerModule(),
     ...(loop ? [loop] : []),
     historyModule(),
-    plannerModule(),
+    plannerModule({ stages }),
   ],
 });
 // Registered before start(), so the server can always be stopped, even while it is starting.

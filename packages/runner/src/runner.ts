@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import {
+  BUILDER_AGENT,
   enabledProvider,
   FolderBusyError,
   pathsOverlap,
@@ -82,6 +83,8 @@ export interface RunnerDeps {
   ids?: { uuid(): string; suffix(): string };
   /** Warnings (e.g. a skipped file the repo tracks). Default console.warn. */
   log?: (message: string) => void;
+  /** Milliseconds, for the relaunch rate limit. Default Date.now. */
+  now?: () => number;
 }
 
 /** What to work on: new text, or a request the router already recorded. */
@@ -93,6 +96,9 @@ export interface StartOptions {
   model?: string;
   effort?: Effort;
 }
+
+/** Least time between two relaunches of one session. */
+const RELAUNCH_MIN_GAP_MS = 60_000;
 
 export interface ResumeOptions {
   /** Only resume a session paused for this reason (an automatic resume never undoes a manual pause). */
@@ -106,6 +112,8 @@ export interface ResumeOptions {
   fresh?: boolean;
   /** Also hand the agent a file: written to `.loop/<name>` before the launch, `sentence` added to its first prompt. */
   deliver?: { name: string; content: string; sentence: string };
+  /** Launch on the session's default model and effort, ignoring the builder's pick and the rigor level's effort. */
+  defaults?: boolean;
 }
 
 export interface EndOptions {
@@ -165,6 +173,10 @@ export class SessionRunner {
   private readonly planner: (() => string) | undefined;
   /** Per-session promise chains: start, pause, resume, fallback and reconcile never interleave. */
   private readonly locks = new Map<number, Promise<unknown>>();
+  /** What each Claude builder was last launched with, to tell whether a relaunch would change anything. */
+  private readonly launched = new Map<number, { model: string; effort: Effort | null }>();
+  private readonly relaunchedAt = new Map<number, number>();
+  private readonly now: () => number;
 
   constructor(
     private readonly deps: RunnerDeps,
@@ -187,6 +199,7 @@ export class SessionRunner {
     this.mcpToolTimeoutMs = config.mcpToolTimeoutMs ?? DEFAULT_MCP_TOOL_TIMEOUT_MS;
     this.ids = deps.ids ?? { uuid: randomUUID, suffix: () => randomBytes(3).toString('hex') };
     this.log = deps.log ?? ((m) => console.warn(`[runner] ${m}`));
+    this.now = deps.now ?? Date.now;
     this.claudeProjectsDir =
       config.claudeProjectsDir ?? join(this.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'projects');
     this.onClaudeLimit = config.onClaudeLimit ?? 'opencode';
@@ -291,82 +304,136 @@ export class SessionRunner {
    * paused for that reason is resumed (an automatic resume never undoes a manual pause).
    */
   resume(sessionId: number, options: ResumeOptions = {}): Promise<Session> {
+    return this.withLock(sessionId, () => this.resumeNow(sessionId, options));
+  }
+
+  /** resume() without taking the session's lock: for callers that already hold it. */
+  private async resumeNow(sessionId: number, options: ResumeOptions): Promise<Session> {
+    const { store } = this.deps;
+    const s = store.sessions.require(sessionId);
+    if (s.status === 'ended') throw new ValidationError(`session ${sessionId} has ended`);
+    if (s.status === 'active' && (await this.isAlive(s))) return s;
+    if (s.status === 'paused' && options.ifReason && s.pauseReason !== options.ifReason) return s;
+    await this.killOwnWindow(s); // a dead pane kept by remain-on-exit
+    const project = store.projects.require(s.projectId);
+    const cwd = await this.sessionCwd(s, project);
+    const why = options.reason ?? `the session was paused (${s.pauseReason ?? 'agent gone'})`;
+    // The session's CLI was switched off since it started: move it to the one that is on, with a
+    // fresh conversation that gets the full state (the old one cannot be continued across CLIs).
+    const settings = store.settings.get();
+    const provider = enabledProvider(settings, s.provider);
+    const switched = provider !== s.provider;
+    const model = !switched
+      ? s.model
+      : provider === 'claude'
+        ? settings.sessionModel
+        : settings.fallbackModel;
+    // The builder's own model (dashboard or Planner) counts on Claude only; OpenCode has its chain.
+    // It is not stored as the session's model, which stays the default "Use the default" goes back to.
+    const launchModel =
+      (provider === 'claude' && !options.defaults ? s.models[BUILDER_AGENT]?.model : undefined) ?? model;
+    if (switched) {
+      store.history.add({
+        projectId: s.projectId,
+        sessionId: s.id,
+        kind: 'decision',
+        text: `${s.provider} is switched off, so session ${s.id} resumed on ${provider}/${model} (from ${s.provider}/${s.model}).`,
+      });
+    }
+    let agentSessionId = switched ? null : s.agentSessionId;
+    let resume = true;
+    let prompt: string;
+    // An agent that died before Claude saved its conversation would just die again on --resume.
+    const agentDied = s.status === 'active' || s.pauseReason === 'agent_exited';
+    if (
+      provider === 'claude' &&
+      agentSessionId &&
+      agentDied &&
+      !(await this.conversationSaved(agentSessionId))
+    ) {
+      this.log(`session ${s.id}: no saved Claude conversation ${agentSessionId}; starting a new one`);
+      agentSessionId = null;
+    }
+    if (provider === 'claude' && agentSessionId) {
+      prompt = `Resumed: ${why}. Continue where you left off.`;
+    } else {
+      // OpenCode --continue picks the folder's last conversation, which may be stale or missing; a
+      // Claude session without a conversation id starts a new, recorded one. Both get the full state.
+      if (provider === 'claude') {
+        agentSessionId = this.ids.uuid();
+        resume = false;
+      }
+      if (provider === 'opencode' && options.fresh) resume = false;
+      prompt = await this.continuationPrompt(s, why);
+    }
+    if (options.deliver) {
+      // Written before the launch and named in the first prompt: typing into an agent that is still
+      // starting up could be lost.
+      await this.writeLoopFile(s, project, cwd, options.deliver.name, options.deliver.content);
+      prompt = `${prompt}\n\n${sanitizeLine(options.deliver.sentence)}`;
+    }
+    const target = await this.launch(s.id, cwd, {
+      provider,
+      model: launchModel,
+      permissionMode: project.permissionMode,
+      resume,
+      agentSessionId,
+      effort: options.defaults ? s.effort : effortFor(s.rigor, s.effort),
+      prompt,
+    });
+    return store.sessions.update(sessionId, {
+      status: 'active',
+      tmuxTarget: target,
+      agentSessionId,
+      provider,
+      model,
+    });
+  }
+
+  /**
+   * Restarts a live Claude agent, continuing its conversation, so a model or effort chosen for it
+   * (the Planner's plan) takes effect now instead of at its next resume. Does nothing unless the
+   * session is active on Claude with its agent running, and its launch differs from what is stored
+   * now; at most one relaunch per session per RELAUNCH_MIN_GAP_MS. The session's lock is held from
+   * the stop to the new launch, so a pause by the human waits and then stands. A launch that fails
+   * is retried once on the default model and effort; if that fails too the session stays paused
+   * (agent_exited) with a history entry saying why.
+   */
+  relaunch(sessionId: number, why: string): Promise<Session> {
     return this.withLock(sessionId, async () => {
       const { store } = this.deps;
       const s = store.sessions.require(sessionId);
-      if (s.status === 'ended') throw new ValidationError(`session ${sessionId} has ended`);
-      if (s.status === 'active' && (await this.isAlive(s))) return s;
-      if (s.status === 'paused' && options.ifReason && s.pauseReason !== options.ifReason) return s;
-      await this.killOwnWindow(s); // a dead pane kept by remain-on-exit
-      const project = store.projects.require(s.projectId);
-      const cwd = await this.sessionCwd(s, project);
-      const why = options.reason ?? `the session was paused (${s.pauseReason ?? 'agent gone'})`;
-      // The session's CLI was switched off since it started: move it to the one that is on, with a
-      // fresh conversation that gets the full state (the old one cannot be continued across CLIs).
-      const settings = store.settings.get();
-      const provider = enabledProvider(settings, s.provider);
-      const switched = provider !== s.provider;
-      const model = !switched
-        ? s.model
-        : provider === 'claude'
-          ? settings.sessionModel
-          : settings.fallbackModel;
-      if (switched) {
-        store.history.add({
-          projectId: s.projectId,
-          sessionId: s.id,
-          kind: 'decision',
-          text: `${s.provider} is switched off, so session ${s.id} resumed on ${provider}/${model} (from ${s.provider}/${s.model}).`,
-        });
+      if (s.provider !== 'claude' || s.status !== 'active' || !(await this.isAlive(s))) return s;
+      const want = { model: s.models[BUILDER_AGENT]?.model ?? s.model, effort: effortFor(s.rigor, s.effort) };
+      const had = this.launched.get(sessionId);
+      if (had && had.model === want.model && had.effort === want.effort) return s;
+      const now = this.now();
+      if (now - (this.relaunchedAt.get(sessionId) ?? -Infinity) < RELAUNCH_MIN_GAP_MS) {
+        this.log(`session ${sessionId}: relaunch skipped, the last one was less than a minute ago`);
+        return s;
       }
-      let agentSessionId = switched ? null : s.agentSessionId;
-      let resume = true;
-      let prompt: string;
-      // An agent that died before Claude saved its conversation would just die again on --resume.
-      const agentDied = s.status === 'active' || s.pauseReason === 'agent_exited';
-      if (
-        provider === 'claude' &&
-        agentSessionId &&
-        agentDied &&
-        !(await this.conversationSaved(agentSessionId))
-      ) {
-        this.log(`session ${s.id}: no saved Claude conversation ${agentSessionId}; starting a new one`);
-        agentSessionId = null;
-      }
-      if (provider === 'claude' && agentSessionId) {
-        prompt = `Resumed: ${why}. Continue where you left off.`;
-      } else {
-        // OpenCode --continue picks the folder's last conversation, which may be stale or missing; a
-        // Claude session without a conversation id starts a new, recorded one. Both get the full state.
-        if (provider === 'claude') {
-          agentSessionId = this.ids.uuid();
-          resume = false;
+      this.relaunchedAt.set(sessionId, now);
+      await this.killOwnWindow(s);
+      store.sessions.update(s.id, { status: 'paused', pauseReason: 'agent_exited', tmuxTarget: null });
+      this.log(`session ${sessionId}: relaunched (${why})`);
+      const note = (text: string) =>
+        store.history.add({ projectId: s.projectId, sessionId: s.id, kind: 'decision', text });
+      try {
+        return await this.resumeNow(sessionId, { reason: why });
+      } catch (err) {
+        try {
+          const back = await this.resumeNow(sessionId, { reason: why, defaults: true });
+          note(
+            `Session ${s.id}: relaunching the builder on ${want.model} failed (${errorMessage(err)}); it runs on its default model and effort instead.`,
+          );
+          return back;
+        } catch (second) {
+          note(
+            `Session ${s.id}: relaunching the builder failed (${errorMessage(err)}), and so did the default model (${errorMessage(second)}). It is paused (agent exited).`,
+          );
+          return store.sessions.require(sessionId);
         }
-        if (provider === 'opencode' && options.fresh) resume = false;
-        prompt = await this.continuationPrompt(s, why);
       }
-      if (options.deliver) {
-        // Written before the launch and named in the first prompt: typing into an agent that is still
-        // starting up could be lost.
-        await this.writeLoopFile(s, project, cwd, options.deliver.name, options.deliver.content);
-        prompt = `${prompt}\n\n${sanitizeLine(options.deliver.sentence)}`;
-      }
-      const target = await this.launch(s.id, cwd, {
-        provider,
-        model,
-        permissionMode: project.permissionMode,
-        resume,
-        agentSessionId,
-        effort: effortFor(s.rigor, s.effort),
-        prompt,
-      });
-      return store.sessions.update(sessionId, {
-        status: 'active',
-        tmuxTarget: target,
-        agentSessionId,
-        provider,
-        model,
-      });
     });
   }
 
@@ -697,7 +764,8 @@ export class SessionRunner {
       }
       launched = await this.launch(session.id, cwd, {
         provider: session.provider,
-        model: session.model,
+        model:
+          (session.provider === 'claude' ? session.models[BUILDER_AGENT]?.model : undefined) ?? session.model,
         permissionMode: project.permissionMode,
         prompt: text,
         ...(session.agentSessionId ? { agentSessionId: session.agentSessionId } : {}),
@@ -959,6 +1027,8 @@ export class SessionRunner {
   private async launch(sessionId: number, cwd: string, spec: LaunchSpec): Promise<string> {
     const { fs, tmux, agentCli, store } = this.deps;
     const configDir = this.configDir(sessionId);
+    if (spec.provider === 'claude')
+      this.launched.set(sessionId, { model: spec.model, effort: spec.effort ?? null });
     const paths = await writeSessionConfig(fs, configDir, cwd, {
       serverUrl: this.serverUrl,
       sessionId,
@@ -987,12 +1057,15 @@ export class SessionRunner {
     const scriptPath = join(configDir, `launch-${this.ids.suffix()}.sh`);
     await fs.writeFile(scriptPath, renderLaunchScript(argv, env, cwd), { mode: 0o600 });
     try {
-      return await tmux.newWindow({
+      const target = await tmux.newWindow({
         session: this.tmuxSession,
         name: windowName(sessionId),
         cwd,
         command: `sh ${shellQuote(scriptPath)}`,
       });
+      if (spec.provider === 'claude')
+        this.launched.set(sessionId, { model: spec.model, effort: spec.effort ?? null });
+      return target;
     } catch (err) {
       await fs.remove(scriptPath).catch(() => undefined);
       throw err;
