@@ -10,11 +10,11 @@ const byId = (id: number) => sessions.find((s) => s.id === id)!;
 const defaults = modelDefaults(settings);
 
 describe('modelDefaults', () => {
-  it('offers the aliases, then the models Settings names, once each', () => {
+  it('offers the Claude aliases and the session model, never the OpenCode models', () => {
     expect(defaults).toEqual({
       sessionModel: 'opus',
       fallbackModel: 'opencode/glm-5.3-flash-free',
-      allowed: ['opus', 'sonnet', 'haiku', 'opencode/glm-5.3-flash-free', 'opencode/big-pickle'],
+      allowed: ['opus', 'sonnet', 'haiku'],
     });
   });
 

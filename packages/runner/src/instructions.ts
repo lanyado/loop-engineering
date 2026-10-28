@@ -126,7 +126,8 @@ function planningFirst(prompt: string): string[] {
       'standard or thorough) and rigorReason (one short sentence) too: your judgement of how much checking ' +
       'this change needs, which the human can override. Pass models too ({ builder, tests, review, qa }, each ' +
       'opus, sonnet, haiku or a full model name) with modelsReason (one short sentence): the model for you ' +
-      'and for each check. These are suggestions you make once per task; the human can change them.',
+      'and for each check. These are suggestions you make once per task; the human can change them. If your ' +
+      'plan changes your own model, or your effort through rigor, you may be restarted once and resumed here.',
     '',
     prompt.trim(),
   ];

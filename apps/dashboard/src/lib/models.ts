@@ -10,18 +10,11 @@ export interface ModelDefaults {
   allowed: string[];
 }
 
-/** The aliases, then the models Settings names (core's allowedModels). */
+/** The names the menu offers: the Claude aliases and the session model (a pick only applies on Claude). */
 export function modelDefaults(
   settings: Pick<Settings, 'sessionModel' | 'fallbackModel' | 'opencodeBackupModels'>,
 ): ModelDefaults {
-  const allowed = [
-    ...new Set([
-      ...MODEL_ALIASES,
-      settings.sessionModel,
-      settings.fallbackModel,
-      ...settings.opencodeBackupModels,
-    ]),
-  ].filter(isModelName);
+  const allowed = [...new Set([...MODEL_ALIASES, settings.sessionModel])].filter(isModelName);
   return { sessionModel: settings.sessionModel, fallbackModel: settings.fallbackModel, allowed };
 }
 

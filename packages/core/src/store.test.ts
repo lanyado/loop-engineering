@@ -383,7 +383,8 @@ describe('sessions', () => {
     expect(store.sessions.setAgentModel(s.id, 'builder', null).models).toEqual({});
     for (const name of ['-opus', '--effort=low', 'opus sonnet', 'opus;ls', '$(id)', '', 'a'.repeat(81)])
       expect(() => store.sessions.setAgentModel(s.id, 'builder', name)).toThrow(ValidationError);
-    expect(() => store.sessions.setAgentModel(s.id, 'Builder!', 'opus')).toThrow(ValidationError);
+    for (const agent of ['Builder!', 'constructor', 'toString'])
+      expect(() => store.sessions.setAgentModel(s.id, agent, 'opus')).toThrow(ValidationError);
     expect(() =>
       store.sessions.setPlan(s.id, 'x', undefined, { models: { builder: '-x' }, reason: null }),
     ).toThrow(ValidationError);

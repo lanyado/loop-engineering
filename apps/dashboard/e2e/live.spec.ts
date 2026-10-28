@@ -224,6 +224,17 @@ test('the model name on a stage is changeable: it saves, survives a reload, and 
   await expect(menu).toBeVisible();
   for (const [i, alias] of ['opus', 'sonnet', 'haiku'].entries())
     await expect(menu.getByTestId('model-choice').nth(i)).toHaveText(alias);
+  // Only Claude-capable models are offered, and the arrows move between them.
+  await expect(menu.getByTestId('model-choice')).toHaveText(['opus', 'sonnet', 'haiku']);
+  await menu.getByTestId('model-choice').first().focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(menu.getByTestId('model-choice').nth(1)).toBeFocused();
+  await page.keyboard.press('ArrowUp');
+  await expect(menu.getByTestId('model-choice').first()).toBeFocused();
+  await menu.getByTestId('model-custom').fill('opencode/big-pickle');
+  await expect(menu.getByTestId('model-custom-warning')).toBeVisible();
+  await menu.getByTestId('model-custom').fill('');
+  await expect(menu.getByTestId('model-custom-warning')).toHaveCount(0);
   await expect(menu.getByTestId('model-default')).toBeDisabled();
   await page.keyboard.press('Escape');
   await expect(menu).toHaveCount(0);

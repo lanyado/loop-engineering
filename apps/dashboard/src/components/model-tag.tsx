@@ -111,7 +111,24 @@ export function ModelTag({
               Now {shown.model} ({SOURCE_WORDS[shown.by]}). A choice applies from {when} and stays yours: the
               Planner no longer changes it.
             </p>
-            <ul className="model-choices" aria-label="Models">
+            <ul
+              className="model-choices"
+              aria-label="Models"
+              onKeyDown={(e) => {
+                if (
+                  e.key !== 'ArrowDown' &&
+                  e.key !== 'ArrowUp' &&
+                  e.key !== 'ArrowRight' &&
+                  e.key !== 'ArrowLeft'
+                )
+                  return;
+                const items = [...e.currentTarget.querySelectorAll('button')];
+                const at = items.indexOf(document.activeElement as HTMLButtonElement);
+                const step = e.key === 'ArrowDown' || e.key === 'ArrowRight' ? 1 : -1;
+                e.preventDefault();
+                items[(at + step + items.length) % items.length]?.focus();
+              }}
+            >
               {allowed.map((name) => (
                 <li key={name}>
                   <button
@@ -148,6 +165,12 @@ export function ModelTag({
                 Use
               </button>
             </form>
+            {custom.includes('/') && (
+              <p className="warning small" data-testid="model-custom-warning">
+                A name with a slash looks like an OpenCode model. Claude agents cannot run it: the job or the
+                launch would fail.
+              </p>
+            )}
             {error && (
               <p className="error small" role="alert">
                 {error}

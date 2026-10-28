@@ -255,8 +255,6 @@ describe('submit_plan', () => {
         { review: '$(id)' },
         { review: '' },
         { review: 'a'.repeat(81) },
-        { 'Bad Agent': 'opus' },
-        { '-builder': 'opus' },
       ];
       for (const models of bad) {
         const res = await client.callTool({ name: SUBMIT_PLAN_TOOL, arguments: { plan: 'p', models } });
@@ -278,8 +276,22 @@ describe('submit_plan', () => {
         arguments: { plan: 'p', models: { review: 'sonnet', deploy: 'opus', lint: 'haiku' } },
       });
       expect(res.isError).toBeFalsy();
+      expect(text(res)).toBe('Plan recorded. Ignored unknown agents: deploy, lint. Now build it.');
+      expect(store.sessions.require(mine).models).toEqual({ review: { model: 'sonnet', by: 'planner' } });
+    });
+
+    it('ignores malformed agent ids, "constructor" included, and names them; the rest still applies', async () => {
+      const client = await mcpClient(mine);
+      const res = await client.callTool({
+        name: SUBMIT_PLAN_TOOL,
+        arguments: {
+          plan: 'p',
+          models: { review: 'sonnet', 'Bad Agent': 'opus', constructor: 'opus', '-x': 'opus' },
+        },
+      });
+      expect(res.isError).toBeFalsy();
       expect(text(res)).toBe(
-        'Plan recorded. Ignored agents not in the pipeline: deploy, lint. Now build it.',
+        'Plan recorded. Ignored unknown agents: Bad Agent, constructor, -x. Now build it.',
       );
       expect(store.sessions.require(mine).models).toEqual({ review: { model: 'sonnet', by: 'planner' } });
     });
@@ -317,6 +329,53 @@ describe('submit_plan', () => {
       });
       await client.callTool({ name: SUBMIT_PLAN_TOOL, arguments: { plan: 'p', rigor: 'fast' } });
       await vi.waitFor(() => expect(relaunched).toHaveLength(2));
+    });
+
+    describe('with a delay before the relaunch', () => {
+      const slow = async () => {
+        await server.close();
+        server = createServer({
+          config,
+          store,
+          runner: () =>
+            ({
+              protectedRoots: () => [],
+              relaunch: (id: number, why: string) => {
+                relaunched.push([id, why]);
+                return Promise.resolve(store.sessions.require(id));
+              },
+            }) as unknown as SessionRunner,
+          usageMonitor: false,
+          modules: [dashboardApi(), plannerModule({ relaunchDelayMs: 150 })],
+        });
+      };
+
+      it('two plans in a row make one relaunch: the later one replaces the pending timer', async () => {
+        await slow();
+        const client = await mcpClient(mine);
+        await client.callTool({
+          name: SUBMIT_PLAN_TOOL,
+          arguments: { plan: 'p', models: { builder: 'sonnet' } },
+        });
+        await client.callTool({
+          name: SUBMIT_PLAN_TOOL,
+          arguments: { plan: 'p', models: { builder: 'haiku' } },
+        });
+        await new Promise((r) => setTimeout(r, 400));
+        expect(relaunched).toHaveLength(1);
+      });
+
+      it('a pending relaunch is dropped when the server shuts down, or the session is gone', async () => {
+        await slow();
+        const client = await mcpClient(mine);
+        await client.callTool({
+          name: SUBMIT_PLAN_TOOL,
+          arguments: { plan: 'p', models: { builder: 'sonnet' } },
+        });
+        await server.close();
+        await new Promise((r) => setTimeout(r, 300));
+        expect(relaunched).toEqual([]);
+      });
     });
 
     it('does not relaunch a paused session or one on OpenCode: the pick applies at its next resume', async () => {

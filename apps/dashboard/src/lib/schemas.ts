@@ -312,7 +312,10 @@ export const isModelName = (name: string): boolean =>
   name.length <= MODEL_NAME_MAX && /^[A-Za-z0-9][A-Za-z0-9._/:-]*$/.test(name);
 export const agentModelInput = z.object({
   sessionId: z.number().int().positive(),
-  agent: z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/, 'Unknown agent'),
+  agent: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9-]{0,31}$/, 'Unknown agent')
+    .refine((id) => !(id in Object.prototype), 'Unknown agent'),
   model: z
     .string()
     .trim()

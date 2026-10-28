@@ -2,9 +2,10 @@ import { isoNow, type Clock } from '../clock.js';
 import { NotFoundError, ValidationError } from '../errors.js';
 import { parseJson, toJson, updateById, where, type Db } from '../sql.js';
 import {
-  AGENT_ID,
   RIGOR_LEVELS,
+  isAgentId,
   isModelName,
+  MAX_AGENT_MODELS,
   type AgentModels,
   type Effort,
   type PauseReason,
@@ -67,7 +68,7 @@ export interface ModelPicks {
 }
 
 function checkAgentModel(agent: string, model: string): void {
-  if (!AGENT_ID.test(agent)) throw new ValidationError(`unknown agent "${agent}"`);
+  if (!isAgentId(agent)) throw new ValidationError(`unknown agent "${agent}"`);
   if (!isModelName(model)) {
     throw new ValidationError(
       `"${model}" is not a model name: letters, digits and . - _ / : (80 at most), not starting with a dash`,
@@ -318,6 +319,8 @@ export class SessionRepo {
       for (const [agent, model] of Object.entries(modelPicks.models))
         if (!models[agent]) models[agent] = { model, by: 'planner' };
     }
+    if (models && Object.keys(models).length > MAX_AGENT_MODELS)
+      throw new ValidationError(`a session holds models for ${MAX_AGENT_MODELS} agents at most`);
     const planned = models && Object.values(models).some((m) => m.by === 'planner');
     updateById(this.db, 'sessions', 'session', id, {
       plan,
@@ -341,10 +344,14 @@ export class SessionRepo {
    */
   setAgentModel(id: number, agent: string, model: string | null): Session {
     if (model !== null) checkAgentModel(agent, model);
-    else if (!AGENT_ID.test(agent)) throw new ValidationError(`unknown agent "${agent}"`);
+    else if (!isAgentId(agent)) throw new ValidationError(`unknown agent "${agent}"`);
     const models = { ...this.require(id).models };
     if (model === null) delete models[agent];
-    else models[agent] = { model, by: 'human' };
+    else {
+      if (!(agent in models) && Object.keys(models).length >= MAX_AGENT_MODELS)
+        throw new ValidationError(`a session holds models for ${MAX_AGENT_MODELS} agents at most`);
+      models[agent] = { model, by: 'human' };
+    }
     const planned = Object.values(models).some((m) => m.by === 'planner');
     updateById(this.db, 'sessions', 'session', id, {
       models: Object.keys(models).length > 0 ? toJson(models) : null,

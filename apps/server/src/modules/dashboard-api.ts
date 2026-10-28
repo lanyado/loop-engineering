@@ -7,7 +7,8 @@ import {
   secretValues,
   PERMISSION_MODES,
   PR_STAGES,
-  AGENT_ID,
+  BUILDER_AGENT,
+  isAgentId,
   isModelName,
   RIGOR_LEVELS,
   SESSION_STATUSES,
@@ -19,6 +20,7 @@ import {
   type Session,
   type Subagent,
 } from '@loop-engineering/core';
+import type { StageLibrary } from '@loop-engineering/loop';
 import { routerProjectId } from '@loop-engineering/router';
 import { Hono, type Context } from 'hono';
 import * as z from 'zod';
@@ -57,7 +59,8 @@ import { idParam as id } from '../ids.js';
  *                                            ("builder", a check's stage id, "conflict") uses from its next
  *                                            job (the builder: next resume); null goes back to the default.
  *                                            The human's choice: the Planner no longer changes it. 400 on a
- *                                            name that is not letters, digits and . - _ / : or starts with -
+ *                                            name that is not letters, digits and . - _ / : or starts with -;
+ *                                            409 on an ended session; 400 on an agent outside the pipeline
  *   GET    /sessions/:id/transcript           { transcript: { createdAt, text } | null }: the latest
  *                                            stored transcript of a past session (the View button
  *                                            of a finished row), redacted like search results
@@ -90,6 +93,8 @@ export interface DashboardApiOptions {
   protectedRoots?: string[];
   /** Default os.homedir(). */
   home?: string;
+  /** The pipeline: a session's model can only be set for the builder, the conflict fixer or its checks. */
+  stages?: StageLibrary;
 }
 
 export function dashboardApi(options: DashboardApiOptions = {}): ServerModule {
@@ -176,7 +181,7 @@ const agentModelBody = z.strictObject({
     .refine(isModelName, 'model must be letters, digits and . - _ / : (80 at most), not starting with a dash')
     .nullable(),
 });
-const agentId = z.string().regex(AGENT_ID);
+const agentId = z.string().refine(isAgentId, 'unknown agent');
 const nonEmpty = <T extends object>(o: T) => Object.keys(o).length > 0;
 const projectPatch = z.strictObject(projectFields).partial().refine(nonEmpty, 'nothing to update');
 const settingsPatch = z
@@ -388,6 +393,11 @@ export function dashboardRoutes(ctx: ServerContext, options: DashboardApiOptions
     const { model } = parse(agentModelBody, await body(c));
     const session = store.sessions.require(sessionId);
     if (isReserved(session.projectId)) return reserved(c);
+    if (session.status === 'ended')
+      return c.json({ error: `session ${sessionId} has ended; its agents no longer run` }, 409);
+    // Like submit_plan: the builder, the conflict fixer, or a check of the current pipeline.
+    if (options.stages && ![BUILDER_AGENT, 'conflict', ...options.stages.pipeline().checks].includes(agent))
+      return c.json({ error: `"${agent}" is not an agent of the pipeline` }, 400);
     const before = session.models[agent];
     if (before?.model === model && before.by === 'human') return c.json({ session });
     const updated = store.sessions.setAgentModel(sessionId, agent, model);

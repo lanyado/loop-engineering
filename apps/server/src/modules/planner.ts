@@ -1,9 +1,9 @@
-import { resolveSessionId } from '@loop-engineering/ask-human';
+import { resolveSessionId, type TimerHandle, type Timers } from '@loop-engineering/ask-human';
 import type { CallToolResult } from '@modelcontextprotocol/server';
 import {
-  AGENT_ID,
   BUILDER_AGENT,
   effortFor,
+  isAgentId,
   isModelName,
   MODEL_ALIASES,
   MODEL_NAME_MAX,
@@ -21,7 +21,7 @@ export const MODELS_REASON_MAX = 200;
 /** Time for submit_plan's answer to reach the agent before its builder is relaunched. */
 const RELAUNCH_DELAY_MS = 3_000;
 
-const DESCRIPTION = `Record your plan for the current task, once it is ready and before you change anything: the goal, the approach, the files to change, the tests and the risks. The human sees it on the dashboard's Planner node. Also judge the rigor level for this work (fast, light, standard or thorough) and give one short sentence why; the human can override it any time. Also choose the model of the builder and of each check (tests, review, qa, or a custom stage's id) in models, with one short sentence why in modelsReason: a stronger model for hard or risky work, a lighter one for trivial edits; a stronger reviewer where mistakes are costly or hard to spot; a lighter tester; the stronger model when unsure. Submitting again replaces the plan (do so for each new task). Then build it.`;
+const DESCRIPTION = `Record your plan for the current task, once it is ready and before you change anything: the goal, the approach, the files to change, the tests and the risks. The human sees it on the dashboard's Planner node. Also judge the rigor level for this work (fast, light, standard or thorough) and give one short sentence why; the human can override it any time. Also choose the model of the builder and of each check (tests, review, qa, or a custom stage's id) in models, with one short sentence why in modelsReason: a stronger model for hard or risky work, a lighter one for trivial edits; a stronger reviewer where mistakes are costly or hard to spot; a lighter tester; the stronger model when unsure. A plan without models keeps the earlier picks. Submitting again replaces the plan (do so for each new task). Then build it.`;
 
 const modelName = z
   .string()
@@ -51,7 +51,7 @@ const inputSchema = z.object({
     .optional()
     .describe(`One short sentence on why that level (${RIGOR_REASON_MAX} characters at most).`),
   models: z
-    .record(z.string().regex(AGENT_ID), modelName)
+    .record(z.string(), modelName)
     .optional()
     .describe(
       `The model per agent: builder, tests, review, qa, or a custom stage's id, each ${MODEL_ALIASES.join(', ')} or a full model name. Ignored for an agent whose model the human chose. Leave an agent out to keep the default.`,
@@ -86,10 +86,17 @@ const errorResult = (text: string): CallToolResult => ({ isError: true, content:
  * X-Loop-Session-Id, never from arguments, so an agent can only plan for itself.
  */
 export function plannerModule(options: PlannerOptions = {}): ServerModule {
+  const relaunches = new Map<number, TimerHandle>();
+  let timers: Timers | undefined;
   const log = options.log ?? ((m: string) => console.warn(`[planner] ${m}`));
   return {
     name: 'planner',
+    stop() {
+      for (const handle of relaunches.values()) timers?.clearTimeout(handle);
+      relaunches.clear();
+    },
     mcp(server, connection, ctx) {
+      timers = ctx.timers;
       server.registerTool(
         SUBMIT_PLAN_TOOL,
         { title: 'Submit the plan', description: DESCRIPTION, inputSchema },
@@ -104,8 +111,9 @@ export function plannerModule(options: PlannerOptions = {}): ServerModule {
           const known = options.stages
             ? new Set([BUILDER_AGENT, 'conflict', ...options.stages.pipeline().checks])
             : null;
-          const picks = Object.entries(models ?? {}).filter(([agent]) => !known || known.has(agent));
-          const unknown = Object.keys(models ?? {}).filter((agent) => known && !known.has(agent));
+          const usable = (agent: string) => isAgentId(agent) && (!known || known.has(agent));
+          const picks = Object.entries(models ?? {}).filter(([agent]) => usable(agent));
+          const unknown = Object.keys(models ?? {}).filter((agent) => !usable(agent));
           const session = ctx.store.sessions.setPlan(
             resolved.sessionId,
             plan,
@@ -135,14 +143,20 @@ export function plannerModule(options: PlannerOptions = {}): ServerModule {
           // The model flag is fixed while a process runs: restart the builder so the plan's pick applies now.
           if (session.status === 'active' && ctx.runner && builderChanged(before, session)) {
             const runner = ctx.runner;
-            ctx.timers.setTimeout(() => {
-              runner
-                .relaunch(
-                  session.id,
-                  'your plan set a new model or effort for you; continue building the plan',
-                )
-                .catch((err: unknown) => log(`relaunching session ${session.id} failed: ${String(err)}`));
-            }, options.relaunchDelayMs ?? RELAUNCH_DELAY_MS);
+            const id = session.id;
+            const pending = relaunches.get(id);
+            if (pending) ctx.timers.clearTimeout(pending);
+            relaunches.set(
+              id,
+              ctx.timers.setTimeout(() => {
+                relaunches.delete(id);
+                // The session may have been removed meanwhile: nothing to restart, nothing to log.
+                if (!ctx.store.sessions.get(id)) return;
+                runner
+                  .relaunch(id, 'your plan set a new model or effort for you; continue building the plan')
+                  .catch((err: unknown) => log(`relaunching session ${id} failed: ${String(err)}`));
+              }, options.relaunchDelayMs ?? RELAUNCH_DELAY_MS),
+            );
           }
           const note = [
             pick && session.rigorSource === 'human'
@@ -151,7 +165,7 @@ export function plannerModule(options: PlannerOptions = {}): ServerModule {
             humans.length > 0
               ? `The human chose the model for ${humans.join(', ')}; ${humans.length > 1 ? 'they stay' : 'it stays'}.`
               : '',
-            unknown.length > 0 ? `Ignored agents not in the pipeline: ${unknown.join(', ')}.` : '',
+            unknown.length > 0 ? `Ignored unknown agents: ${unknown.join(', ')}.` : '',
           ].filter(Boolean);
           return {
             content: [{ type: 'text', text: ['Plan recorded.', ...note, 'Now build it.'].join(' ') }],

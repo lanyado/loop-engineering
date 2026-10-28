@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FakeTimers } from '@loop-engineering/ask-human';
 import { FakeClock, openStore, type Store } from '@loop-engineering/core';
+import type { StageLibrary } from '@loop-engineering/loop';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ServerConfig } from '../config.js';
 import { createServer, type LoopServer } from '../server.js';
@@ -575,6 +576,36 @@ describe("an agent's model", () => {
     ]);
     const cleared = await call('PUT', `/sessions/${s1.id}/models/review`, { model: null });
     expect(cleared.json.session.models).toEqual({ builder: { model: 'claude-opus-4-8', by: 'human' } });
+  });
+
+  it('refuses an ended session, an agent outside the pipeline, "constructor" and a 21st agent', async () => {
+    const { s1, ended } = seed();
+    await server.close();
+    const stages = {
+      pipeline: () => ({ checks: ['tests', 'review'], deploy: false, guardian: false }),
+    } as unknown as StageLibrary;
+    server = createServer({
+      config,
+      store,
+      timers: new FakeTimers(clock),
+      modules: [dashboardApi({ stages })],
+    });
+    const put = (id: number, agent: string) =>
+      call('PUT', `/sessions/${id}/models/${agent}`, { model: 'opus' });
+    for (const agent of ['builder', 'conflict', 'tests', 'review'])
+      expect((await put(s1.id, agent)).status).toBe(200);
+    const outside = await put(s1.id, 'qa');
+    expect(outside.status).toBe(400);
+    expect(outside.json.error).toMatch(/not an agent of the pipeline/);
+    expect((await put(s1.id, 'constructor')).status).toBe(400);
+    const gone = await put(ended.id, 'builder');
+    expect(gone.status).toBe(409);
+    expect(gone.json.error).toMatch(/has ended/);
+    expect(store.sessions.require(ended.id).models).toEqual({});
+    for (let i = 0; i < 16; i++) store.sessions.setAgentModel(s1.id, `extra-${i}`, 'opus');
+    expect(Object.keys(store.sessions.require(s1.id).models)).toHaveLength(20);
+    store.sessions.setAgentModel(s1.id, 'extra-0', 'haiku'); // changing one is fine
+    expect(() => store.sessions.setAgentModel(s1.id, 'extra-99', 'opus')).toThrow(/20 agents/);
   });
 
   it('pins the model against the Planner, even the one the Planner picked', async () => {

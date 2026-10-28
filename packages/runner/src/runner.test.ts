@@ -320,8 +320,8 @@ describe('startSession', () => {
 
   it('holds the session lock while starting: a pause during start waits, then applies', async () => {
     const h = harness();
-    const newWindow = h.tmux.newWindow.bind(h.tmux);
     let pausing: Promise<unknown> | undefined;
+    const newWindow = h.tmux.newWindow.bind(h.tmux);
     vi.spyOn(h.tmux, 'newWindow').mockImplementationOnce(async (spec) => {
       pausing = h.runner.pause(1, 'manual');
       return newWindow(spec);
@@ -440,6 +440,59 @@ describe('pause / resume / stop / end', () => {
     const script = h.script(h.window(r.tmuxTarget));
     expect(script).toContain(`'--resume' '${s.agentSessionId}' '--model' 'sonnet'`);
     expect(script).toContain('your plan chose a new model');
+  });
+
+  it('relaunch does nothing when the running launch already matches, and at most once a minute', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    await h.saveConversation(s.agentSessionId);
+    expect(await h.runner.relaunch(s.id, 'x')).toMatchObject({ tmuxTarget: s.tmuxTarget });
+    h.store.sessions.setAgentModel(s.id, 'builder', 'sonnet');
+    const first = await h.runner.relaunch(s.id, 'x');
+    expect(first.tmuxTarget).not.toBe(s.tmuxTarget);
+    // The same launch again: nothing to change.
+    expect((await h.runner.relaunch(s.id, 'x')).tmuxTarget).toBe(first.tmuxTarget);
+    // A new pick within the minute is held back, with a log line.
+    h.store.sessions.setAgentModel(s.id, 'builder', 'haiku');
+    expect((await h.runner.relaunch(s.id, 'x')).tmuxTarget).toBe(first.tmuxTarget);
+    expect(h.logs.filter((l) => l.includes('relaunch skipped'))).toHaveLength(1);
+  });
+
+  it('a pause by the human during the relaunch stands once it is done', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    await h.saveConversation(s.agentSessionId);
+    h.store.sessions.setAgentModel(s.id, 'builder', 'sonnet');
+    const relaunching = h.runner.relaunch(s.id, 'x');
+    const pausing = h.runner.pause(s.id, 'manual');
+    await Promise.all([relaunching, pausing]);
+    expect(h.store.sessions.require(s.id)).toMatchObject({ status: 'paused', pauseReason: 'manual' });
+    expect(h.tmux.windows.size).toBe(0);
+  });
+
+  it('retries a failed relaunch on the default model and effort, and says so in the history', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    await h.saveConversation(s.agentSessionId);
+    h.store.sessions.setAgentModel(s.id, 'builder', 'sonnet');
+    vi.spyOn(h.tmux, 'newWindow').mockRejectedValueOnce(new Error('unknown model'));
+    const r = await h.runner.relaunch(s.id, 'x');
+    expect(r.status).toBe('active');
+    expect(h.script(h.window(r.tmuxTarget))).toContain("'--model' 'opus'");
+    expect(h.store.history.list({ sessionId: s.id }).map((e) => e.text)).toEqual([
+      expect.stringContaining('on sonnet failed (unknown model); it runs on its default model'),
+    ]);
+  });
+
+  it('leaves the session paused, with a history entry, when the default launch fails too', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    await h.saveConversation(s.agentSessionId);
+    h.store.sessions.setAgentModel(s.id, 'builder', 'sonnet');
+    vi.spyOn(h.tmux, 'newWindow').mockRejectedValue(new Error('no tmux'));
+    const r = await h.runner.relaunch(s.id, 'x');
+    expect(r).toMatchObject({ status: 'paused', pauseReason: 'agent_exited' });
+    expect(h.store.history.list({ sessionId: s.id })[0]?.text).toMatch(/failed .*no tmux.*It is paused/);
   });
 
   it('relaunch leaves a paused, ended or OpenCode session, and one whose window is gone, alone', async () => {
