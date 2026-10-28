@@ -15,6 +15,7 @@ import {
 import { BackendError, ReadOnlyError, type Backend } from '../lib/backend';
 import { clientIp, LoginLimiter } from '../lib/login-limiter';
 import {
+  agentModelInput,
   answerInput,
   editsInput,
   endSessionInput,
@@ -152,6 +153,18 @@ export async function endSession(sessionId: number): Promise<ActionResult> {
 export async function setRigor(sessionId: number, rigor: string): Promise<ActionResult> {
   return write(rigorInput, { sessionId, rigor }, async (d, backend) => {
     await backend.setRigor(d.sessionId, d.rigor);
+    return undefined;
+  });
+}
+
+/** The model caption on a stage node: one agent's model for this session, or null for the default. */
+export async function setAgentModel(
+  sessionId: number,
+  agent: string,
+  model: string | null,
+): Promise<ActionResult> {
+  return write(agentModelInput, { sessionId, agent, model }, async (d, backend) => {
+    await backend.setAgentModel(d.sessionId, d.agent, d.model);
     return undefined;
   });
 }

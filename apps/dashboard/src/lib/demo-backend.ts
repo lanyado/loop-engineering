@@ -75,6 +75,9 @@ export class DemoBackend implements Backend {
   setRigor(): never {
     throw new ReadOnlyError();
   }
+  setAgentModel(): never {
+    throw new ReadOnlyError();
+  }
   openTerminal(): never {
     throw new ReadOnlyError();
   }

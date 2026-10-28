@@ -9,8 +9,10 @@ import {
 } from '../lib/board';
 import { formatAgo, formatPrMetrics, humanize, pauseLabel, roundLabel, sessionRuntime } from '../lib/format';
 import { shows, type RowDetail } from '../lib/layout';
+import { agentModel, type ModelDefaults } from '../lib/models';
 import type { PullRequest, Question, TreeSession } from '../lib/schemas';
 import { EndSessionButton } from './end-session-button';
+import { ModelTag } from './model-tag';
 import { QuestionCard } from './question-card';
 import { RigorDial } from './rigor-dial';
 import { SkipCheck, SkipDetail, SkipState } from './skip-check';
@@ -261,6 +263,7 @@ function Node({
   testId = 'node',
   stage,
   notRun = false,
+  model,
   children,
 }: {
   kind: keyof typeof ICON_PATHS;
@@ -274,6 +277,8 @@ function Node({
   stage?: string;
   /** The check never ran at the merged head: drawn dimmed. */
   notRun?: boolean;
+  /** The model caption on the node's top edge (an agent's node). */
+  model?: ReactNode;
   children?: ReactNode;
 }) {
   const shown = questions.length > 0 ? 'waiting' : state;
@@ -285,6 +290,7 @@ function Node({
       data-state={shown}
       data-not-run={notRun || undefined}
     >
+      {model}
       <span className="node-icon">
         <Icon kind={kind} />
       </span>
@@ -395,20 +401,23 @@ export interface RowEdit {
 function LaneView({
   lane,
   first,
-  rigor,
+  session,
+  models,
   part,
   edit,
   readOnly,
 }: {
   lane: Lane;
   first: boolean;
-  /** The session's rigor (Light has its own round cap). */
-  rigor: string;
+  /** The session: its rigor (Light has its own round cap) and the models its agents use. */
+  session: TreeSession;
+  models: ModelDefaults | undefined;
   part: RowEdit['part'];
   edit: RowEdit | undefined;
   readOnly: boolean;
 }) {
   const pr = lane.pr;
+  const rigor = session.rigor;
   // The board already left out what this pipeline does not run (Approval in auto-merge projects, …).
   const nodes = lane.nodes;
   const feedback = pr?.loopState.feedback;
@@ -427,6 +436,18 @@ function LaneView({
               stage={node.stage}
               state={node.state}
               notRun={node.notRun}
+              model={
+                models && (node.custom || JOB_STAGES.has(node.stage)) ? (
+                  <ModelTag
+                    sessionId={session.id}
+                    agent={node.stage}
+                    label={node.label}
+                    view={agentModel(session, node.stage, models)}
+                    allowed={models.allowed}
+                    locked={readOnly || !buttons || session.status === 'ended'}
+                  />
+                ) : undefined
+              }
               title={node.label}
               detail={
                 detail ??
@@ -540,7 +561,35 @@ function PlanSection({ session, planning, now }: { session: TreeSession; plannin
             : `Rigor set by the Planner${session.rigorReason ? `: ${session.rigorReason}` : ''}`}
         </p>
       )}
+      <ModelsSource session={session} />
     </section>
+  );
+}
+
+/** "Models": what the Planner picked, with its reason, and what you changed. */
+function ModelsSource({ session }: { session: TreeSession }) {
+  const entries = Object.entries(session.models);
+  const list = (by: string) =>
+    entries
+      .filter(([, m]) => m.by === by)
+      .map(([agent, m]) => `${agent} ${m.model}`)
+      .join(', ');
+  const planner = list('planner');
+  const human = list('human');
+  return (
+    <>
+      {planner && (
+        <p className="muted small" data-testid="session-models-planner">
+          Models picked by the Planner: {planner}
+          {session.modelsReason ? `: ${session.modelsReason}` : ''}
+        </p>
+      )}
+      {human && (
+        <p className="muted small" data-testid="session-models-human">
+          Models set by you: {human}
+        </p>
+      )}
+    </>
   );
 }
 
@@ -613,6 +662,7 @@ export function PipelineRow({
   readOnly,
   now,
   edit,
+  models,
 }: {
   row: Row;
   folder: boolean;
@@ -622,6 +672,8 @@ export function PipelineRow({
   now: number;
   /** In the editor: a preview whose parts and pipeline are edited in place. */
   edit?: RowEdit;
+  /** The defaults and the choices of the model captions; none (settings unreadable): no captions. */
+  models?: ModelDefaults;
 }) {
   const part: RowEdit['part'] = (detail, content) =>
     edit ? edit.part(detail, content) : shows(hidden, detail) ? content : null;
@@ -746,6 +798,18 @@ export function PipelineRow({
                 stage="builder"
                 state={builderNode}
                 title="Builder"
+                model={
+                  models && (
+                    <ModelTag
+                      sessionId={session.id}
+                      agent="builder"
+                      label="Builder"
+                      view={agentModel(session, 'builder', models)}
+                      allowed={models.allowed}
+                      locked={readOnly || edit !== undefined || session.status === 'ended'}
+                    />
+                  )
+                }
                 detail={
                   builder.state === 'working'
                     ? 'building'
@@ -771,7 +835,8 @@ export function PipelineRow({
                     key={lane.pr?.id ?? 'none'}
                     lane={lane}
                     first={i === 0}
-                    rigor={session.rigor}
+                    session={session}
+                    models={models}
                     part={part}
                     edit={edit}
                     readOnly={readOnly}

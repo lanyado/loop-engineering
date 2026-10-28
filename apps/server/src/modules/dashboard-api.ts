@@ -7,6 +7,8 @@ import {
   secretValues,
   PERMISSION_MODES,
   PR_STAGES,
+  AGENT_ID,
+  isModelName,
   RIGOR_LEVELS,
   SESSION_STATUSES,
   ValidationError,
@@ -51,6 +53,11 @@ import { idParam as id } from '../ids.js';
  *                                            how much checking the PR loop gives its PRs, from the next
  *                                            step on (packages/loop/src/rigor.ts); 404 for an unknown
  *                                            session, 409 for the router's reserved one
+ *   PUT    /sessions/:id/models/:agent        { model: string | null } -> { session }: the model one agent
+ *                                            ("builder", a check's stage id, "conflict") uses from its next
+ *                                            job (the builder: next resume); null goes back to the default.
+ *                                            The human's choice: the Planner no longer changes it. 400 on a
+ *                                            name that is not letters, digits and . - _ / : or starts with -
  *   GET    /sessions/:id/transcript           { transcript: { createdAt, text } | null }: the latest
  *                                            stored transcript of a past session (the View button
  *                                            of a finished row), redacted like search results
@@ -162,6 +169,14 @@ const newFolderProject = z.strictObject({
 });
 const endSession = z.strictObject({ force: z.boolean().optional() });
 const sessionPatch = z.strictObject({ rigor: z.enum(RIGOR_LEVELS) });
+const agentModelBody = z.strictObject({
+  model: z
+    .string()
+    .trim()
+    .refine(isModelName, 'model must be letters, digits and . - _ / : (80 at most), not starting with a dash')
+    .nullable(),
+});
+const agentId = z.string().regex(AGENT_ID);
 const nonEmpty = <T extends object>(o: T) => Object.keys(o).length > 0;
 const projectPatch = z.strictObject(projectFields).partial().refine(nonEmpty, 'nothing to update');
 const settingsPatch = z
@@ -363,6 +378,25 @@ export function dashboardRoutes(ctx: ServerContext, options: DashboardApiOptions
         kind: 'decision',
         text: `Session ${sessionId}: the human set its rigor from ${session.rigor} to ${rigor} (dashboard).`,
       });
+    return c.json({ session: updated });
+  });
+
+  // One agent's model (the builder, a check): the human's choice, which the Planner never overrides.
+  api.put('/sessions/:id/models/:agent', async (c) => {
+    const sessionId = parse(id, c.req.param('id'));
+    const agent = parse(agentId, c.req.param('agent'));
+    const { model } = parse(agentModelBody, await body(c));
+    const session = store.sessions.require(sessionId);
+    if (isReserved(session.projectId)) return reserved(c);
+    const before = session.models[agent];
+    if (before?.model === model && before.by === 'human') return c.json({ session });
+    const updated = store.sessions.setAgentModel(sessionId, agent, model);
+    store.history.add({
+      projectId: session.projectId,
+      sessionId,
+      kind: 'decision',
+      text: `Session ${sessionId}: the human ${model === null ? `reset the model of ${agent} to the default` : `set the model of ${agent} to ${model}`} (dashboard).`,
+    });
     return c.json({ session: updated });
   });
 

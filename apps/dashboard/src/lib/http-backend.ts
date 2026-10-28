@@ -69,6 +69,10 @@ export class HttpBackend implements Backend {
     await this.send('PATCH', `/sessions/${sessionId}`, { rigor }, responses.rigor);
   }
 
+  async setAgentModel(sessionId: number, agent: string, model: string | null) {
+    await this.send('PUT', `/sessions/${sessionId}/models/${agent}`, { model }, responses.agentModel);
+  }
+
   async endSession(sessionId: number) {
     // No force: a git session with uncommitted changes is refused, and the human sees why.
     return (await this.send('POST', `/sessions/${sessionId}/end`, {}, responses.session)).session;

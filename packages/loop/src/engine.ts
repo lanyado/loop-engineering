@@ -1641,7 +1641,7 @@ export class LoopEngine {
     let result: AgentJobResult;
     let withEffort = true;
     try {
-      const job = (p: Provider, model = this.modelFor(p)): PrJob => ({
+      const job = (p: Provider, model = this.modelFor(p, session, kind)): PrJob => ({
         kind,
         provider: p,
         model,
@@ -1839,9 +1839,16 @@ export class LoopEngine {
     }
   }
 
-  private modelFor(provider: Provider): string {
+  /**
+   * The model for a job: on Claude the PR session's own pick for that agent (the dashboard or the
+   * Planner), else the loop's default; the OpenCode chain keeps its own models.
+   */
+  private modelFor(provider: Provider, session?: Session, kind?: PrJobKind): string {
     const settings = this.deps.store.settings.get();
-    if (provider !== 'opencode') return this.config.jobModel ?? settings.sessionModel;
+    if (provider !== 'opencode') {
+      const own = session && kind ? session.models[jobCheck(kind) ?? 'conflict']?.model : undefined;
+      return own ?? this.config.jobModel ?? settings.sessionModel;
+    }
     return this.opencodeChain()[0] ?? settings.fallbackModel;
   }
 

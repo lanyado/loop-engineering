@@ -60,7 +60,7 @@ const server = createServer({
     routerModule(),
     ...(loop ? [loop] : []),
     historyModule(),
-    plannerModule(),
+    plannerModule({ stages }),
   ],
 });
 // Registered before start(), so the server can always be stopped, even while it is starting.

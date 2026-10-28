@@ -85,6 +85,12 @@ describe('agent jobs', () => {
     expect(disallowed).toEqual(expect.arrayContaining(['Edit', 'Write', 'WebFetch', 'Bash']));
   });
 
+  it('refuses a model name that starts with a dash or holds spaces, for Claude and OpenCode', () => {
+    for (const model of ['--dangerously-skip-permissions', '-x', 'opus sonnet', ''])
+      for (const provider of ['claude', 'opencode'] as const)
+        expect(() => buildJobCommand(job({ provider, model }))).toThrow(/refusing/);
+  });
+
   it("passes the rigor level's effort to claude, and nothing without one", () => {
     const args = (j: Partial<AgentJob>) => buildJobCommand(job(j)).args;
     expect(args({ effort: 'low' }).join(' ')).toContain('--model opus --effort low --permission-mode');

@@ -2424,6 +2424,63 @@ button.node-plus:hover:not(:disabled) {
   }
 }
 
+/* The model name on an agent's node: a small tag sitting on the top edge, in muted type. The human's
+   own pick reads stronger than the Planner's or the default. */
+.node-model {
+  position: absolute;
+  top: -10px;
+  left: 50%;
+  z-index: 1;
+  display: inline-flex;
+  max-width: calc(100% - 8px);
+  transform: translateX(-50%);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1;
+}
+.node-model[data-source='human'] {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.node-model-name {
+  min-width: 0;
+  padding: 3px 7px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.node-model .node-model-button {
+  min-height: 0;
+  max-width: 100%;
+  padding: 0;
+  gap: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  box-shadow: none;
+  color: inherit;
+  font: inherit;
+}
+.node-model .node-model-button:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.node-model .node-model-button:active:not(:disabled) {
+  transform: none;
+}
+.model-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
 /* "Skip" / "Run again" under a check's node: quiet, so a lane of them does not shout. */
 .node-skip {
   justify-self: start;

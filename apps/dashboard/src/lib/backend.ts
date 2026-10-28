@@ -43,6 +43,8 @@ export interface Backend {
   endSession(sessionId: number): Promise<{ id: number; status: string }>;
   /** Sets how much checking the PR loop gives the session's PRs (the rigor dial). */
   setRigor(sessionId: number, rigor: Rigor): Promise<void>;
+  /** Sets the model one agent of the session uses ("builder" or a check's stage id); null: the default. */
+  setAgentModel(sessionId: number, agent: string, model: string | null): Promise<void>;
   /** Opens a terminal on the server's Mac showing the session's running agent. */
   openTerminal(sessionId: number): Promise<void>;
   /** Opens a terminal following a PR stage's job log (review, tests, QA or a custom stage). */

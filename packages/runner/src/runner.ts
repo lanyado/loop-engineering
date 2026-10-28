@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import {
+  BUILDER_AGENT,
   enabledProvider,
   FolderBusyError,
   pathsOverlap,
@@ -311,6 +312,9 @@ export class SessionRunner {
         : provider === 'claude'
           ? settings.sessionModel
           : settings.fallbackModel;
+      // The builder's own model (dashboard or Planner) counts on Claude only; OpenCode has its chain.
+      // It is not stored as the session's model, which stays the default "Use the default" goes back to.
+      const launchModel = (provider === 'claude' ? s.models[BUILDER_AGENT]?.model : undefined) ?? model;
       if (switched) {
         store.history.add({
           projectId: s.projectId,
@@ -353,7 +357,7 @@ export class SessionRunner {
       }
       const target = await this.launch(s.id, cwd, {
         provider,
-        model,
+        model: launchModel,
         permissionMode: project.permissionMode,
         resume,
         agentSessionId,
@@ -368,6 +372,25 @@ export class SessionRunner {
         model,
       });
     });
+  }
+
+  /**
+   * Restarts a live Claude agent, continuing its conversation, so a model or effort chosen for it
+   * (the Planner's plan) takes effect now instead of at its next resume. Does nothing unless the
+   * session is active on Claude with its agent running.
+   */
+  async relaunch(sessionId: number, why: string): Promise<Session> {
+    const stopped = await this.withLock(sessionId, async () => {
+      const { store } = this.deps;
+      const s = store.sessions.require(sessionId);
+      if (s.provider !== 'claude' || s.status !== 'active' || !(await this.isAlive(s))) return false;
+      await this.killOwnWindow(s);
+      store.sessions.update(s.id, { status: 'paused', pauseReason: 'agent_exited', tmuxTarget: null });
+      return true;
+    });
+    if (!stopped) return this.deps.store.sessions.require(sessionId);
+    this.log(`session ${sessionId}: relaunched (${why})`);
+    return this.resume(sessionId, { reason: why });
   }
 
   /**
@@ -697,7 +720,8 @@ export class SessionRunner {
       }
       launched = await this.launch(session.id, cwd, {
         provider: session.provider,
-        model: session.model,
+        model:
+          (session.provider === 'claude' ? session.models[BUILDER_AGENT]?.model : undefined) ?? session.model,
         permissionMode: project.permissionMode,
         prompt: text,
         ...(session.agentSessionId ? { agentSessionId: session.agentSessionId } : {}),

@@ -164,6 +164,25 @@ describe('HttpBackend against the real server', () => {
     expect((await backend.tree())[0]?.sessions[0]).toMatchObject({ rigorSource: 'human', rigorReason: null });
   });
 
+  it("sets an agent's model and reads it back in the tree with who chose it; clears it; refuses a bad one", async () => {
+    expect((await backend.tree())[0]?.sessions[0]).toMatchObject({ models: {}, modelsReason: null });
+    store.sessions.setPlan(sessionId, 'plan', undefined, {
+      models: { tests: 'haiku' },
+      reason: 'easy to check',
+    });
+    await backend.setAgentModel(sessionId, 'review', 'sonnet');
+    expect((await backend.tree())[0]?.sessions[0]).toMatchObject({
+      models: { tests: { model: 'haiku', by: 'planner' }, review: { model: 'sonnet', by: 'human' } },
+      modelsReason: 'easy to check',
+    });
+    await backend.setAgentModel(sessionId, 'review', null);
+    expect(store.sessions.require(sessionId).models).toEqual({ tests: { model: 'haiku', by: 'planner' } });
+    await expect(backend.setAgentModel(sessionId, 'builder', '--effort=max')).rejects.toMatchObject({
+      status: 400,
+    });
+    await expect(backend.setAgentModel(9999, 'builder', 'opus')).rejects.toMatchObject({ status: 404 });
+  });
+
   it("reads a PR's pending loop question and sends a message to one session", async () => {
     const q = ask('Merge it?');
     const [listed] = await backend.pullRequests();

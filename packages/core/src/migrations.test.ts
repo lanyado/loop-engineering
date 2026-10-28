@@ -416,6 +416,28 @@ describe('migrations', () => {
     db.close();
   });
 
+  it('migration 24 adds the per-agent models and their reason, empty for existing sessions', () => {
+    const db = new Database(':memory:');
+    migrate(
+      db,
+      MIGRATIONS.filter((m) => m.version < 24),
+    );
+    db.exec(`
+      INSERT INTO projects (name, created_at) VALUES ('p', 't');
+      INSERT INTO sessions (project_id, title, model, branch, created_at) VALUES (1, 'live', 'opus', 'b', 't');
+    `);
+    expect(
+      migrate(
+        db,
+        MIGRATIONS.filter((m) => m.version <= 24),
+      ),
+    ).toEqual([24]);
+    expect(db.prepare('SELECT models, models_reason FROM sessions').all()).toEqual([
+      { models: null, models_reason: null },
+    ]);
+    db.close();
+  });
+
   it('migration 15 drops cloud and calendar/travel data: old pause reasons become manual, nothing is deleted', () => {
     const db = new Database(':memory:');
     db.pragma('foreign_keys = ON');

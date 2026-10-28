@@ -59,6 +59,7 @@ describe('DemoBackend', () => {
     expect(() => demo.updateSettings()).toThrow(ReadOnlyError);
     expect(() => demo.createRequest()).toThrow(ReadOnlyError);
     expect(() => demo.messageSession()).toThrow(ReadOnlyError);
+    expect(() => demo.setAgentModel()).toThrow(ReadOnlyError);
   });
 
   it('opens an event stream that says ready and ends on abort', async () => {

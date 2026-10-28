@@ -25,6 +25,7 @@ import type {
 } from '../lib/schemas';
 import { ConfirmDialog, EditableRow, Ghost, useGhostPlaces, useReorder, Wiggle } from './editor-parts';
 import { FinishedGroup } from './finished-sessions';
+import { EXAMPLE_MODELS } from '../lib/models';
 import { PipelineRow, type LaneStep, type RowEdit } from './pipeline';
 import { KindChip } from './project-kind';
 import { fieldsOf, StageSheet, type StageFields } from './stage-sheet';
@@ -416,6 +417,7 @@ export function Editor({
                   readOnly
                   now={now}
                   edit={{ part, lane, planner }}
+                  models={EXAMPLE_MODELS}
                 />
               ))}
             </ul>

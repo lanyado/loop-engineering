@@ -5,6 +5,7 @@ import { HiddenProjects, ProjectPlacement } from '../../components/project-place
 import { ProjectSettings } from '../../components/settings-controls';
 import { buildBoard } from '../../lib/board';
 import { arrangeProjects, parseLayout } from '../../lib/layout';
+import { modelDefaults } from '../../lib/models';
 import { requestTime } from '../../lib/server/clock';
 import { backendForViewer } from '../../lib/server/session';
 
@@ -34,6 +35,7 @@ export default async function BoardPage() {
         layout={layout}
         now={requestTime()}
         readOnly={readOnly}
+        models={settings ? modelDefaults(settings) : undefined}
         settings={(p) => (
           <>
             <ProjectSettings project={p.project} readOnly={readOnly} />

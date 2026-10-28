@@ -1118,6 +1118,33 @@ describe('metrics and providers', () => {
     expect(loopState(h.pr()).attempts ?? 0).toBe(0);
   });
 
+  it("keeps the OpenCode chain's own models when a job with a chosen Claude model hits the usage limit", async () => {
+    const h = harness();
+    h.store.settings.update({ fallbackModel: 'opencode/a', opencodeBackupModels: ['opencode/b'] });
+    h.launcher.on('tests', testsPass()).on('review', claudeLimit, clean());
+    const { session } = await h.builderWithPr();
+    h.store.sessions.setAgentModel(session.id, 'review', 'sonnet');
+    await h.engine.tick();
+    expect(h.launcher.jobs.map((j) => `${j.kind} ${j.provider} ${j.model}`)).toEqual([
+      'tests claude opus',
+      'review claude sonnet',
+      'review opencode opencode/a',
+    ]);
+  });
+
+  it('uses the fallback model on a session that moved to OpenCode, whatever it chose for Claude', async () => {
+    const h = harness();
+    h.launcher.on('tests', testsPass()).on('review', clean());
+    const { session } = await h.builderWithPr();
+    h.store.sessions.setAgentModel(session.id, 'review', 'sonnet');
+    h.store.sessions.update(session.id, { provider: 'opencode', model: 'opencode/glm-5.3-flash-free' });
+    await h.engine.tick();
+    expect(h.launcher.jobs.map((j) => j.model)).toEqual([
+      'opencode/glm-5.3-flash-free',
+      'opencode/glm-5.3-flash-free',
+    ]);
+  });
+
   it('waits without spending attempts when every model is at its limit, then goes on', async () => {
     const h = harness();
     h.store.settings.update({ fallbackModel: 'opencode/a', opencodeBackupModels: ['opencode/b'] });

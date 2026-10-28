@@ -551,6 +551,60 @@ describe('the rigor dial', () => {
   });
 });
 
+describe("an agent's model", () => {
+  it('sets the model of the builder or a check, shows it in the tree, records it once, and clears it', async () => {
+    const { s1 } = seed();
+    const res = await call('PUT', `/sessions/${s1.id}/models/review`, { model: ' sonnet ' });
+    expect(res.status).toBe(200);
+    expect(res.json.session.models).toEqual({ review: { model: 'sonnet', by: 'human' } });
+    expect(
+      (await call('PUT', `/sessions/${s1.id}/models/builder`, { model: 'claude-opus-4-8' })).status,
+    ).toBe(200);
+    expect((await call('PUT', `/sessions/${s1.id}/models/review`, { model: 'sonnet' })).status).toBe(200); // again
+    const { json } = await call('GET', '/tree');
+    const mine = json.projects
+      .flatMap((p: { sessions: { id: number }[] }) => p.sessions)
+      .find((s: { id: number }) => s.id === s1.id);
+    expect(mine.models).toEqual({
+      review: { model: 'sonnet', by: 'human' },
+      builder: { model: 'claude-opus-4-8', by: 'human' },
+    });
+    expect(store.history.list({ sessionId: s1.id }).map((e) => e.text)).toEqual([
+      `Session ${s1.id}: the human set the model of builder to claude-opus-4-8 (dashboard).`,
+      `Session ${s1.id}: the human set the model of review to sonnet (dashboard).`,
+    ]);
+    const cleared = await call('PUT', `/sessions/${s1.id}/models/review`, { model: null });
+    expect(cleared.json.session.models).toEqual({ builder: { model: 'claude-opus-4-8', by: 'human' } });
+  });
+
+  it('pins the model against the Planner, even the one the Planner picked', async () => {
+    const { s1 } = seed();
+    store.sessions.setPlan(s1.id, 'plan', undefined, { models: { review: 'opus' }, reason: 'risky' });
+    expect((await call('PUT', `/sessions/${s1.id}/models/review`, { model: 'opus' })).status).toBe(200);
+    store.sessions.setPlan(s1.id, 'plan 2', undefined, { models: { review: 'haiku' }, reason: 'tiny' });
+    expect(store.sessions.require(s1.id).models.review).toEqual({ model: 'opus', by: 'human' });
+  });
+
+  it('refuses names that are not model names, bad agents, other fields, unknown and reserved sessions', async () => {
+    const { s1 } = seed();
+    const put = (agent: string, body: unknown) => call('PUT', `/sessions/${s1.id}/models/${agent}`, body);
+    for (const model of ['--effort=max', '-x', 'a b', 'opus;ls', '$(id)', '', 'a'.repeat(81), 7])
+      expect((await put('builder', { model })).status, String(model)).toBe(400);
+    expect((await put('Builder', { model: 'opus' })).status).toBe(400);
+    expect((await put('builder', {})).status).toBe(400);
+    expect((await put('builder', { model: 'opus', rigor: 'fast' })).status).toBe(400);
+    expect((await call('PUT', '/sessions/999/models/builder', { model: 'opus' })).status).toBe(404);
+    const routerSession = ensureRouterSession(store);
+    expect(
+      (await call('PUT', `/sessions/${routerSession.id}/models/builder`, { model: 'opus' })).status,
+    ).toBe(409);
+    expect((await call('PUT', `/sessions/${s1.id}/models/builder`, { model: 'opus' }, null)).status).toBe(
+      401,
+    );
+    expect(store.sessions.require(s1.id).models).toEqual({});
+  });
+});
+
 describe('session transcripts', () => {
   it("sends a finished session's latest stored transcript, redacted on read", async () => {
     const { s1, ended, shop } = seed();

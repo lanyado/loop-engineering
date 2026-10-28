@@ -197,6 +197,126 @@ test('clicking the level the Planner picked pins it, and a later plan leaves it 
   await expect(dial.getByTestId('rigor-light')).not.toHaveAttribute('title', /Planner/);
 });
 
+test('the model name on a stage is changeable: it saves, survives a reload, and a later plan leaves it', async ({
+  page,
+}, info) => {
+  await open(page);
+  const checkout = page.getByTestId('session-row').filter({ hasText: 'Apple Pay checkout' });
+  const lane = checkout.locator('[data-testid="lane"][data-pr-number="212"]');
+  const review = lane.locator('[data-stage="review"]');
+  const tests = lane.locator('[data-stage="tests"]');
+  const name = (node: typeof review) => node.getByTestId('node-model-name');
+  const stored = async (agent: string) => {
+    const { projects } = await api<{
+      projects: { sessions: { id: number; models: Record<string, { model: string; by: string }> }[] }[];
+    }>('/tree');
+    return projects.flatMap((p) => p.sessions).find((s) => s.id === ids.checkout)?.models[agent];
+  };
+  await expect(name(review)).toHaveText('opus');
+  await expect(name(checkout.locator('[data-stage="builder"]'))).toHaveText('opus');
+
+  // The caption is a button with a full accessible name; the keyboard opens the menu and Escape closes it.
+  const button = review.getByTestId('node-model-button');
+  await expect(button).toHaveAccessibleName(/^Model for .+: opus\. Change$/);
+  await button.focus();
+  await page.keyboard.press('Enter');
+  const menu = page.getByTestId('model-menu');
+  await expect(menu).toBeVisible();
+  for (const [i, alias] of ['opus', 'sonnet', 'haiku'].entries())
+    await expect(menu.getByTestId('model-choice').nth(i)).toHaveText(alias);
+  await expect(menu.getByTestId('model-default')).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+  await expect(button).toBeFocused();
+
+  // Choosing a model shows at once, is saved as the human's, and survives a reload.
+  await button.click();
+  await menu
+    .getByTestId('model-choice')
+    .filter({ hasText: /^sonnet$/ })
+    .click();
+  await expect(menu).toHaveCount(0);
+  await expect(name(review)).toHaveText('sonnet');
+  await expect.poll(() => stored('review')).toEqual({ model: 'sonnet', by: 'human' });
+  await page.reload();
+  await expect(name(review)).toHaveText('sonnet');
+  await expect(review.getByTestId('node-model')).toHaveAttribute('title', 'sonnet (set by you)');
+  await expect(review.getByTestId('node-model')).toHaveAttribute('data-source', 'human');
+
+  // A later plan picks models for the other agents but leaves the one the human chose.
+  const client = new Client({ name: 'e2e-agent', version: '0.0.0' });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(`${E2E.serverUrl}/mcp`), {
+      requestInit: {
+        headers: {
+          Authorization: `Bearer ${sessionToken(E2E.mcpToken, ids.checkout)}`,
+          'X-Loop-Session-Id': String(ids.checkout),
+        },
+      },
+    }),
+  );
+  try {
+    const result = await client.callTool({
+      name: 'submit_plan',
+      arguments: {
+        plan: 'Goal: Google Pay too.',
+        models: { review: 'haiku', tests: 'haiku', builder: 'sonnet' },
+        modelsReason: 'A small change.',
+      },
+    });
+    expect(result.content).toEqual([
+      { type: 'text', text: 'Plan recorded. The human chose the model for review; it stays. Now build it.' },
+    ]);
+  } finally {
+    await client.close();
+  }
+  // No reload: session.planned re-renders the board.
+  await expect(name(tests)).toHaveText('haiku');
+  await expect(tests.getByTestId('node-model')).toHaveAttribute('title', 'haiku (chosen by the Planner)');
+  await expect(name(checkout.locator('[data-stage="builder"]'))).toHaveText('sonnet');
+  await expect(name(review)).toHaveText('sonnet');
+  await expect.poll(() => stored('review')).toEqual({ model: 'sonnet', by: 'human' });
+  await checkout.getByTestId('planner-node').getByTestId('session-more').click();
+  await expect(checkout.getByTestId('session-models-planner')).toHaveText(
+    'Models picked by the Planner: tests haiku, builder sonnet: A small change.',
+  );
+  await expect(checkout.getByTestId('session-models-human')).toHaveText('Models set by you: review sonnet');
+
+  // A free-text name: a long name shows its tail and keeps its full name in the title; a bad one is refused.
+  await review.getByTestId('node-model-button').click();
+  await menu.getByTestId('model-custom').fill('--dangerously-skip-permissions');
+  await menu.getByTestId('model-custom-use').click();
+  await expect(menu.getByRole('alert')).toContainText('not starting with a dash');
+  await expect.poll(() => stored('review')).toEqual({ model: 'sonnet', by: 'human' });
+  await menu.getByTestId('model-custom').fill('claude-opus-4-8');
+  await menu.getByTestId('model-custom').press('Enter');
+  await expect(menu).toHaveCount(0);
+  await expect(name(review)).toHaveText('opus-4-8');
+  await expect(review.getByTestId('node-model')).toHaveAttribute('title', 'claude-opus-4-8 (set by you)');
+  await expect.poll(() => stored('review')).toEqual({ model: 'claude-opus-4-8', by: 'human' });
+  await snap(page, info, 'models');
+
+  // "Use the default" clears the pick: back to the session model, free for the Planner again.
+  await review.getByTestId('node-model-button').click();
+  await menu.getByTestId('model-default').click();
+  await expect(name(review)).toHaveText('opus');
+  await expect(review.getByTestId('node-model')).toHaveAttribute('title', 'opus (the default)');
+  await expect.poll(() => stored('review')).toBeUndefined();
+});
+
+test('the model of a session on OpenCode is shown but cannot be changed', async ({ page }) => {
+  await testRoute('/test/pr', {
+    sessionId: ids.rss,
+    pr: { projectId: ids.blog, repo: 'site', number: 46, stage: 'tests', round: 1 },
+  });
+  await open(page);
+  const rss = page.getByTestId('session-row').filter({ hasText: 'RSS feed' });
+  await expect(rss.locator('[data-stage="review"]').getByTestId('node-model-name')).toHaveText(
+    'glm-5.3-flash-free',
+  );
+  await expect(rss.getByTestId('node-model-button')).toHaveCount(0);
+});
+
 test('answers with free text', async ({ page }) => {
   await open(page);
   const card = page.getByTestId('question').filter({ hasText: 'Dedupe Stripe webhooks' });

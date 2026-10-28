@@ -67,6 +67,14 @@ export function demoData(now: Date): DemoData {
       rigor: 'thorough',
       rigorSource: 'planner',
       rigorReason: 'Touches payments and webhooks, where a mistake costs money.',
+      // The Planner chose a stronger builder and reviewer for payments, and a lighter tester.
+      models: {
+        builder: { model: 'opus', by: 'planner' },
+        tests: { model: 'haiku', by: 'planner' },
+        review: { model: 'opus', by: 'planner' },
+        qa: { model: 'sonnet', by: 'planner' },
+      },
+      modelsReason: 'Payments: a strong builder and reviewer; the tests are easy to check.',
       subagents: [
         sub(1001, 101, 'Payment sheet UI', 'sonnet', 'high', 'running'),
         sub(1002, 101, 'Stripe webhook handler', 'sonnet', 'xhigh', 'waiting'),
@@ -91,6 +99,12 @@ export function demoData(now: Date): DemoData {
           'Risks: index rebuild time on deploy; long queries may rank differently.',
         ].join('\n'),
       ),
+      // One pick by the Planner, one changed by the human (which the Planner never overrides).
+      models: {
+        builder: { model: 'sonnet', by: 'planner' },
+        review: { model: 'opus', by: 'human' },
+      },
+      modelsReason: 'A contained ranking change: a lighter builder is enough.',
       subagents: [sub(1004, 102, 'Ranking experiment', 'sonnet', 'high', 'waiting')],
     }),
     session(103, 1, 'Order export CSV', 'ended', null, 'claude', 'opus', at(4 * 24 * HOUR), {
@@ -698,6 +712,8 @@ function session(
     rigor: 'standard',
     rigorSource: 'default',
     rigorReason: null,
+    models: {},
+    modelsReason: null,
     plan: null,
     plannedAt: null,
     latestRequestAt: null,

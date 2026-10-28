@@ -58,6 +58,13 @@ describe('detectUsageLimit', () => {
 describe('DefaultAgentCli', () => {
   const cli = new DefaultAgentCli({ claude: '/bin/fake-claude', opencode: '/bin/fake-opencode' });
 
+  it('refuses a model name a CLI would read as an option, and passes a good one as one argument', () => {
+    for (const model of ['--dangerously-skip-permissions', '-p', '', 'opus --effort max', 'opus\n--x'])
+      expect(() => cli.build({ provider: 'claude', model, permissionMode: 'auto' })).toThrow(/refusing/);
+    const argv = cli.build({ provider: 'claude', model: 'claude-opus-4-8', permissionMode: 'auto' });
+    expect(argv.slice(1, 3)).toEqual(['--model', 'claude-opus-4-8']);
+  });
+
   it('builds a new and a resumed Claude session', () => {
     expect(
       cli.build({

@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 import { buildBoard } from '../lib/board';
 import { demoData } from '../lib/fixtures';
+import { modelDefaults } from '../lib/models';
 import { PipelineRow } from './pipeline';
 
 /*
@@ -16,10 +17,13 @@ const board = (prs = demoData(new Date()).pullRequests, pending: Parameters<type
   buildBoard(demoData(new Date()).tree, prs, pending, demoData(new Date()).pipeline);
 
 // The lane tiles are 88px wide with 16px edges: tile i centre = i * 104 + 44 (see pipeline.tsx).
-const renderRow = (sessionId: number, board_ = board()) => {
+const models = modelDefaults(demoData(new Date()).settings);
+const renderRow = (sessionId: number, board_ = board(), props: Record<string, unknown> = {}) => {
   const row = board_.projects.flatMap((p) => p.rows).find((r) => r.session.id === sessionId);
   if (!row) throw new Error(`no row for session ${sessionId}`);
-  return renderToStaticMarkup(createElement(PipelineRow, { row, folder: false, readOnly: false, now: 0 }));
+  return renderToStaticMarkup(
+    createElement(PipelineRow, { row, folder: false, readOnly: false, now: 0, ...props }),
+  );
 };
 
 describe('the lane draws the way back to the builder', () => {
@@ -99,5 +103,46 @@ describe('a custom stage (stage file)', () => {
     expect(html).toContain('--ret-x:148px');
     expect(html).toContain('Security · 1 back');
     expect(html).toContain('1 feedback · Security');
+  });
+});
+
+describe('the model captions on the agent nodes', () => {
+  const captions = (html: string) =>
+    [
+      ...html.matchAll(
+        /data-stage="([a-z-]+)"[^>]*>(?:(?!data-testid="node(?:-planner|-end)?")[\s\S])*?node-model-name"[^>]*>([^<]*)</g,
+      ),
+    ].map((m) => `${m[1]}:${m[2]}`);
+
+  it("names the Planner's picks on the builder and the checks, with a button to change each", () => {
+    const html = renderRow(101, board(), { models });
+    expect([...new Set(captions(html))]).toEqual(['builder:opus', 'tests:haiku', 'review:opus', 'qa:sonnet']);
+    expect(html).toContain('aria-label="Model for Builder: opus. Change"');
+    expect(html).toContain('aria-label="Model for Tests: haiku. Change"');
+    expect(html).toContain('title="haiku (chosen by the Planner)"');
+    expect(html.match(/data-testid="node-model-button"/g)?.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("marks the human's pick and draws the default on an agent without one", () => {
+    const html = renderRow(102, board(), { models });
+    expect(html).toContain('data-source="human"');
+    expect(html).toContain('title="opus (set by you)"');
+    expect(html).toContain('data-source="planner"');
+    // No pick for Tests: the session model, as the default.
+    expect(html).toContain('title="opus (the default)"');
+  });
+
+  it('is plain text in demo mode and in the editor, and left out without settings', () => {
+    const demo = renderRow(101, board(), { models, readOnly: true });
+    expect(demo).toContain('data-testid="node-model"');
+    expect(demo).not.toContain('node-model-button');
+    expect(demo).toContain('title="opus (chosen by the Planner)"');
+    expect(renderRow(101, board())).not.toContain('node-model');
+  });
+
+  it("an OpenCode session's captions show the fallback model and cannot be changed", () => {
+    const html = renderRow(201, board(), { models });
+    expect(html).toContain('opencode/glm-5.3-flash-free');
+    expect(html).not.toContain('node-model-button');
   });
 });

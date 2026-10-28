@@ -27,6 +27,8 @@ const session = (id: number, projectId: number, extra: Partial<TreeSession> = {}
   rigor: 'standard',
   rigorSource: 'default',
   rigorReason: null,
+  models: {},
+  modelsReason: null,
   // Planned unless a test says otherwise: most tests are about building.
   plan: 'Goal: the task.',
   plannedAt: '2026-10-18T10:05:00.000Z',

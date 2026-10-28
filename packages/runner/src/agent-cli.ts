@@ -1,4 +1,4 @@
-import type { Effort, PermissionMode, Provider } from '@loop-engineering/core';
+import { assertModelArg, type Effort, type PermissionMode, type Provider } from '@loop-engineering/core';
 
 export interface LaunchSpec {
   provider: Provider;
@@ -54,7 +54,7 @@ export class DefaultAgentCli implements AgentCli {
     } else if (spec.agentSessionId) {
       argv.push('--session-id', spec.agentSessionId);
     }
-    argv.push('--model', spec.model, '--permission-mode', spec.permissionMode);
+    argv.push('--model', assertModelArg(spec.model), '--permission-mode', spec.permissionMode);
     // --strict-mcp-config: exactly the servers the runner wrote, and no "trust this .mcp.json?" prompt.
     if (spec.mcpConfigPath) argv.push('--mcp-config', spec.mcpConfigPath, '--strict-mcp-config');
     if (spec.effort) argv.push('--effort', spec.effort);

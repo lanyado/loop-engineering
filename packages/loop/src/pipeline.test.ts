@@ -795,6 +795,40 @@ describe('the rigor dial', () => {
     expect(h.pr().outcome).toBe('merged');
   });
 
+  it("a session's model for an agent applies to its next job only, and restarts no finished stage", async () => {
+    const h = harness(library({ checks: ['tests', 'review'] }));
+    h.launcher
+      .on('tests', () => {
+        h.store.sessions.setAgentModel(h.pr().sessionId!, 'review', 'sonnet'); // the human, while tests run
+        return testsPass();
+      })
+      .on('review', clean());
+    await h.builderWithPr();
+    await h.engine.tick();
+    expect(h.launcher.jobs.map((j) => `${j.kind} ${j.model}`)).toEqual(['tests opus', 'review sonnet']);
+    expect(h.pr().outcome).toBe('merged');
+  });
+
+  it("uses the Planner's pick for each check in every round, and the session model for the rest", async () => {
+    const h = harness(library({ checks: ['tests', 'review'] }));
+    h.launcher.on('tests', testsPass()).on('review', blocking('fix x'), clean());
+    const { session, number } = await h.builderWithPr();
+    h.store.sessions.setPlan(session.id, 'plan', undefined, {
+      models: { tests: 'haiku', builder: 'sonnet' },
+      reason: 'small change',
+    });
+    await h.engine.tick();
+    h.github.push(SLUG, number);
+    await h.engine.tick();
+    // The builder's pick is the builder's: the checks without a pick keep the session model.
+    expect(h.launcher.jobs.map((j) => `${j.kind} ${j.model}`)).toEqual([
+      'tests haiku',
+      'review opus',
+      'tests haiku',
+      'review opus',
+    ]);
+  });
+
   it('a level changed between rounds changes the round cap and the notes of the next round', async () => {
     const h = harness(library({ checks: ['tests', 'review'] }));
     h.launcher.on('tests', testsPass()).on('review', blocking('fix x'), clean());
