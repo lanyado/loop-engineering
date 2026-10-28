@@ -2,7 +2,7 @@
   "name": "@loop-engineering/router",
   "version": "0.0.0",
   "private": true,
-  "description": "Direct-input routing to marked projects and sessions (M5).",
+  "description": "Routes each request to a new or open session of the project it names (M5).",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

@@ -7,7 +7,7 @@ import type { Session, Store } from '@loop-engineering/core';
  * belong to one reserved project and session that the router creates on demand. Its id is stored in
  * settings (router_session_id), so it is found by id, never by name. The session is created "ended",
  * so the runner, the usage monitor and the active-session lists never touch it; the project is never
- * marked for direct input, never offered or routed to, hidden from the dashboard lists, and the
+ * offered or routed to, hidden from the dashboard lists, and the
  * dashboard API refuses tasks for it and its deletion.
  */
 export const ROUTER_PROJECT_NAME = 'Direct input (router)';

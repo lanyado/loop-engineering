@@ -299,13 +299,16 @@ export class Router {
     return decodeAnswer(answer, question.options, this.projects(), this.deps.store);
   }
 
-  /** Cancelled, or answered with something that matched no option: the scans leave it alone. */
+  /**
+   * Cancelled by the human: the scans leave it alone. Any other answer is not final (the question's
+   * options, such as "Resume it and deliver", are not routes), so a failed delivery or a restart
+   * after the answer retries the request.
+   */
   private isSettled(request: Request): boolean {
     // Plan questions are not routing questions (they would decode as 'unknown').
     const latest = this.routingQuestions(request.id).find((q) => !this.isPlanQuestion(q));
     if (!latest || latest.status === 'pending') return false;
-    // An answer that matched no option is final too: the request stays unrouted.
-    return this.decode(latest).kind !== 'route';
+    return this.decode(latest).kind === 'cancel';
   }
 
   /** The question once answered or defaulted; null if the router stopped first. */

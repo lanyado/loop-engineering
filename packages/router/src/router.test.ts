@@ -631,6 +631,21 @@ describe('folder projects', () => {
       expect(folders.resumed).toEqual([]);
     });
 
+    it('an answer that is not Cancel never settles the request: a failed delivery is retried by the rescan', async () => {
+      const open = openFolderSession({ status: 'paused', pauseReason: 'manual' });
+      const request = named('Fix the dates');
+      const outcome = router.route(request.id);
+      const q = await manualQuestion();
+      // The server restarts after the human chose Resume, before anything was delivered.
+      await router.stop();
+      questions.answer(q.id, RESUME_AND_DELIVER, 'dashboard');
+      await outcome;
+      router = makeRouter();
+      const [again] = await router.routePending();
+      expect(again).toMatchObject({ status: 'routed', sessionId: open.id, newSession: false });
+      expect(folders.resumed.map((r) => r.sessionId)).toEqual([open.id]);
+    });
+
     it('no answer: Cancel (the default) drops the request and settles it', async () => {
       const open = openFolderSession({ status: 'paused', pauseReason: 'manual' });
       const request = named('Fix the dates');
