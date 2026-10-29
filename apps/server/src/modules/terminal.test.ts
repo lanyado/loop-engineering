@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ServerConfig } from '../config.js';
 import { createServer, type LoopServer } from '../server.js';
 import { terminalModule } from './terminal.js';
+import { WebTerminals, type WebTerminalSpec } from './web-terminals.js';
 
 const TOKEN = 'dashboard-token-for-tests-0001';
 const config: ServerConfig = {
@@ -64,5 +65,50 @@ describe('POST /api/sessions/:id/terminal', () => {
     expect((await post(paused.id)).status).toBe(409);
     expect((await post(999)).status).toBe(404);
     expect(opened).toEqual(['loop:@5']);
+  });
+});
+
+describe('POST /api/sessions/:id/web-terminal', () => {
+  it('serves a typeable grouped-tmux terminal for a running session only', async () => {
+    const specs: WebTerminalSpec[] = [];
+    const web = new WebTerminals(
+      (spec) => (specs.push(spec), Promise.resolve({ stop() {}, exited: new Promise<void>(() => {}) })),
+      () => Promise.resolve(7711),
+    );
+    const s = createServer({
+      config,
+      store,
+      modules: [terminalModule({ open: () => Promise.resolve(), web })],
+    });
+    const shop = store.projects.create({ name: 'shop' });
+    const live = store.sessions.create({
+      projectId: shop.id,
+      title: 'l',
+      model: 'opus',
+      branch: 'b',
+      tmuxTarget: 'loop:@5',
+    });
+    const ended = store.sessions.create({
+      projectId: shop.id,
+      title: 'e',
+      model: 'opus',
+      branch: 'c',
+      status: 'paused',
+      pauseReason: 'manual',
+      tmuxTarget: null,
+    });
+    const post = (id: number) =>
+      s.app.request(`/api/sessions/${id}/web-terminal`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOKEN}` },
+      });
+    const ok = await post(live.id);
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toEqual({ url: 'http://localhost:7711' });
+    expect(specs[0]).toMatchObject({ writable: true });
+    expect(specs[0]!.argv).toContain('@5');
+    expect((await post(ended.id)).status).toBe(409);
+    expect((await post(999)).status).toBe(404);
+    await s.close();
   });
 });

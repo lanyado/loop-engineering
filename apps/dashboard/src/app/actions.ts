@@ -184,6 +184,16 @@ export async function skipCheck(prId: number, check: string, skip: boolean): Pro
   });
 }
 
+/** The embeddable terminal's URL comes back as the result's message. */
+export async function webTerminalUrl(
+  target: { kind: 'session'; sessionId: number } | { kind: 'stage'; prId: number; stage: string },
+): Promise<ActionResult> {
+  const schema = target.kind === 'session' ? endSessionInput : stageTerminalInput;
+  return write(schema, target, async (_d, backend) =>
+    backend.webTerminal(target.kind === 'session' ? { sessionId: target.sessionId } : target),
+  );
+}
+
 export async function openStageTerminal(prId: number, stage: string): Promise<ActionResult> {
   return write(stageTerminalInput, { prId, stage }, async (d, backend) => {
     await backend.openStageTerminal(d.prId, d.stage);

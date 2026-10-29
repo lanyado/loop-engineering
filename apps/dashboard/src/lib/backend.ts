@@ -49,6 +49,8 @@ export interface Backend {
   openTerminal(sessionId: number): Promise<void>;
   /** Opens a terminal following a PR stage's job log (review, tests, QA or a custom stage). */
   openStageTerminal(prId: number, stage: string): Promise<void>;
+  /** The URL of an embeddable live terminal (ttyd on the server's Mac) for a session's agent or a PR stage. */
+  webTerminal(target: { sessionId: number } | { prId: number; stage: string }): Promise<string>;
   /** Skips one check of the PR loop for one PR, or brings it back. */
   skipCheck(prId: number, check: string, skip: boolean): Promise<void>;
   /** The PR loop's pipeline and its stages (stage files). */

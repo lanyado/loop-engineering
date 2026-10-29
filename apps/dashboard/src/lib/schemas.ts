@@ -273,6 +273,7 @@ export type PipelineView = z.infer<typeof pipelineViewSchema>;
 export const responses = {
   questions: z.object({ questions: z.array(questionSchema) }),
   terminal: z.object({ opened: z.literal(true) }),
+  webTerminal: z.object({ url: z.string().url() }),
   answer: answerResultSchema,
   tree: z.object({ projects: z.array(treeProjectSchema) }),
   project: z.object({ project: projectSchema }),

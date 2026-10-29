@@ -9,12 +9,14 @@ import {
 } from '../lib/board';
 import { formatAgo, formatPrMetrics, humanize, pauseLabel, roundLabel, sessionRuntime } from '../lib/format';
 import { shows, type RowDetail } from '../lib/layout';
+import { stageTarget, terminalTabs } from '../lib/terminal-tabs';
 import { agentModel, type ModelDefaults } from '../lib/models';
 import type { PullRequest, Question, TreeSession } from '../lib/schemas';
 import { EndSessionButton } from './end-session-button';
 import { ModelTag } from './model-tag';
 import { QuestionCard } from './question-card';
 import { RigorDial } from './rigor-dial';
+import { TerminalDock } from './terminal-dock';
 import { SkipCheck, SkipDetail, SkipState } from './skip-check';
 import {
   DetailsButton,
@@ -346,14 +348,10 @@ function guardianDetail(node: StageNode, lane: Lane): string {
   return nodeDetail(node);
 }
 
-/**
- * Stages whose agent job has a terminal (its log): review, tests, QA and custom stages, once they have
- * run.
- */
+/** Stages whose agent job has a log (and so a model choice): review, tests and QA. */
 const JOB_STAGES = new Set<NodeStage>(['review', 'tests', 'qa']);
 function stageTerminal(lane: Lane, node: StageNode): TerminalTarget | null {
-  if (!lane.pr || !(node.custom || JOB_STAGES.has(node.stage)) || node.state === 'todo') return null;
-  return { kind: 'stage', prId: lane.pr.id, stage: node.stage };
+  return stageTarget(lane, node);
 }
 
 /** A node that opens its terminal on double-click, with a ">_" button for it. */
@@ -852,6 +850,7 @@ export function PipelineRow({
           )}
         </div>
       </div>
+      {!edit && <TerminalDock tabs={terminalTabs(row)} readOnly={readOnly} />}
       {row.olderPrs.length > 0 &&
         part(
           'earlierPrs',

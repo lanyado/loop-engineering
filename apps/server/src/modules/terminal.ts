@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { ServerModule } from '../context.js';
+import { WebTerminals } from './web-terminals.js';
 
 /** A runner tmux target, "<session>:@<window id>". Anything else is refused before it reaches a shell. */
 const TARGET = /^([A-Za-z0-9_-]+):(@\d+)$/;
@@ -52,6 +53,8 @@ export function macTerminalOpener(open: CommandOpener = macCommandOpener()): Ter
 export interface TerminalModuleOptions {
   /** Default: macTerminalOpener(). */
   open?: TerminalOpener;
+  /** The embedded (ttyd) terminals. Default: a new WebTerminals(). */
+  web?: WebTerminals;
 }
 
 /**
@@ -60,9 +63,46 @@ export interface TerminalModuleOptions {
  */
 export function terminalModule(options: TerminalModuleOptions = {}): ServerModule {
   const open = options.open ?? macTerminalOpener();
+  const web = options.web ?? new WebTerminals();
   return {
     name: 'terminal',
+    stop: () => web.stopAll(),
     api(api, ctx) {
+      // The same agent window, live and typeable, as a ttyd page for the dashboard to embed.
+      api.post('/sessions/:id/web-terminal', async (c) => {
+        const id = Number(c.req.param('id'));
+        const session = Number.isInteger(id) ? ctx.store.sessions.get(id) : null;
+        if (!session) return c.json({ error: 'no such session' }, 404);
+        const match = session.tmuxTarget ? TARGET.exec(session.tmuxTarget) : null;
+        if (session.status !== 'active' || !match) {
+          return c.json({ error: 'this session has no running terminal (it is paused or ended)' }, 409);
+        }
+        const [, group, window] = match;
+        try {
+          const url = await web.url({
+            key: `session-${id}`,
+            writable: true,
+            // A grouped session, so this viewer picks its window without switching anyone else's.
+            argv: [
+              'tmux',
+              'new-session',
+              '-t',
+              group!,
+              ';',
+              'set-option',
+              'destroy-unattached',
+              'on',
+              ';',
+              'select-window',
+              '-t',
+              window!,
+            ],
+          });
+          return c.json({ url });
+        } catch (error) {
+          return c.json({ error: `could not start the terminal: ${String(error)}` }, 500);
+        }
+      });
       api.post('/sessions/:id/terminal', async (c) => {
         const id = Number(c.req.param('id'));
         const session = Number.isInteger(id) ? ctx.store.sessions.get(id) : null;
