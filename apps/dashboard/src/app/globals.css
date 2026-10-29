@@ -2665,6 +2665,7 @@ button.node-plus:hover:not(:disabled) {
 }
 .dock-toggle:hover:not(:disabled) {
   background: var(--surface-2);
+}
 
 /* ---------- A session being started: its pipeline slides in, the Planner glows ---------- */
 
