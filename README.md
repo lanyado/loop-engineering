@@ -37,7 +37,7 @@
 
 ### Shape the pipeline
 
-<img src="docs/media/editor.gif" alt="Editing the dashboard: removing and adding top bar items and stages" width="860" />
+<img src="docs/media/editor.gif" alt="Editing the dashboard: removing a top bar item and adding it back" width="860" />
 
 > [!WARNING]
 > Everything runs on your machine, reachable only from it, and it starts agents with write access to your repos. It is a personal project, built mostly by the agents it runs, and developed on macOS. Read [SECURITY.md](SECURITY.md) first.

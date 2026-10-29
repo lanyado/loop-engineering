@@ -1,16 +1,16 @@
 // Regenerates the README's animated screenshots from the dashboard's demo data.
-// Needs: a built dashboard served in demo mode (SERVER_URL empty) and ffmpeg.
+// Needs: @playwright/test (a dashboard dev dependency, hoisted to the root), a built dashboard served in demo mode (SERVER_URL empty) and ffmpeg.
 //   cd apps/dashboard && SERVER_URL= npx next start -p 3191
 //   node scripts/capture-readme-media.mjs [http://localhost:3191]
 import { chromium } from '@playwright/test';
-import { URL } from 'node:url';
+import { URL, fileURLToPath } from 'node:url';
 import process from 'node:process';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs';
 
 const base = process.argv[2] ?? 'http://localhost:3191';
-const out = new URL('../docs/media/', import.meta.url).pathname;
-const tmp = new URL('../.media-tmp/', import.meta.url).pathname;
+const out = fileURLToPath(new URL('../docs/media/', import.meta.url));
+const tmp = fileURLToPath(new URL('../.media-tmp/', import.meta.url));
 mkdirSync(out, { recursive: true });
 rmSync(tmp, { recursive: true, force: true });
 
