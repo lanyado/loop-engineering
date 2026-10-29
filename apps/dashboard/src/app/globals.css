@@ -2665,4 +2665,69 @@ button.node-plus:hover:not(:disabled) {
 }
 .dock-toggle:hover:not(:disabled) {
   background: var(--surface-2);
+
+/* ---------- A session being started: its pipeline slides in, the Planner glows ---------- */
+
+.starting-rows {
+  margin-bottom: var(--s-5);
+}
+.starting-pipeline {
+  animation: starting-in 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.starting-pipeline .starting-node {
+  animation: starting-pop 0.5s cubic-bezier(0.2, 1.2, 0.3, 1) both;
+}
+.starting-pipeline .starting-edge {
+  transform-origin: left;
+  animation: starting-draw 0.4s ease-out 0.25s both;
+}
+.starting-pipeline .starting-node:last-child {
+  animation-delay: 0.45s;
+}
+.starting-pipeline .node-current {
+  animation:
+    starting-pop 0.5s cubic-bezier(0.2, 1.2, 0.3, 1) both,
+    node-pulse 1.6s ease-out 0.5s infinite;
+}
+.starting-spark {
+  background: linear-gradient(110deg, var(--accent-soft) 30%, var(--surface) 50%, var(--accent-soft) 70%);
+  background-size: 200% 100%;
+  animation: starting-shimmer 1.4s linear infinite;
+}
+.shortcut-hint {
+  margin-left: var(--s-2);
+  font: inherit;
+  font-size: var(--text-xs);
+  opacity: 0.7;
+}
+@keyframes starting-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.985);
+  }
+}
+@keyframes starting-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+}
+@keyframes starting-draw {
+  from {
+    transform: scaleX(0);
+  }
+}
+@keyframes starting-shimmer {
+  to {
+    background-position-x: -200%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .starting-pipeline,
+  .starting-pipeline .starting-node,
+  .starting-pipeline .starting-edge,
+  .starting-pipeline .node-current,
+  .starting-spark {
+    animation: none;
+  }
 }

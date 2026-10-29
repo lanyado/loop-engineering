@@ -1,13 +1,46 @@
+<div align="center">
+
 # Loop Engineering
 
-Give it a task, and it runs a Claude Code session on your repo in the background. It asks you questions in the dashboard when it needs you, and takes each pull request through tests, code review, QA, merge and deploy.
+**Give it a task. It runs Claude Code on your repo in the background, asks you when it's stuck, and takes every pull request through tests, review, QA, merge and deploy.**
 
-- **Sessions** run the Claude Code CLI in tmux, one git worktree per session. When Claude hits its usage limit, they can move to a free OpenCode model.
-- **Questions** come to the dashboard as one-tap options with a default answer. If you don't reply in time, the default wins.
-- **The PR loop** (optional) tests, reviews, QA-checks and merges every PR a session opens, sends failures back to the agent, and, for repos with a Vercel project set, reverts a deploy that fails.
-- **The dashboard** shows every project as a live pipeline, along with your Claude usage limits.
+[![CI](https://github.com/lanyado/loop-engineering/actions/workflows/ci.yml/badge.svg)](https://github.com/lanyado/loop-engineering/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Node 20.19+](https://img.shields.io/badge/node-%E2%89%A520.19-339933?logo=node.js&logoColor=white)](package.json)
+[![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](tsconfig.base.json)
+[![Runs locally](https://img.shields.io/badge/runs-on%20your%20machine-8b5cf6)](SECURITY.md)
 
-Everything runs on your machine, reachable only from it. It's a personal project, built mostly by the agents it runs, and developed on macOS. It starts agents with write access to your repos, so read [SECURITY.md](SECURITY.md) first.
+[Quick start](#quick-start) · [Features](#features) · [Settings](#settings) · [Reference](docs/reference.md) · [Security](SECURITY.md)
+
+<br />
+
+<img src="docs/media/pipeline.gif" alt="The dashboard: every task is a live pipeline from planner to deploy, with a rigor dial from Fast to Thorough" width="860" />
+
+<sub>The dashboard, shown with its built-in demo data.</sub>
+
+</div>
+
+<br />
+
+## Features
+
+- **Background sessions.** Each task runs the Claude Code CLI in tmux, in its own git worktree. When Claude hits its usage limit, the session can move to a free OpenCode model.
+- **Questions, not interruptions.** The agent asks through the dashboard as one-tap options with a default answer. If you don't reply in time, the default wins.
+- **A PR loop that closes the job.** Optional. Tests, code review by a separate agent, QA, merge and deploy for every PR a session opens. Failures go back to the agent, and a failed deploy is reverted (repos with a Vercel project set).
+- **A pipeline you can see.** Every project is a live pipeline, with your Claude 5-hour and weekly limits beside it.
+- **Rigor dial.** One control from **Fast** to **Thorough** trades safety against time and money.
+- **Yours to edit.** Reorder, remove or add stages and rewrite their prompts, all from the dashboard.
+
+### Answer from the dashboard
+
+<img src="docs/media/questions.gif" alt="A pull request waiting for approval, with one-tap Merge and Hold options and a free-text answer" width="860" />
+
+### Shape the pipeline
+
+<img src="docs/media/editor.gif" alt="Editing the dashboard: removing a top bar item and adding it back" width="860" />
+
+> [!WARNING]
+> Everything runs on your machine, reachable only from it, and it starts agents with write access to your repos. It is a personal project, built mostly by the agents it runs, and developed on macOS. Read [SECURITY.md](SECURITY.md) first.
 
 ## Requirements
 

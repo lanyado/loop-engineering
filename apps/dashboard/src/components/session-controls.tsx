@@ -1,7 +1,8 @@
 'use client';
 
 import type { TerminalTarget } from '../lib/terminal-tabs';
-import { createContext, useContext, useState, useTransition, type ReactNode } from 'react';
+import { useRouter } from 'next/navigation';
+import { createContext, useContext, useEffect, useState, useTransition, type ReactNode } from 'react';
 import {
   createRequest,
   messageSession,
@@ -9,6 +10,7 @@ import {
   openTerminal,
   type ActionResult,
 } from '../app/actions';
+import { StartingPipeline, startingAfter, visibleStarting, type Starting } from './starting-pipeline';
 
 /** A text box that sends one message, then clears; used for "+" on a session and on a project. */
 export function Composer({
@@ -17,6 +19,7 @@ export function Composer({
   submitLabel,
   send,
   onClose,
+  onSent,
   readOnly,
   testId,
   rows = 3,
@@ -26,6 +29,8 @@ export function Composer({
   submitLabel: string;
   send: (text: string) => Promise<ActionResult>;
   onClose: () => void;
+  /** Called with the text once it was sent successfully. */
+  onSent?: (text: string) => void;
   readOnly: boolean;
   testId: string;
   /** Taller for a new session's brief: the prompt tends to be longer than a reply. */
@@ -40,10 +45,14 @@ export function Composer({
       data-testid={testId}
       onSubmit={(e) => {
         e.preventDefault();
+        if (readOnly || pending || text.trim() === '') return;
         start(async () => {
           const r = await send(text);
           setResult(r);
-          if (r.ok) setText('');
+          if (r.ok) {
+            setText('');
+            onSent?.(text);
+          }
         });
       }}
     >
@@ -52,6 +61,13 @@ export function Composer({
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            // Cmd+Enter on a Mac, Ctrl+Enter elsewhere.
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing) {
+              e.preventDefault();
+              e.currentTarget.form?.requestSubmit();
+            }
+          }}
           rows={rows}
           maxLength={4000}
           placeholder={placeholder}
@@ -63,6 +79,11 @@ export function Composer({
       <span className="composer-actions">
         <button type="submit" className="primary" disabled={readOnly || pending || text.trim() === ''}>
           {pending ? 'Sending…' : submitLabel}
+          {!pending && (
+            <kbd className="shortcut-hint" aria-hidden="true">
+              ⌘↵
+            </kbd>
+          )}
         </button>
         <button type="button" className="ghost" onClick={onClose}>
           Close
@@ -271,6 +292,7 @@ export function ProjectShell({
   header,
   settings,
   readOnly,
+  rowCount,
   children,
 }: {
   projectId: number;
@@ -278,10 +300,35 @@ export function ProjectShell({
   header: ReactNode;
   settings: ReactNode;
   readOnly: boolean;
+  /** How many pipelines the server rendered, to tell when a started session's real row has arrived. */
+  rowCount: number;
   children: ReactNode;
 }) {
+  const router = useRouter();
   const [panel, setPanel] = useState<ProjectPanel>(null);
+  const [starting, setStarting] = useState<Starting[]>([]);
   const show = (p: ProjectPanel) => setPanel((current) => (current === p ? null : p));
+  const shown = visibleStarting(starting, rowCount);
+
+  // The server turns the request into a session a moment later: ask for the board a few times.
+  const started = (text: string) => {
+    setStarting((list) => [
+      ...list,
+      { id: Date.now() + list.length, text, after: startingAfter(list, rowCount) },
+    ]);
+    setPanel(null);
+    router.refresh();
+    for (const ms of [1000, 3000, 6000, 12000]) setTimeout(() => router.refresh(), ms);
+  };
+  // A placeholder whose row never shows (the request failed server-side) must not stay forever.
+  useEffect(() => {
+    if (starting.length === 0) return;
+    const t = setTimeout(
+      () => setStarting((list) => list.filter((s) => Date.now() - s.id < 120_000)),
+      125_000,
+    );
+    return () => clearTimeout(t);
+  }, [starting]);
   return (
     <ProjectContext.Provider value={{ panel, show }}>
       <section className="project" data-testid="project" data-project={projectName}>
@@ -293,12 +340,20 @@ export function ProjectShell({
             submitLabel="Start session"
             send={(text) => createRequest(text, projectId)}
             onClose={() => setPanel(null)}
+            onSent={started}
             readOnly={readOnly}
             testId="project-composer"
             rows={8}
           />
         )}
         {panel === 'settings' && <div className="project-settings-panel">{settings}</div>}
+        {shown.length > 0 && (
+          <ul className="rows starting-rows">
+            {shown.map((s) => (
+              <StartingPipeline key={s.id} text={s.text} />
+            ))}
+          </ul>
+        )}
         {children}
       </section>
     </ProjectContext.Provider>
