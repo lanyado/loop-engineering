@@ -81,6 +81,7 @@ export function BoardView({
           projectId={p.project.id}
           projectName={p.project.name}
           readOnly={readOnly}
+          rowCount={p.rows.length}
           header={<ProjectHeader board={p} />}
           settings={settings(p)}
         >
