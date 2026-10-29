@@ -2647,3 +2647,22 @@ button.node-plus:hover:not(:disabled) {
   color: #9ea5b3;
   font-size: var(--text-sm);
 }
+
+.dock-tablist {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+}
+/* The global button:hover rule paints a light surface; these keep the dark dock readable. */
+.dock-tab.on:hover:not(:disabled) {
+  background: #0b0d12;
+  border-color: #262b34;
+  color: #eceef2;
+}
+.dock-tool:hover:not(:disabled) {
+  background: #1a1e27;
+  color: #eceef2;
+}
+.dock-toggle:hover:not(:disabled) {
+  background: var(--surface-2);
+}

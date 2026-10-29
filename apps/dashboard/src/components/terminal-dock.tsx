@@ -71,27 +71,35 @@ export function TerminalDock({ tabs, readOnly }: { tabs: TerminalTab[]; readOnly
       </button>
       {open && active && (
         <div className="dock-body">
-          <div className="dock-tabs" role="tablist" aria-label="Pipeline terminals">
-            {tabs.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                role="tab"
-                aria-selected={t.id === active.id}
-                className={`dock-tab${t.id === active.id ? ' on' : ''}`}
-                onClick={() => setChosen(t.id)}
-                data-testid="terminal-tab"
-              >
-                <span className={`dock-dot state-${t.state}`} aria-hidden="true" />
-                {t.group && <span className="dock-group">{t.group}</span>}
-                {t.label}
-                {t.live && <span className="dock-live">live</span>}
-              </button>
-            ))}
+          <div className="dock-tabs">
+            <div className="dock-tablist" role="tablist" aria-label="Pipeline terminals">
+              {tabs.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={t.id === active.id}
+                  className={`dock-tab${t.id === active.id ? ' on' : ''}`}
+                  onClick={() => setChosen(t.id)}
+                  data-testid="terminal-tab"
+                >
+                  <span className={`dock-dot state-${t.state}`} aria-hidden="true" />
+                  {t.group && <span className="dock-group">{t.group}</span>}
+                  {t.label}
+                  {t.live && <span className="dock-live">live</span>}
+                </button>
+              ))}
+            </div>
             <span className="grow" />
             {result && 'url' in result && (
               <>
-                <button type="button" className="dock-tool" onClick={retry} title="Reconnect">
+                <button
+                  type="button"
+                  className="dock-tool"
+                  onClick={retry}
+                  title="Reconnect"
+                  aria-label="Reconnect"
+                >
                   ↻
                 </button>
                 <a
@@ -100,6 +108,7 @@ export function TerminalDock({ tabs, readOnly }: { tabs: TerminalTab[]; readOnly
                   target="_blank"
                   rel="noreferrer"
                   title="Open in its own tab"
+                  aria-label="Open in its own tab"
                 >
                   ↗
                 </a>

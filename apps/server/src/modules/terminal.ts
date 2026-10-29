@@ -123,7 +123,10 @@ export function terminalModule(options: TerminalModuleOptions = {}): ServerModul
         const spec = sessionTerminal(session);
         if (!spec) {
           web.stop(`session-${id}`);
-          return c.json({ error: 'this session has no running terminal (it is paused or ended)' }, 409);
+          return c.json(
+            { error: 'this session has no running terminal (it is paused, ended or has no tmux window)' },
+            409,
+          );
         }
         try {
           return c.json({ url: await web.url(spec) });
@@ -137,7 +140,10 @@ export function terminalModule(options: TerminalModuleOptions = {}): ServerModul
         if (!session) return c.json({ error: 'no such session' }, 404);
         const target = session.tmuxTarget;
         if (session.status !== 'active' || !target || !TARGET.test(target)) {
-          return c.json({ error: 'this session has no running terminal (it is paused or ended)' }, 409);
+          return c.json(
+            { error: 'this session has no running terminal (it is paused, ended or has no tmux window)' },
+            409,
+          );
         }
         try {
           await open(target);

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { sessionToken } from '@loop-engineering/core';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
-import { expect, test, type Request } from '@playwright/test';
+import { expect, test, type Locator, type Request } from '@playwright/test';
 import { E2E } from './env';
 import {
   api,
@@ -960,6 +960,16 @@ test('the terminal dock opens a terminal per tab, switches between them and relo
   const tabs = dock.getByTestId('terminal-tab');
   expect(await tabs.count()).toBeGreaterThan(1);
   await expect(tabs.first()).toContainText('Builder');
+
+  // Hovering the selected tab or a tool keeps the dock dark (the global button hover is light).
+  const darkOnHover = async (target: Locator) => {
+    await target.hover();
+    const bg = await target.evaluate((el) => getComputedStyle(el).backgroundColor);
+    const [r, g, b] = bg.match(/\d+/g)!.map(Number);
+    expect(r! + g! + b!).toBeLessThan(200);
+  };
+  await darkOnHover(tabs.first());
+  await darkOnHover(dock.getByTitle('Reconnect'));
 
   const counts = async () =>
     (await (
