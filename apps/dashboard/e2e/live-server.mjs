@@ -7,6 +7,7 @@
 // Claude's usage limits come from a snapshot file written here, as the status line script would.
 // A SessionRunner on fake tmux, git and an in-memory fs backs "End session": no agent, no real git.
 // Run after `npm run build`. Env: LIVE_PORT, DASHBOARD_TOKEN, MCP_TOKEN.
+import { createServer as createHttpServer } from 'node:http';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -25,6 +26,8 @@ import {
   dashboardApi,
   pipelineModule,
   plannerModule,
+  terminalModule,
+  WebTerminals,
 } from '@loop-engineering/server';
 
 const port = Number(process.env.LIVE_PORT ?? 3102);
@@ -48,6 +51,21 @@ writeFileSync(
 );
 let ids = {};
 
+// Stands in for ttyd: a page on a fixed port, and a count of how many terminals were launched.
+const FAKE_TTYD_PORT = Number(process.env.FAKE_TTYD_PORT ?? 3199);
+let launches = 0;
+const fakeTtyd = createHttpServer((_req, res) => {
+  res.setHeader('Content-Type', 'text/html');
+  res.end('<body style="background:#0b0d12;color:#d7dce5;font:14px monospace">fake terminal</body>');
+}).listen(FAKE_TTYD_PORT, '127.0.0.1');
+const webTerminals = new WebTerminals(
+  () => {
+    launches += 1;
+    return Promise.resolve({ stop() {}, exited: new Promise(() => {}) });
+  },
+  () => Promise.resolve(FAKE_TTYD_PORT),
+);
+
 function seed(server) {
   const repo = (name) => ({
     name,
@@ -65,6 +83,7 @@ function seed(server) {
     title: 'Apple Pay checkout',
     model: 'opus',
     branch: 'loop/apple-pay',
+    tmuxTarget: 'loop:@5',
   });
   const search = store.sessions.create({
     projectId: shop.id,
@@ -194,6 +213,9 @@ const testRoutes = {
       rmSync(join(dir, 'stages'), { recursive: true, force: true }); // back to the built-in pipeline
       return c.json({ ok: true, ids });
     });
+    app.get('/test/terminal-launches', (c) =>
+      guard(c) ? c.json({ launches }) : c.json({ error: 'unauthorized' }, 401),
+    );
     app.post('/test/ask', async (c) => {
       if (!guard(c)) return c.json({ error: 'unauthorized' }, 401);
       const body = await c.req.json();
@@ -312,6 +334,7 @@ const server = createServer({
     claudeUsageModule({ file: usageFile }),
     pipelineModule({ stages: new FileStageLibrary(join(dir, 'stages'), () => undefined) }),
     plannerModule(),
+    terminalModule({ open: () => Promise.resolve(), web: webTerminals }),
     testRoutes,
   ],
   sseKeepAliveMs: 5_000,
@@ -322,6 +345,7 @@ console.log(`[e2e] live server on ${url} (db in ${dir})`);
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.once(signal, () => {
+    fakeTtyd.close();
     void server.close().then(() => {
       store.close();
       rmSync(dir, { recursive: true, force: true });

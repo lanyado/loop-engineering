@@ -75,6 +75,7 @@ export function terminalModule(options: TerminalModuleOptions = {}): ServerModul
         if (!session) return c.json({ error: 'no such session' }, 404);
         const match = session.tmuxTarget ? TARGET.exec(session.tmuxTarget) : null;
         if (session.status !== 'active' || !match) {
+          web.stop(`session-${id}`); // its agent is gone: nothing should stay open on its window
           return c.json({ error: 'this session has no running terminal (it is paused or ended)' }, 409);
         }
         const [, group, window] = match;

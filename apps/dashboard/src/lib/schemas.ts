@@ -326,6 +326,10 @@ export const skipCheckInput = z.object({
   check: z.string().min(1).max(32),
   skip: z.boolean(),
 });
+export const webTerminalInput = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('session'), sessionId: z.number().int().positive() }),
+  z.object({ kind: z.literal('stage'), prId: z.number().int().positive(), stage: z.string().min(1).max(32) }),
+]);
 export const stageTerminalInput = z.object({
   prId: z.number().int().positive(),
   /** review, tests, qa or a custom stage's id; the server checks which. */

@@ -17,7 +17,7 @@ export interface TerminalTab {
 }
 
 /** Stages whose agent job has a log: review, tests, QA and custom stages, once they have run. */
-const JOB_STAGES = new Set(['review', 'tests', 'qa']);
+export const JOB_STAGES = new Set<string>(['review', 'tests', 'qa']);
 export function stageTarget(lane: Lane, node: StageNode): TerminalTarget | null {
   if (!lane.pr || !(node.custom || JOB_STAGES.has(node.stage)) || node.state === 'todo') return null;
   return { kind: 'stage', prId: lane.pr.id, stage: node.stage };
@@ -31,7 +31,7 @@ export function terminalTabs(row: Row): TerminalTab[] {
       id: 'builder',
       label: 'Builder',
       group: null,
-      state: row.builder.state === 'working' ? 'current' : 'done',
+      state: row.builder.state === 'working' || row.planner.state === 'planning' ? 'current' : 'done',
       live: true,
       target: { kind: 'session', sessionId: row.session.id },
     });

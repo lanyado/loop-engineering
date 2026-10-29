@@ -12,6 +12,7 @@ import {
   SESSION_TTL_MS,
   cookieIsSecure,
 } from '../lib/auth';
+import type { TerminalTarget } from '../lib/terminal-tabs';
 import { BackendError, ReadOnlyError, type Backend } from '../lib/backend';
 import { clientIp, LoginLimiter } from '../lib/login-limiter';
 import {
@@ -23,6 +24,7 @@ import {
   skipCheckInput,
   hideProjectInput,
   stageTerminalInput,
+  webTerminalInput,
   newRequestInput,
   projectToggleInput,
   sessionMessageInput,
@@ -184,13 +186,10 @@ export async function skipCheck(prId: number, check: string, skip: boolean): Pro
   });
 }
 
-/** The embeddable terminal's URL comes back as the result's message. */
-export async function webTerminalUrl(
-  target: { kind: 'session'; sessionId: number } | { kind: 'stage'; prId: number; stage: string },
-): Promise<ActionResult> {
-  const schema = target.kind === 'session' ? endSessionInput : stageTerminalInput;
-  return write(schema, target, async (_d, backend) =>
-    backend.webTerminal(target.kind === 'session' ? { sessionId: target.sessionId } : target),
+/** The embeddable terminal's URL comes back as the result's message. Only parsed fields reach the backend. */
+export async function webTerminalUrl(target: TerminalTarget): Promise<ActionResult> {
+  return write(webTerminalInput, target, (d, backend) =>
+    backend.webTerminal(d.kind === 'session' ? { sessionId: d.sessionId } : { prId: d.prId, stage: d.stage }),
   );
 }
 

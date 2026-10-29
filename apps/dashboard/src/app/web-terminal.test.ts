@@ -12,7 +12,7 @@ import { PipelineRow, type RowEdit } from '../components/pipeline';
  * The web-terminal action and the dock it feeds. The existing tests cover the server endpoints and
  * the tab list; these cover the dashboard glue: the action's routing/validation, the dock's static
  * render, and its place under a pipeline row. The dock is interactive (effects decide what loads),
- * so only its server-rendered shell is asserted here; the click-through is in the e2e demo.
+ * so only its server-rendered shell is asserted here; the click-through is in the live e2e (terminal-dock).
  */
 
 // The actions tree pulls in Next's server-only guard; outside Next it is a no-op.
@@ -58,8 +58,14 @@ describe('webTerminalUrl action', () => {
     backend = fakeBackend('http://localhost:7701');
     const r = await webTerminalUrl({ kind: 'stage', prId: 1, stage: 'qa' });
     expect(r).toEqual({ ok: true, message: 'http://localhost:7701' });
-    // The action passes the stage target as-is (the kind included; the backend routes on sessionId's absence).
-    expect(webSpy).toHaveBeenCalledWith({ kind: 'stage', prId: 1, stage: 'qa' });
+    expect(webSpy).toHaveBeenCalledWith({ prId: 1, stage: 'qa' });
+  });
+
+  it('forwards only the parsed fields, never extra client keys', async () => {
+    backend = fakeBackend('http://localhost:7703');
+    const sneaky = { kind: 'stage', prId: 1, stage: 'qa', sessionId: '5/end?' } as never;
+    await webTerminalUrl(sneaky);
+    expect(webSpy).toHaveBeenCalledWith({ prId: 1, stage: 'qa' });
   });
 
   it('rejects a bad stage without reaching the backend', async () => {

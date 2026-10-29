@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { createConnection, createServer } from 'node:net';
 import { platform } from 'node:os';
 
@@ -14,6 +15,8 @@ export interface WebTerminalSpec {
 export type TtydLauncher = (
   spec: WebTerminalSpec,
   port: number,
+  /** The secret path the page is served under, e.g. "/3f9a…". */
+  basePath: string,
 ) => Promise<{ stop(): void; exited: Promise<void> }>;
 
 const THEME = JSON.stringify({
@@ -40,13 +43,25 @@ const accepts = (port: number) =>
     socket.once('error', () => resolve(false));
   });
 
-/** ttyd on the loopback interface only (lo0 on macOS, lo elsewhere); nothing outside this machine can reach it. */
-export const ttydLauncher: TtydLauncher = async (spec, port) => {
-  const args = [
+/**
+ * ttyd's arguments. Loopback only; -O refuses a WebSocket from another origin, and the unguessable base
+ * path keeps a web page (or a port scan, or DNS rebinding) from finding the terminal at all: ttyd has
+ * no login of its own here.
+ */
+export function ttydArgs(
+  spec: WebTerminalSpec,
+  port: number,
+  basePath: string,
+  os: NodeJS.Platform = platform(),
+): string[] {
+  return [
     '-i',
-    platform() === 'darwin' ? 'lo0' : 'lo',
+    os === 'darwin' ? 'lo0' : 'lo',
     '-p',
     String(port),
+    '-b',
+    basePath,
+    '-O',
     '-t',
     'fontSize=13',
     '-t',
@@ -56,7 +71,10 @@ export const ttydLauncher: TtydLauncher = async (spec, port) => {
     ...(spec.writable ? ['-W'] : []),
     ...spec.argv,
   ];
-  const child: ChildProcess = spawn('ttyd', args, { stdio: 'ignore' });
+}
+
+export const ttydLauncher: TtydLauncher = async (spec, port, basePath) => {
+  const child: ChildProcess = spawn('ttyd', ttydArgs(spec, port, basePath), { stdio: 'ignore' });
   const exited = new Promise<void>((resolve) => {
     child.once('exit', () => resolve());
     child.once('error', () => resolve());
@@ -76,35 +94,62 @@ export const ttydLauncher: TtydLauncher = async (spec, port) => {
  * stopped with the server. The browser reaches them at http://localhost:<port> (same machine only).
  */
 export class WebTerminals {
-  private readonly running = new Map<string, { port: number; stop(): void }>();
-  private readonly starting = new Map<string, Promise<number>>();
+  private readonly running = new Map<string, { url: string; sig: string; stop(): void }>();
+  private readonly starting = new Map<string, { sig: string; url: Promise<string> }>();
+  private stopped = false;
 
   constructor(
     private readonly launch: TtydLauncher = ttydLauncher,
     private readonly pickPort: () => Promise<number> = freePort,
   ) {}
 
-  /** The URL of the terminal for `spec`, starting it if it is not running. */
+  /**
+   * The URL of the terminal for `spec`, starting it if it is not running. A running one whose command
+   * differs (the agent moved to another tmux window) is stopped and replaced.
+   */
   async url(spec: WebTerminalSpec): Promise<string> {
+    const sig = JSON.stringify([spec.argv, spec.writable]);
     const live = this.running.get(spec.key);
-    if (live) return `http://localhost:${live.port}`;
+    if (live?.sig === sig) return live.url;
+    if (live) this.stop(spec.key);
     let pending = this.starting.get(spec.key);
-    if (!pending) {
-      pending = this.start(spec).finally(() => this.starting.delete(spec.key));
+    if (pending?.sig !== sig) {
+      const url = this.start(spec, sig);
+      pending = { sig, url };
       this.starting.set(spec.key, pending);
+      const mine = pending;
+      const clear = () => {
+        if (this.starting.get(spec.key) === mine) this.starting.delete(spec.key);
+      };
+      url.then(clear, clear);
     }
-    return `http://localhost:${await pending}`;
+    return pending.url;
   }
 
-  private async start(spec: WebTerminalSpec): Promise<number> {
+  private async start(spec: WebTerminalSpec, sig: string): Promise<string> {
     const port = await this.pickPort();
-    const terminal = await this.launch(spec, port);
-    this.running.set(spec.key, { port, stop: () => terminal.stop() });
-    void terminal.exited.then(() => this.running.delete(spec.key));
-    return port;
+    const token = randomBytes(24).toString('hex');
+    const terminal = await this.launch(spec, port, `/${token}`);
+    if (this.stopped) {
+      terminal.stop();
+      throw new Error('the server is stopping');
+    }
+    const entry = { url: `http://localhost:${port}/${token}/`, sig, stop: () => terminal.stop() };
+    this.running.set(spec.key, entry);
+    void terminal.exited.then(() => {
+      if (this.running.get(spec.key) === entry) this.running.delete(spec.key);
+    });
+    return entry.url;
+  }
+
+  /** Stops the terminal of one key (a session that ended), if it is running. */
+  stop(key: string): void {
+    this.running.get(key)?.stop();
+    this.running.delete(key);
   }
 
   stopAll(): void {
+    this.stopped = true;
     for (const t of this.running.values()) t.stop();
     this.running.clear();
   }

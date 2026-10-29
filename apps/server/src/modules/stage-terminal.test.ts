@@ -73,7 +73,9 @@ describe('POST /api/prs/:id/terminal', () => {
           body: JSON.stringify({ stage }),
         });
       const ok = await web1('review');
-      expect(await ok.json()).toEqual({ url: 'http://localhost:7722' });
+      expect(await ok.json()).toMatchObject({
+        url: expect.stringMatching(/^http:\/\/localhost:7722\/[0-9a-f]{48}\/$/) as unknown,
+      });
       expect(specs[0]).toMatchObject({ writable: false, key: `pr${pr.id}-review` });
       expect((await web1('tests')).status).toBe(409);
       expect((await web1('merge')).status).toBe(400);

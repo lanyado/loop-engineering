@@ -16,6 +16,8 @@ export function TerminalDock({ tabs, readOnly }: { tabs: TerminalTab[]; readOnly
   const [chosen, setChosen] = useState<string | null>(null);
   const [loaded, setLoaded] = useState<Record<string, Loaded>>({});
   const [pending, start] = useTransition();
+  // Bumped by Reconnect / Try again, so the effect fetches again for the same tab.
+  const [reloads, setReloads] = useState(0);
   const active = tabs.find((t) => t.id === chosen) ?? tabs[0];
   const activeId = active?.id;
   const result = activeId ? loaded[activeId] : undefined;
@@ -23,20 +25,24 @@ export function TerminalDock({ tabs, readOnly }: { tabs: TerminalTab[]; readOnly
   useEffect(() => {
     if (!open || !active || readOnly || loaded[active.id]) return;
     const id = active.id;
+    const put = (r: Loaded) => setLoaded((m) => ({ ...m, [id]: r }));
     start(async () => {
-      const r = await webTerminalUrl(active.target);
-      setLoaded((m) => ({
-        ...m,
-        [id]: r.ok && r.message ? { url: r.message } : { error: r.ok ? 'No terminal' : r.error },
-      }));
+      try {
+        const r = await webTerminalUrl(active.target);
+        put(r.ok && r.message ? { url: r.message } : { error: r.ok ? 'No terminal' : r.error });
+      } catch {
+        put({ error: 'Could not reach the dashboard. Reload the page and try again.' });
+      }
     });
     // `loaded` is read only to skip tabs already fetched.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, activeId, readOnly]);
+  }, [open, activeId, readOnly, reloads]);
 
   if (tabs.length === 0) return null;
-  const retry = () =>
-    activeId && setLoaded((m) => Object.fromEntries(Object.entries(m).filter(([k]) => k !== activeId)));
+  const retry = () => {
+    setLoaded((m) => Object.fromEntries(Object.entries(m).filter(([k]) => k !== activeId)));
+    setReloads((n) => n + 1);
+  };
   return (
     <section className={`dock${open ? ' open' : ''}`} data-testid="terminal-dock" aria-label="Terminals">
       <button

@@ -942,3 +942,44 @@ test('the rigor dial saves a level, and every level draws every stage', async ({
   await expect(lane).not.toContainText('round 1/');
   await snap(page, info, 'rigor');
 });
+
+test('the terminal dock opens a terminal per tab, switches between them and reloads on Try again', async ({
+  page,
+}) => {
+  await open(page);
+  const dock = page
+    .getByTestId('session-row')
+    .filter({ hasText: 'Apple Pay checkout' })
+    .getByTestId('terminal-dock');
+  await expect(dock.getByTestId('terminal-dock-toggle')).toHaveAttribute('aria-expanded', 'false');
+  await dock.getByTestId('terminal-dock-toggle').click();
+
+  // The Builder's terminal loads first, under a secret path (the stand-in ttyd serves any path).
+  const frame = dock.locator('iframe.dock-frame');
+  await expect(frame).toHaveAttribute('src', /^http:\/\/localhost:\d+\/[0-9a-f]{48}\/$/);
+  const tabs = dock.getByTestId('terminal-tab');
+  expect(await tabs.count()).toBeGreaterThan(1);
+  await expect(tabs.first()).toContainText('Builder');
+
+  // This server has no PR loop, so a stage's terminal fails: the pane says why and Try again asks again.
+  await tabs.nth(1).click();
+  await expect(dock.getByRole('alert')).toBeVisible();
+  await dock.getByRole('button', { name: 'Try again' }).click();
+  await expect(dock.getByRole('alert')).toBeVisible();
+
+  // Back on the Builder: Reconnect re-asks, and the live terminal comes back.
+  await tabs.first().click();
+  await expect(frame).toBeVisible();
+  const launchCount = async () =>
+    (
+      (await (
+        await fetch(`${E2E.serverUrl}/test/terminal-launches`, {
+          headers: { Authorization: `Bearer ${E2E.mcpToken}` },
+        })
+      ).json()) as { launches: number }
+    ).launches;
+  const before = await launchCount();
+  await dock.getByTitle('Reconnect').click();
+  await expect(frame).toBeVisible();
+  expect(await launchCount()).toBe(before); // the running terminal is reused, not started twice
+});

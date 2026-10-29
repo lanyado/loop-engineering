@@ -9,7 +9,7 @@ import {
 } from '../lib/board';
 import { formatAgo, formatPrMetrics, humanize, pauseLabel, roundLabel, sessionRuntime } from '../lib/format';
 import { shows, type RowDetail } from '../lib/layout';
-import { stageTarget, terminalTabs } from '../lib/terminal-tabs';
+import { JOB_STAGES, stageTarget, terminalTabs } from '../lib/terminal-tabs';
 import { agentModel, type ModelDefaults } from '../lib/models';
 import type { PullRequest, Question, TreeSession } from '../lib/schemas';
 import { EndSessionButton } from './end-session-button';
@@ -348,8 +348,6 @@ function guardianDetail(node: StageNode, lane: Lane): string {
   return nodeDetail(node);
 }
 
-/** Stages whose agent job has a log (and so a model choice): review, tests and QA. */
-const JOB_STAGES = new Set<NodeStage>(['review', 'tests', 'qa']);
 function stageTerminal(lane: Lane, node: StageNode): TerminalTarget | null {
   return stageTarget(lane, node);
 }

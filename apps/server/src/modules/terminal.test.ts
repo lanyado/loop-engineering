@@ -104,9 +104,17 @@ describe('POST /api/sessions/:id/web-terminal', () => {
       });
     const ok = await post(live.id);
     expect(ok.status).toBe(200);
-    expect(await ok.json()).toEqual({ url: 'http://localhost:7711' });
+    expect(await ok.json()).toMatchObject({
+      url: expect.stringMatching(/^http:\/\/localhost:7711\/[0-9a-f]{48}\/$/) as unknown,
+    });
     expect(specs[0]).toMatchObject({ writable: true });
     expect(specs[0]!.argv).toContain('@5');
+    // The agent moves to a new window (relaunch, resume): the terminal follows it, not the old one.
+    store.sessions.update(live.id, { tmuxTarget: 'loop:@9' });
+    expect((await post(live.id)).status).toBe(200);
+    expect(specs).toHaveLength(2);
+    expect(specs[1]!.argv).toContain('@9');
+    expect(specs[1]!.argv).not.toContain('@5');
     expect((await post(ended.id)).status).toBe(409);
     expect((await post(999)).status).toBe(404);
     await s.close();
