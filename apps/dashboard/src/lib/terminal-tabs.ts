@@ -28,7 +28,8 @@ export function terminalTabs(row: Row): TerminalTab[] {
   const tabs: TerminalTab[] = [];
   if (row.session.status === 'active') {
     tabs.push({
-      id: 'builder',
+      // A new window is a new tab, so the dock asks for its terminal again.
+      id: `builder-${row.session.tmuxTarget ?? ''}`,
       label: 'Builder',
       group: null,
       state: row.builder.state === 'working' || row.planner.state === 'planning' ? 'current' : 'done',

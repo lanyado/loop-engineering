@@ -52,12 +52,14 @@ writeFileSync(
 let ids = {};
 
 // Stands in for ttyd: a page on a fixed port, and a count of how many terminals were launched.
-const FAKE_TTYD_PORT = Number(process.env.FAKE_TTYD_PORT ?? 3199);
 let launches = 0;
+let urlCalls = 0;
 const fakeTtyd = createHttpServer((_req, res) => {
   res.setHeader('Content-Type', 'text/html');
   res.end('<body style="background:#0b0d12;color:#d7dce5;font:14px monospace">fake terminal</body>');
-}).listen(FAKE_TTYD_PORT, '127.0.0.1');
+});
+await new Promise((resolve) => fakeTtyd.listen(0, '127.0.0.1', resolve));
+const FAKE_TTYD_PORT = fakeTtyd.address().port;
 const webTerminals = new WebTerminals(
   () => {
     launches += 1;
@@ -65,6 +67,11 @@ const webTerminals = new WebTerminals(
   },
   () => Promise.resolve(FAKE_TTYD_PORT),
 );
+const realUrl = webTerminals.url.bind(webTerminals);
+webTerminals.url = (spec) => {
+  urlCalls += 1;
+  return realUrl(spec);
+};
 
 function seed(server) {
   const repo = (name) => ({
@@ -214,8 +221,14 @@ const testRoutes = {
       return c.json({ ok: true, ids });
     });
     app.get('/test/terminal-launches', (c) =>
-      guard(c) ? c.json({ launches }) : c.json({ error: 'unauthorized' }, 401),
+      guard(c) ? c.json({ launches, urlCalls }) : c.json({ error: 'unauthorized' }, 401),
     );
+    // The checkout agent moves to a new tmux window, as after a relaunch.
+    app.post('/test/relaunch', (c) => {
+      if (!guard(c)) return c.json({ error: 'unauthorized' }, 401);
+      store.sessions.update(ids.checkout, { tmuxTarget: 'loop:@9' });
+      return c.json({ ok: true });
+    });
     app.post('/test/ask', async (c) => {
       if (!guard(c)) return c.json({ error: 'unauthorized' }, 401);
       const body = await c.req.json();
@@ -334,7 +347,7 @@ const server = createServer({
     claudeUsageModule({ file: usageFile }),
     pipelineModule({ stages: new FileStageLibrary(join(dir, 'stages'), () => undefined) }),
     plannerModule(),
-    terminalModule({ open: () => Promise.resolve(), web: webTerminals }),
+    terminalModule({ open: () => Promise.resolve(), web: webTerminals, sweepMs: 200 }),
     testRoutes,
   ],
   sseKeepAliveMs: 5_000,

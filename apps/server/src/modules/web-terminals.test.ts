@@ -55,14 +55,51 @@ describe('WebTerminals', () => {
     expect(await terminals.url(spec('a', ['tmux', '@9']))).toBe(second);
   });
 
-  it('stops one key, and a start that finishes after stopAll is killed', async () => {
+  it('stops one key, and starts nothing after stopAll', async () => {
     const { stopped, terminals } = fake();
     await terminals.url(spec('a'));
     terminals.stop('a');
     expect(stopped).toEqual(['a']);
     terminals.stopAll();
     await expect(terminals.url(spec('late'))).rejects.toThrow('stopping');
-    expect(stopped).toEqual(['a', 'late']);
+    expect(stopped).toEqual(['a']);
+  });
+});
+
+describe('WebTerminals overlap', () => {
+  it('stops a ttyd whose start was overtaken by another command or by stop()', async () => {
+    const stopped: string[] = [];
+    const release: (() => void)[] = [];
+    const launch: TtydLauncher = (spec) =>
+      new Promise((resolve) =>
+        release.push(() =>
+          resolve({
+            stop: () => void stopped.push(String(spec.argv[0])),
+            exited: new Promise<void>(() => {}),
+          }),
+        ),
+      );
+    const t = new WebTerminals(launch, () => Promise.resolve(7800));
+    const first = t.url(spec('a', ['one']));
+    const second = t.url(spec('a', ['two'])); // asked again while the first ttyd is still starting
+    await new Promise((r) => setTimeout(r, 0));
+    release.forEach((r) => r());
+    await expect(first).rejects.toThrow('replaced');
+    expect(await second).toMatch(/^http:\/\/localhost:7800\//);
+    expect(stopped).toEqual(['one']);
+    const third = t.url(spec('b'));
+    await new Promise((r) => setTimeout(r, 0));
+    t.stop('b');
+    release.forEach((r) => r());
+    await expect(third).rejects.toThrow();
+    expect(stopped).toEqual(['one', 'node']);
+  });
+
+  it('starts nothing once stopped', async () => {
+    const { started, terminals } = fake();
+    terminals.stopAll();
+    await expect(terminals.url(spec('a'))).rejects.toThrow('stopping');
+    expect(started).toHaveLength(0);
   });
 });
 

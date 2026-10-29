@@ -91,10 +91,14 @@ export const ttydLauncher: TtydLauncher = async (spec, port, basePath) => {
 
 /**
  * The ttyd processes behind the dashboard's embedded terminals, one per key, started on first use and
- * stopped with the server. The browser reaches them at http://localhost:<port> (same machine only).
+ * stopped with the server. The secret path is in ttyd's command line, which other local accounts can
+ * read on Linux (/proc): use it on a machine you alone log in to, as on a Mac. The browser reaches them at http://localhost:<port> (same machine only).
  */
 export class WebTerminals {
-  private readonly running = new Map<string, { url: string; sig: string; stop(): void }>();
+  private readonly running = new Map<
+    string,
+    { url: string; sig: string; spec: WebTerminalSpec; stop(): void }
+  >();
   private readonly starting = new Map<string, { sig: string; url: Promise<string> }>();
   private stopped = false;
 
@@ -112,6 +116,7 @@ export class WebTerminals {
     const live = this.running.get(spec.key);
     if (live?.sig === sig) return live.url;
     if (live) this.stop(spec.key);
+    if (this.stopped) throw new Error('the server is stopping');
     let pending = this.starting.get(spec.key);
     if (pending?.sig !== sig) {
       const url = this.start(spec, sig);
@@ -127,14 +132,18 @@ export class WebTerminals {
   }
 
   private async start(spec: WebTerminalSpec, sig: string): Promise<string> {
+    if (this.stopped) throw new Error('the server is stopping');
     const port = await this.pickPort();
     const token = randomBytes(24).toString('hex');
+    if (this.stopped) throw new Error('the server is stopping');
     const terminal = await this.launch(spec, port, `/${token}`);
-    if (this.stopped) {
+    // Stopped, or asked again with another command, while ttyd was starting: this one is not wanted.
+    if (this.stopped || this.starting.get(spec.key)?.sig !== sig) {
       terminal.stop();
-      throw new Error('the server is stopping');
+      throw new Error('this terminal was replaced or stopped while it started');
     }
-    const entry = { url: `http://localhost:${port}/${token}/`, sig, stop: () => terminal.stop() };
+    this.running.get(spec.key)?.stop();
+    const entry = { url: `http://localhost:${port}/${token}/`, sig, spec, stop: () => terminal.stop() };
     this.running.set(spec.key, entry);
     void terminal.exited.then(() => {
       if (this.running.get(spec.key) === entry) this.running.delete(spec.key);
@@ -142,8 +151,14 @@ export class WebTerminals {
     return entry.url;
   }
 
+  /** The terminals running now. */
+  specs(): WebTerminalSpec[] {
+    return [...this.running.values()].map((t) => t.spec);
+  }
+
   /** Stops the terminal of one key (a session that ended), if it is running. */
   stop(key: string): void {
+    this.starting.delete(key); // a start still in flight sees it is no longer wanted
     this.running.get(key)?.stop();
     this.running.delete(key);
   }

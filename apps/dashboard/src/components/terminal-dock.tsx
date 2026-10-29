@@ -38,6 +38,16 @@ export function TerminalDock({ tabs, readOnly }: { tabs: TerminalTab[]; readOnly
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, activeId, readOnly, reloads]);
 
+  // A tab that went away (the agent paused) must not keep its URL for when it comes back. Adjusted
+  // while rendering, which React allows for state derived from props.
+  const ids = tabs.map((t) => t.id).join('\n');
+  const [seenIds, setSeenIds] = useState(ids);
+  if (seenIds !== ids) {
+    setSeenIds(ids);
+    const keep = new Set(ids.split('\n'));
+    setLoaded((m) => Object.fromEntries(Object.entries(m).filter(([k]) => keep.has(k))));
+  }
+
   if (tabs.length === 0) return null;
   const retry = () => {
     setLoaded((m) => Object.fromEntries(Object.entries(m).filter(([k]) => k !== activeId)));

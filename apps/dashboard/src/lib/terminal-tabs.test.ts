@@ -12,7 +12,7 @@ describe('terminalTabs', () => {
     expect(withTabs.length).toBeGreaterThan(0);
     for (const { row, tabs } of withTabs) {
       const active = row.session.status === 'active';
-      if (active) expect(tabs[0]).toMatchObject({ id: 'builder', live: true });
+      if (active) expect(tabs[0]).toMatchObject({ live: true });
       for (const t of active ? tabs.slice(1) : tabs) {
         expect(t.live).toBe(false);
         expect(t.target.kind).toBe('stage');
@@ -24,6 +24,6 @@ describe('terminalTabs', () => {
 
   it('has no Builder tab for a session that is not running', () => {
     for (const row of rows.filter((r) => r.session.status !== 'active'))
-      expect(terminalTabs(row).some((t) => t.id === 'builder')).toBe(false);
+      expect(terminalTabs(row).some((t) => t.live)).toBe(false);
   });
 });

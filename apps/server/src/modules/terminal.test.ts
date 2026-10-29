@@ -120,3 +120,49 @@ describe('POST /api/sessions/:id/web-terminal', () => {
     await s.close();
   });
 });
+
+describe('the terminal sweep', () => {
+  it('stops a session’s terminal when its window changes or it pauses, with no request in between', async () => {
+    const stopped: string[] = [];
+    const web = new WebTerminals(
+      (spec) =>
+        Promise.resolve({
+          stop: () => void stopped.push(spec.argv.at(-1)!),
+          exited: new Promise<void>(() => {}),
+        }),
+      () => Promise.resolve(7733),
+    );
+    const s = createServer({
+      config,
+      store,
+      modules: [terminalModule({ open: () => Promise.resolve(), web, sweepMs: 10 })],
+    });
+    await s.start();
+    const shop = store.projects.create({ name: 'shop' });
+    const live = store.sessions.create({
+      projectId: shop.id,
+      title: 'l',
+      model: 'opus',
+      branch: 'b',
+      tmuxTarget: 'loop:@5',
+    });
+    const post = () =>
+      s.app.request(`/api/sessions/${live.id}/web-terminal`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOKEN}` },
+      });
+    const until = async (done: () => boolean) => {
+      for (let i = 0; i < 100 && !done(); i++) await new Promise((r) => setTimeout(r, 10));
+      expect(done()).toBe(true);
+    };
+    expect((await post()).status).toBe(200);
+    store.sessions.update(live.id, { tmuxTarget: 'loop:@9' }); // relaunched into a new window
+    await until(() => stopped.length === 1);
+    expect(stopped).toEqual(['@5']);
+    expect((await post()).status).toBe(200);
+    store.sessions.update(live.id, { status: 'paused', pauseReason: 'manual', tmuxTarget: null });
+    await until(() => stopped.length === 2);
+    expect(stopped).toEqual(['@5', '@9']);
+    await s.close();
+  });
+});

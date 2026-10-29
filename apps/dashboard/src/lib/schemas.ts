@@ -87,6 +87,8 @@ export const treeSessionSchema = z.object({
   model: z.string(),
   effort: z.string().nullable(),
   branch: z.string(),
+  // The agent's tmux window; it changes when the agent is relaunched or resumed. Older servers send none.
+  tmuxTarget: z.string().nullable().optional(),
   // "import": a past Claude Code conversation brought in by the importer. Older servers send none.
   source: z.string().default('runner'),
   // Older servers have no dial (and so run the pipeline as it is); an unknown level reads the same.
