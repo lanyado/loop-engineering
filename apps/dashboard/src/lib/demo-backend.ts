@@ -84,6 +84,9 @@ export class DemoBackend implements Backend {
   skipCheck(): never {
     throw new ReadOnlyError();
   }
+  webTerminal(): never {
+    throw new ReadOnlyError();
+  }
   openStageTerminal(): never {
     throw new ReadOnlyError();
   }

@@ -21,6 +21,7 @@ import { shellQuote } from '@loop-engineering/runner';
 import { ConfigError } from '../config.js';
 import type { ServerContext, ServerModule } from '../context.js';
 import { macCommandOpener, type CommandOpener } from './terminal.js';
+import { WebTerminals } from './web-terminals.js';
 
 /** Prints a job log readably as it grows (apps/server/scripts, next to src/ and dist/). */
 const FOLLOW_SCRIPT = fileURLToPath(new URL('../../scripts/follow-job.mjs', import.meta.url));
@@ -33,6 +34,8 @@ export interface LoopModuleOptions {
   log?: (message: string) => void;
   /** Opens a stage terminal. Default: macCommandOpener(). */
   openCommand?: CommandOpener;
+  /** The embedded (ttyd) terminals. Default: a new WebTerminals(). */
+  web?: WebTerminals;
 }
 
 export type LoopModule = ServerModule & {
@@ -48,6 +51,7 @@ export type LoopModule = ServerModule & {
 export function loopModule(options: LoopModuleOptions): LoopModule {
   const log = options.log ?? console.log;
   const openCommand = options.openCommand ?? macCommandOpener();
+  const web = options.web ?? new WebTerminals();
   let engine: LoopEngine | null = null;
   let guardian: ProductionGuardian | null = null;
   let unsubscribe: (() => void) | null = null;
@@ -66,6 +70,29 @@ export function loopModule(options: LoopModuleOptions): LoopModule {
         const limit = Math.min(Number(c.req.query('limit')) || 50, 200);
         const runs = ctx.store.guardianRuns.list(projectId ? { projectId: Number(projectId) } : {}, limit);
         return c.json({ runs: runs.reverse() });
+      });
+      // A read-only ttyd page following a stage's job log, for the dashboard to embed.
+      api.post('/prs/:id/web-terminal', async (c) => {
+        const logsDir = engine?.config.logsDir;
+        if (!logsDir) return c.json({ error: 'the PR loop keeps no job logs here' }, 503);
+        const id = Number(c.req.param('id'));
+        const body = (await c.req.json().catch(() => ({}))) as { stage?: unknown };
+        const stage = typeof body.stage === 'string' && isStageId(body.stage) ? body.stage : null;
+        if (!stage) return c.json({ error: 'stage must be review, tests, qa or a custom stage id' }, 400);
+        if (!Number.isInteger(id) || !ctx.store.pullRequests.get(id))
+          return c.json({ error: 'no such PR' }, 404);
+        const file = jobLogFile(logsDir, id, checkJobKind(stage));
+        if (!existsSync(file)) return c.json({ error: 'this stage has not run yet' }, 409);
+        try {
+          const url = await web.url({
+            key: `pr${id}-${stage}`,
+            writable: false,
+            argv: [process.execPath, FOLLOW_SCRIPT, file],
+          });
+          return c.json({ url });
+        } catch (error) {
+          return c.json({ error: `could not start the terminal: ${String(error)}` }, 500);
+        }
       });
       // A Terminal window following a PR stage's job log (review, tests or QA), for the dashboard.
       api.post('/prs/:id/terminal', async (c) => {
@@ -102,6 +129,7 @@ export function loopModule(options: LoopModuleOptions): LoopModule {
     },
 
     async stop() {
+      web.stopAll();
       unsubscribe?.();
       unsubscribe = null;
       await guardian?.stop();

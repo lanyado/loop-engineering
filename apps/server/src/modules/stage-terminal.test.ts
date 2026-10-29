@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import type { ServerConfig } from '../config.js';
 import { createServer } from '../server.js';
 import { loopModule } from './loop.js';
+import { WebTerminals, type WebTerminalSpec } from './web-terminals.js';
 
 const TOKEN = 'dashboard-token-for-tests-0001';
 const config: ServerConfig = {
@@ -31,6 +32,11 @@ describe('POST /api/prs/:id/terminal', () => {
     });
     const pr = store.pullRequests.create({ projectId: shop.id, repo: 'web', number: 7, url: 'https://x/7' });
     const opened: [string, string][] = [];
+    const specs: WebTerminalSpec[] = [];
+    const web = new WebTerminals(
+      (spec) => (specs.push(spec), Promise.resolve({ stop() {}, exited: new Promise<void>(() => {}) })),
+      () => Promise.resolve(7722),
+    );
     const engine = { config: { logsDir, maxConcurrentJobs: 1 }, start() {}, stop: async () => {}, poke() {} };
     const server = createServer({
       config,
@@ -38,6 +44,7 @@ describe('POST /api/prs/:id/terminal', () => {
       modules: [
         loopModule({
           createEngine: () => engine as unknown as LoopEngine,
+          web,
           openCommand: (name, line) => Promise.resolve(void opened.push([name, line])),
           log: () => undefined,
         }),
@@ -59,6 +66,19 @@ describe('POST /api/prs/:id/terminal', () => {
       expect(opened[0]?.[0]).toBe(`pr${pr.id}-review`);
       expect(opened[0]?.[1]).toContain('follow-job.mjs');
       expect(opened[0]?.[1]).toContain(`pr${pr.id}-review.log'`);
+      const web1 = (stage: string) =>
+        server.app.request(`/api/prs/${pr.id}/web-terminal`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ stage }),
+        });
+      const ok = await web1('review');
+      expect(await ok.json()).toMatchObject({
+        url: expect.stringMatching(/^http:\/\/localhost:7722\/[0-9a-f]{48}\/$/) as unknown,
+      });
+      expect(specs[0]).toMatchObject({ writable: false, key: `pr${pr.id}-review` });
+      expect((await web1('tests')).status).toBe(409);
+      expect((await web1('merge')).status).toBe(400);
     } finally {
       await server.close();
       store.close();

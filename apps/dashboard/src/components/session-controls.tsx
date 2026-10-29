@@ -1,5 +1,6 @@
 'use client';
 
+import type { TerminalTarget } from '../lib/terminal-tabs';
 import { useRouter } from 'next/navigation';
 import { createContext, useContext, useEffect, useState, useTransition, type ReactNode } from 'react';
 import {
@@ -170,8 +171,7 @@ export function MessageButton() {
 }
 
 /** What a terminal shows: a session's live agent, or the job log of one of a PR's stages. */
-export type TerminalTarget =
-  { kind: 'session'; sessionId: number } | { kind: 'stage'; prId: number; stage: string };
+export type { TerminalTarget };
 
 function useOpenTerminal(target: TerminalTarget, readOnly: boolean) {
   const [pending, start] = useTransition();

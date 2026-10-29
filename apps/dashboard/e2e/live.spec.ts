@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { sessionToken } from '@loop-engineering/core';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
-import { expect, test, type Request } from '@playwright/test';
+import { expect, test, type Locator, type Request } from '@playwright/test';
 import { E2E } from './env';
 import {
   api,
@@ -941,4 +941,80 @@ test('the rigor dial saves a level, and every level draws every stage', async ({
   await expect(lane).toContainText('round 1');
   await expect(lane).not.toContainText('round 1/');
   await snap(page, info, 'rigor');
+});
+
+test('the terminal dock opens a terminal per tab, switches between them and reloads on Try again', async ({
+  page,
+}) => {
+  await open(page);
+  const dock = page
+    .getByTestId('session-row')
+    .filter({ hasText: 'Apple Pay checkout' })
+    .getByTestId('terminal-dock');
+  await expect(dock.getByTestId('terminal-dock-toggle')).toHaveAttribute('aria-expanded', 'false');
+  await dock.getByTestId('terminal-dock-toggle').click();
+
+  // The Builder's terminal loads first, under a secret path (the stand-in ttyd serves any path).
+  const frame = dock.locator('iframe.dock-frame');
+  await expect(frame).toHaveAttribute('src', /^http:\/\/localhost:\d+\/[0-9a-f]{48}\/$/);
+  const tabs = dock.getByTestId('terminal-tab');
+  expect(await tabs.count()).toBeGreaterThan(1);
+  await expect(tabs.first()).toContainText('Builder');
+
+  // Hovering the selected tab or a tool keeps the dock dark (the global button hover is light).
+  const darkOnHover = async (target: Locator) => {
+    await target.hover();
+    const bg = await target.evaluate((el) => getComputedStyle(el).backgroundColor);
+    const [r, g, b] = bg.match(/\d+/g)!.map(Number);
+    expect(r! + g! + b!).toBeLessThan(200);
+  };
+  await darkOnHover(tabs.first());
+  await darkOnHover(dock.getByTitle('Reconnect'));
+
+  const counts = async () =>
+    (await (
+      await fetch(`${E2E.serverUrl}/test/terminal-launches`, {
+        headers: { Authorization: `Bearer ${E2E.mcpToken}` },
+      })
+    ).json()) as { launches: number; urlCalls: number };
+
+  // This server has no PR loop, so a stage's terminal fails: the pane says why and Try again asks again.
+  await tabs.nth(1).click();
+  await expect(dock.getByRole('alert')).toBeVisible();
+  const fetched = page.waitForRequest(isServerAction);
+  await dock.getByRole('button', { name: 'Try again' }).click();
+  await fetched; // a real new fetch, not just a re-render
+  await expect(dock.getByRole('alert')).toBeVisible();
+
+  // Back on the Builder: Reconnect asks the server again and gets the same running terminal.
+  await tabs.first().click();
+  await expect(frame).toBeVisible();
+  const src = await frame.getAttribute('src');
+  const before = await counts();
+  const reconnect = page.waitForRequest(isServerAction);
+  await dock.getByTitle('Reconnect').click();
+  await reconnect;
+  await expect(frame).toHaveAttribute('src', src!);
+  await expect.poll(async () => (await counts()).urlCalls).toBe(before.urlCalls + 1);
+  expect((await counts()).launches).toBe(before.launches); // reused, not started twice
+});
+
+test('when the agent moves to a new tmux window, the dock asks for a terminal on the new one', async ({
+  page,
+}) => {
+  await open(page);
+  const dock = page
+    .getByTestId('session-row')
+    .filter({ hasText: 'Apple Pay checkout' })
+    .getByTestId('terminal-dock');
+  await dock.getByTestId('terminal-dock-toggle').click();
+  const frame = dock.locator('iframe.dock-frame');
+  await expect(frame).toHaveAttribute('src', /\/[0-9a-f]{48}\/$/);
+  const before = await frame.getAttribute('src');
+
+  await testRoute('/test/relaunch'); // as after a relaunch or resume
+  // The board re-reads when the tab becomes visible again (as it does on its 30-second poll).
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await expect.poll(async () => frame.getAttribute('src')).not.toBe(before);
+  await expect(frame).toHaveAttribute('src', /^http:\/\/localhost:\d+\/[0-9a-f]{48}\/$/);
 });

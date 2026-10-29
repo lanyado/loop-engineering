@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ServerConfig } from '../config.js';
 import { createServer, type LoopServer } from '../server.js';
 import { terminalModule } from './terminal.js';
+import { WebTerminals, type WebTerminalSpec } from './web-terminals.js';
 
 const TOKEN = 'dashboard-token-for-tests-0001';
 const config: ServerConfig = {
@@ -64,5 +65,104 @@ describe('POST /api/sessions/:id/terminal', () => {
     expect((await post(paused.id)).status).toBe(409);
     expect((await post(999)).status).toBe(404);
     expect(opened).toEqual(['loop:@5']);
+  });
+});
+
+describe('POST /api/sessions/:id/web-terminal', () => {
+  it('serves a typeable grouped-tmux terminal for a running session only', async () => {
+    const specs: WebTerminalSpec[] = [];
+    const web = new WebTerminals(
+      (spec) => (specs.push(spec), Promise.resolve({ stop() {}, exited: new Promise<void>(() => {}) })),
+      () => Promise.resolve(7711),
+    );
+    const s = createServer({
+      config,
+      store,
+      modules: [terminalModule({ open: () => Promise.resolve(), web })],
+    });
+    const shop = store.projects.create({ name: 'shop' });
+    const live = store.sessions.create({
+      projectId: shop.id,
+      title: 'l',
+      model: 'opus',
+      branch: 'b',
+      tmuxTarget: 'loop:@5',
+    });
+    const ended = store.sessions.create({
+      projectId: shop.id,
+      title: 'e',
+      model: 'opus',
+      branch: 'c',
+      status: 'paused',
+      pauseReason: 'manual',
+      tmuxTarget: null,
+    });
+    const post = (id: number) =>
+      s.app.request(`/api/sessions/${id}/web-terminal`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOKEN}` },
+      });
+    const ok = await post(live.id);
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toMatchObject({
+      url: expect.stringMatching(/^http:\/\/localhost:7711\/[0-9a-f]{48}\/$/) as unknown,
+    });
+    expect(specs[0]).toMatchObject({ writable: true });
+    expect(specs[0]!.argv).toContain('@5');
+    // The agent moves to a new window (relaunch, resume): the terminal follows it, not the old one.
+    store.sessions.update(live.id, { tmuxTarget: 'loop:@9' });
+    expect((await post(live.id)).status).toBe(200);
+    expect(specs).toHaveLength(2);
+    expect(specs[1]!.argv).toContain('@9');
+    expect(specs[1]!.argv).not.toContain('@5');
+    expect((await post(ended.id)).status).toBe(409);
+    expect((await post(999)).status).toBe(404);
+    await s.close();
+  });
+});
+
+describe('the terminal sweep', () => {
+  it('stops a session’s terminal when its window changes or it pauses, with no request in between', async () => {
+    const stopped: string[] = [];
+    const web = new WebTerminals(
+      (spec) =>
+        Promise.resolve({
+          stop: () => void stopped.push(spec.argv.at(-1)!),
+          exited: new Promise<void>(() => {}),
+        }),
+      () => Promise.resolve(7733),
+    );
+    const s = createServer({
+      config,
+      store,
+      modules: [terminalModule({ open: () => Promise.resolve(), web, sweepMs: 10 })],
+    });
+    await s.start();
+    const shop = store.projects.create({ name: 'shop' });
+    const live = store.sessions.create({
+      projectId: shop.id,
+      title: 'l',
+      model: 'opus',
+      branch: 'b',
+      tmuxTarget: 'loop:@5',
+    });
+    const post = () =>
+      s.app.request(`/api/sessions/${live.id}/web-terminal`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOKEN}` },
+      });
+    const until = async (done: () => boolean) => {
+      for (let i = 0; i < 100 && !done(); i++) await new Promise((r) => setTimeout(r, 10));
+      expect(done()).toBe(true);
+    };
+    expect((await post()).status).toBe(200);
+    store.sessions.update(live.id, { tmuxTarget: 'loop:@9' }); // relaunched into a new window
+    await until(() => stopped.length === 1);
+    expect(stopped).toEqual(['@5']);
+    expect((await post()).status).toBe(200);
+    store.sessions.update(live.id, { status: 'paused', pauseReason: 'manual', tmuxTarget: null });
+    await until(() => stopped.length === 2);
+    expect(stopped).toEqual(['@5', '@9']);
+    await s.close();
   });
 });

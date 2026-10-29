@@ -2502,6 +2502,171 @@ button.node-plus:hover:not(:disabled) {
   display: contents;
 }
 
+/* The terminal dock under a pipeline: tabs per agent, the chosen terminal embedded. */
+.dock {
+  margin-top: var(--s-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  overflow: hidden;
+}
+.dock-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  width: 100%;
+  padding: var(--s-2) var(--s-3);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+  font-weight: 600;
+  text-align: left;
+}
+.dock-prompt {
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  color: var(--accent);
+}
+.dock-count {
+  min-width: 1.5em;
+  padding: 0 var(--s-2);
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent-soft-text);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+.dock-chevron {
+  margin-left: auto;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(45deg);
+  transition: transform 0.15s;
+}
+.dock.open .dock-chevron {
+  transform: rotate(-135deg);
+}
+.dock-body {
+  border-top: 1px solid var(--border);
+  background: #0b0d12;
+}
+.dock-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  padding: var(--s-1) var(--s-2) 0;
+  background: #12151c;
+  overflow-x: auto;
+}
+.dock-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px var(--s-3);
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  box-shadow: none;
+  color: #9ea5b3;
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+.dock-tab:hover:not(.on) {
+  color: #eceef2;
+  background: #1a1e27;
+}
+.dock-tab.on {
+  background: #0b0d12;
+  border-color: #262b34;
+  color: #eceef2;
+}
+.dock-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #4a5260;
+}
+.dock-dot.state-current {
+  background: var(--progress);
+  box-shadow: 0 0 0 3px rgb(178 148 249 / 0.25);
+}
+.dock-dot.state-done {
+  background: #5bd48a;
+}
+.dock-dot.state-failed,
+.dock-dot.state-halted {
+  background: #ff8a80;
+}
+.dock-group {
+  color: #7d8594;
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+}
+.dock-live {
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: rgb(91 212 138 / 0.15);
+  color: #5bd48a;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.dock-tool {
+  padding: 2px 8px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: #9ea5b3;
+  text-decoration: none;
+  font-size: var(--text-md);
+}
+.dock-tool:hover {
+  color: #eceef2;
+}
+.dock-screen {
+  height: min(60vh, 520px);
+}
+.dock-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+.dock-note {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-3);
+  height: 100%;
+  margin: 0;
+  color: #9ea5b3;
+  font-size: var(--text-sm);
+}
+
+.dock-tablist {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+}
+/* The global button:hover rule paints a light surface; these keep the dark dock readable. */
+.dock-tab.on:hover:not(:disabled) {
+  background: #0b0d12;
+  border-color: #262b34;
+  color: #eceef2;
+}
+.dock-tool:hover:not(:disabled) {
+  background: #1a1e27;
+  color: #eceef2;
+}
+.dock-toggle:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
 /* ---------- A session being started: its pipeline slides in, the Planner glows ---------- */
 
 .starting-rows {

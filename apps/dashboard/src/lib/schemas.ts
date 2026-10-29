@@ -87,6 +87,8 @@ export const treeSessionSchema = z.object({
   model: z.string(),
   effort: z.string().nullable(),
   branch: z.string(),
+  // The agent's tmux window; it changes when the agent is relaunched or resumed. Older servers send none.
+  tmuxTarget: z.string().nullable().optional(),
   // "import": a past Claude Code conversation brought in by the importer. Older servers send none.
   source: z.string().default('runner'),
   // Older servers have no dial (and so run the pipeline as it is); an unknown level reads the same.
@@ -273,6 +275,7 @@ export type PipelineView = z.infer<typeof pipelineViewSchema>;
 export const responses = {
   questions: z.object({ questions: z.array(questionSchema) }),
   terminal: z.object({ opened: z.literal(true) }),
+  webTerminal: z.object({ url: z.string().url() }),
   answer: answerResultSchema,
   tree: z.object({ projects: z.array(treeProjectSchema) }),
   project: z.object({ project: projectSchema }),
@@ -325,6 +328,10 @@ export const skipCheckInput = z.object({
   check: z.string().min(1).max(32),
   skip: z.boolean(),
 });
+export const webTerminalInput = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('session'), sessionId: z.number().int().positive() }),
+  z.object({ kind: z.literal('stage'), prId: z.number().int().positive(), stage: z.string().min(1).max(32) }),
+]);
 export const stageTerminalInput = z.object({
   prId: z.number().int().positive(),
   /** review, tests, qa or a custom stage's id; the server checks which. */

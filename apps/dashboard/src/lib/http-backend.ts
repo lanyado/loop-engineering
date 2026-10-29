@@ -57,6 +57,19 @@ export class HttpBackend implements Backend {
     await this.send('POST', `/prs/${prId}/terminal`, { stage }, responses.terminal);
   }
 
+  async webTerminal(target: { sessionId: number } | { prId: number; stage: string }) {
+    const r =
+      'sessionId' in target
+        ? await this.send('POST', `/sessions/${target.sessionId}/web-terminal`, {}, responses.webTerminal)
+        : await this.send(
+            'POST',
+            `/prs/${target.prId}/web-terminal`,
+            { stage: target.stage },
+            responses.webTerminal,
+          );
+    return r.url;
+  }
+
   async sessionTranscript(sessionId: number) {
     return (await this.get(`/sessions/${sessionId}/transcript`, responses.transcript)).transcript;
   }
