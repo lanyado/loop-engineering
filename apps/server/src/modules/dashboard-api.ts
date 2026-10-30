@@ -26,7 +26,7 @@ import * as z from 'zod';
 import type { ServerContext, ServerModule } from '../context.js';
 import { REPO_ROOT } from '../env.js';
 import { idParam as id } from '../ids.js';
-import { attachments, saveAttachments, uploadsRoot } from './attachments.js';
+import { attachments, saveAttachments } from './attachments.js';
 
 /**
  * The dashboard's read/write API, mounted under the authenticated /api (DASHBOARD_TOKEN):
@@ -447,7 +447,7 @@ export function dashboardRoutes(ctx: ServerContext, options: DashboardApiOptions
 
   api.post('/requests', async (c) => {
     const input = parse(newRequest, await body(c));
-    const withFiles = () => saveAttachments(uploadsRoot(), input.text, input.attachments ?? []);
+    const withFiles = () => saveAttachments(input.text, input.attachments ?? []);
     if (input.sessionId !== undefined) {
       const session = store.sessions.require(input.sessionId);
       if (input.projectId != null && input.projectId !== session.projectId)
