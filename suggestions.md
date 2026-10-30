@@ -7,14 +7,14 @@ and the defaults in `packages/loop/src/engine.ts`. **Evidence** marks what the h
 
 ## What the history shows
 
-| Signal                                                                     | Evidence                                                                                                                   |
-| -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Review/QA jobs failing three times, then escalating to the human           | PRs #30, #31, #32, #33, #35 on Oct 19                                                                                      |
-| Long review ping-pong                                                      | #33 took 11 rounds (hit 10, human took over), #26 took 6, #32 took 6; one-round PRs (#25, #27, #40) were small and focused |
-| Provider rate limits cascading through free OpenCode models                | Sessions 86, 87, 89 hopped `deepseek-flash` → `big-pickle` → `nemotron` in under a minute                                  |
-| Network outages counted as failed attempts                                 | Request #27 (Oct 21)                                                                                                       |
-| CI failing on a test that asserted job order after the stage order changed | Request #23, `engine.test.ts`                                                                                              |
-| The loop's own pushes (tester's tests) restarting review                   | PR #21 "hit 5 rounds (new commits kept arriving)"                                                                          |
+| Signal                                                                     | Evidence                                                                                                                               |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Review/QA jobs failing three times, then escalating to the human           | PRs #30, #31, #32, #33, #35 on Oct 19                                                                                                  |
+| Long review ping-pong                                                      | #33 took 11 rounds (hit 10, human took over), #26 took 6, #32 took 6; one-round PRs (#25, #27 and #40, all PRs) were small and focused |
+| Provider rate limits cascading through free OpenCode models                | Sessions 86, 87, 89 hopped `deepseek-flash` → `big-pickle` → `nemotron` in under a minute                                              |
+| Network outages counted as failed attempts                                 | Request #27 (Oct 21)                                                                                                                   |
+| CI failing on a test that asserted job order after the stage order changed | Request #23, `engine.test.ts`                                                                                                          |
+| The loop's own pushes (tester's tests) restarting review                   | PR #21 "hit 5 rounds (new commits kept arriving)"                                                                                      |
 
 ## Prompt changes
 
@@ -51,14 +51,20 @@ and the defaults in `packages/loop/src/engine.ts`. **Evidence** marks what the h
 1. **Make the escalation reason actionable.** "The review job failed 3 times" gives the human no
    clue whether it was a rate limit, a timeout or malformed JSON. Attach the last error line and
    job log path to the escalation card.
-2. **Treat provider rate limits like network outages.** The network-pause logic (request #27)
-   should also cover "Rate limit exceeded": back off and retry with jitter instead of consuming one
-   of the `maxAttempts: 3`. Today three quick rate-limited attempts end in a human escalation.
-3. **Fall back by capability, not only down a free-model list.** Rapid hops across free models
-   (session 86/87/89) all hit the same limit. Add a cooldown per provider and prefer switching to a
-   different provider, with the stronger model kept for review.
-4. **Cap round count by rigor and make the cap visible.** `maxRounds: 5` is global. Suggest fast/
-   light = 2–3, standard = 5, thorough = 7, and show "round 3 of 5" on the stage. After the cap,
+2. **Rate limits: already handled per model; close the remaining gap.** The engine classifies
+   rate-limit, quota and 429 errors as `MODEL_LIMIT` (`engine.ts:105`), rests the limited model for
+   `MODEL_REST_MS` (15 min) and retries the next OpenCode model, and retries on OpenCode after a
+   Claude usage limit (`engine.ts:1676-1695`). What is not covered (judgment): when every model in
+   the chain is limited, the job still fails and spends one of the `maxAttempts: 3`. In that case
+   pause with back-off and jitter, as the network-outage logic (request #27) does, instead of
+   consuming attempts and escalating.
+3. **Spread across providers.** The existing rest is per model, so the free OpenCode models that
+   share one upstream limit (session 86/87/89) can hop one after another and all fail. Group
+   models by provider or upstream so one limit rests the whole group, and keep the stronger model
+   for review.
+4. **Cap round count by rigor.** The dashboard already shows "round N/max"
+   (`apps/dashboard/src/lib/format.ts:19-22`); what is missing is the cap itself: `maxRounds: 5` is
+   global. Suggest fast/light = 2–3, standard = 5, thorough = 7. After the cap,
    escalate with a summary of unresolved blockers instead of a bare "hit N rounds".
 5. **Do not let the loop's own commits restart review needlessly.** The tester pushing tests
    re-triggers review (#21). Review the tester's delta only when it touches non-test files, or
