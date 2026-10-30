@@ -1,4 +1,4 @@
-import { FileStageLibrary } from '@loop-engineering/loop';
+import { FileStageLibrary, ProjectStageFiles } from '@loop-engineering/loop';
 import { loadAddins } from './addins.js';
 import { ConfigError, describeListenError, loadConfig, nonLocalBindWarning } from './config.js';
 import { fromRoot, loadRootEnv, REPO_ROOT } from './env.js';
@@ -19,8 +19,11 @@ import { createServer } from './server.js';
 // LOOP_DB_PATH against the repo root too.
 loadRootEnv();
 
-// The PR loop's stage files: the user's versions and new stages (the built-ins ship in packages/loop/stages).
-const stages = new FileStageLibrary(fromRoot(process.env.STAGES_DIR?.trim() || 'data/stages'));
+// The PR loop's stage files: the user's versions and new stages (the built-ins ship in packages/loop/stages),
+// shared by every project without a .loop-engineering/ folder of its own (`loop init`).
+const stages = new ProjectStageFiles(
+  new FileStageLibrary(fromRoot(process.env.STAGES_DIR?.trim() || 'data/stages')),
+);
 
 let config;
 let loop;
@@ -28,8 +31,10 @@ let runner;
 let addins;
 try {
   config = loadConfig();
-  // Every session agent plans each new task first, following planner.md as it reads at launch.
-  runner = runnerFromEnv(process.env, config, { planner: () => stages.planner().prompt });
+  // Every session agent plans each new task first, following its project's planner.md as it reads at launch.
+  runner = runnerFromEnv(process.env, config, {
+    planner: (project) => stages.forProject(project).planner().prompt,
+  });
   loop = loopModuleFromEnv(process.env, { stages });
   // Private add-ins from local/ (see addins.ts); one that is set up wrong stops the start, like the rest.
   addins = await loadAddins(fromRoot('local'), process.env);

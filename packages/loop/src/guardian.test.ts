@@ -126,6 +126,41 @@ describe('ProductionGuardian', () => {
     expect(h.launcher.jobs).toEqual([]);
   });
 
+  it("follows the project's own pipeline: its Guardian switch and its instructions", async () => {
+    const base = builtinStageLibrary();
+    const off = { ...base, pipeline: () => ({ ...base.pipeline(), guardian: false }) };
+    const own = { ...base, guardian: () => ({ ...base.guardian(), prompt: 'Also open the basket page.' }) };
+    let library = off;
+    const asked: number[] = [];
+    guardian = new ProductionGuardian(
+      {
+        store: h.store,
+        github: h.github,
+        launcher: h.launcher,
+        workspace: h.workspace,
+        questions: h.questions,
+        timers: h.timers,
+        stages: {
+          forProject: (project) => {
+            asked.push(project.id);
+            return library;
+          },
+        },
+        log: (m) => h.logs.push(m),
+      },
+      { evidenceDir: evidence },
+    );
+    deployedPr();
+    on();
+    await guardian.tick();
+    expect(h.store.guardianRuns.list()).toEqual([]);
+    library = own;
+    await guardian.tick();
+    expect(h.store.guardianRuns.list()).toHaveLength(1);
+    expect(JSON.stringify(h.launcher.jobs[0])).toContain('Also open the basket page.');
+    expect(new Set(asked)).toEqual(new Set([h.project.id]));
+  });
+
   describe('after a deploy', () => {
     // The daily regression is independent of deploys; mark today's as done so only deploy runs show here.
     beforeEach(() => {

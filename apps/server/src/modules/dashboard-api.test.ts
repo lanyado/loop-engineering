@@ -593,6 +593,27 @@ describe("an agent's model", () => {
     expect(() => store.sessions.setAgentModel(s1.id, 'extra-99', 'opus')).toThrow(/20 agents/);
   });
 
+  it("checks the agent against the pipeline of the session's own project", async () => {
+    const { s1 } = seed();
+    await server.close();
+    const lib = (checks: string[]) =>
+      ({ pipeline: () => ({ checks, deploy: false, guardian: false }) }) as unknown as StageLibrary;
+    const projectId = store.sessions.require(s1.id).projectId;
+    server = createServer({
+      config,
+      store,
+      timers: new FakeTimers(clock),
+      modules: [
+        dashboardApi({
+          stages: { forProject: (p) => (p.id === projectId ? lib(['security']) : lib(['tests'])) },
+        }),
+      ],
+    });
+    const put = (agent: string) => call('PUT', `/sessions/${s1.id}/models/${agent}`, { model: 'opus' });
+    expect((await put('security')).status).toBe(200);
+    expect((await put('tests')).status).toBe(400);
+  });
+
   it('pins the model against the Planner, even the one the Planner picked', async () => {
     const { s1 } = seed();
     store.sessions.setPlan(s1.id, 'plan', undefined, { models: { review: 'opus' }, reason: 'risky' });

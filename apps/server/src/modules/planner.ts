@@ -10,7 +10,7 @@ import {
   RIGOR_LEVELS,
   type Session,
 } from '@loop-engineering/core';
-import type { StageLibrary } from '@loop-engineering/loop';
+import { stagesOf, type StageSource } from '@loop-engineering/loop';
 import * as z from 'zod';
 import type { ServerModule } from '../context.js';
 
@@ -65,8 +65,11 @@ const inputSchema = z.object({
 });
 
 export interface PlannerOptions {
-  /** The pipeline: agent ids of checks that are not in it are ignored. Without it, any well-formed id is kept. */
-  stages?: StageLibrary;
+  /**
+   * The pipelines: agent ids of checks that are not in the session's project's are ignored. Without
+   * it, any well-formed id is kept.
+   */
+  stages?: StageSource;
   relaunchDelayMs?: number;
   log?: (message: string) => void;
 }
@@ -109,7 +112,11 @@ export function plannerModule(options: PlannerOptions = {}): ServerModule {
           const pick = rigor ? { rigor, reason: rigorReason || null } : undefined;
           const before = ctx.store.sessions.require(resolved.sessionId);
           const known = options.stages
-            ? new Set([BUILDER_AGENT, 'conflict', ...options.stages.pipeline().checks])
+            ? new Set([
+                BUILDER_AGENT,
+                'conflict',
+                ...stagesOf(options.stages, ctx.store.projects.require(before.projectId)).pipeline().checks,
+              ])
             : null;
           const usable = (agent: string) => isAgentId(agent) && (!known || known.has(agent));
           const picks = Object.entries(models ?? {}).filter(([agent]) => usable(agent));

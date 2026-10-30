@@ -1,8 +1,8 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FakeClock, openStore } from '@loop-engineering/core';
-import { FileStageLibrary, loopState } from '@loop-engineering/loop';
+import { FileStageLibrary, loopState, ProjectStageFiles } from '@loop-engineering/loop';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ServerConfig } from '../config.js';
 import { createServer } from '../server.js';
@@ -37,7 +37,7 @@ describe('the pipeline API', () => {
     dir = mkdtempSync(join(tmpdir(), 'pipeline-'));
     store = openStore({ clock: new FakeClock('2026-10-24T09:00:00.000Z') });
     pokes = [];
-    const stages = new FileStageLibrary(join(dir, 'stages'), () => undefined);
+    const stages = new ProjectStageFiles(new FileStageLibrary(join(dir, 'stages'), () => undefined));
     server = createServer({
       config,
       store,
@@ -184,6 +184,103 @@ describe('the pipeline API', () => {
       );
     expect((await skip(pr.id, { check: 'tests', skip: false })).status).toBe(200);
     expect(loopState(store.pullRequests.require(pr.id)).skip).toBeUndefined();
+  });
+
+  describe("a project's own pipeline", () => {
+    type View = {
+      pipeline: { checks: string[]; deploy: boolean; guardian: boolean };
+      stages: { id: string }[];
+      project?: { id: number; own: boolean; dir: string | null };
+      projects?: Record<string, { pipeline: { checks: string[] }; stages: { id: string }[] }>;
+      created?: boolean;
+    };
+    const json = async (res: Response) => (await res.json()) as View;
+    const order = { checks: ['security', 'review'], deploy: false, guardian: true };
+    let home: string;
+    let shop: number;
+    let notes: number;
+    beforeEach(() => {
+      home = join(dir, 'shop-web');
+      mkdirSync(home);
+      mkdirSync(join(dir, 'notes'));
+      shop = store.projects.create({
+        name: 'shop',
+        repos: [{ name: 'web', path: home, remote: 'git@github.com:me/web.git', defaultBranch: 'main' }],
+      }).id;
+      notes = store.projects.create({ name: 'notes', kind: 'folder', folderPath: join(dir, 'notes') }).id;
+    });
+    const at = (id: number) => `/api/pipeline?project=${id}`;
+
+    it('uses the shared pipeline until it has its own folder, and says where that would be', async () => {
+      await call('PUT', { pipeline: { checks: ['review'], deploy: true, guardian: true } });
+      const view = await json(await call('GET', undefined, TOKEN, at(shop)));
+      expect(view.pipeline.checks).toEqual(['review']);
+      expect(view.project).toEqual({ id: shop, own: false, dir: join(home, '.loop-engineering') });
+      expect(view).not.toHaveProperty('projects');
+      expect((await json(await call('GET'))).projects).toEqual({});
+    });
+
+    it('a Save gives the project its own copy with the change, and leaves the shared one as it is', async () => {
+      const res = await call('PUT', { pipeline: order, stages: { security } }, TOKEN, at(shop));
+      expect(res.status).toBe(200);
+      expect((await json(res)).project).toMatchObject({ id: shop, own: true });
+      expect(readFileSync(join(home, '.loop-engineering', 'security.md'), 'utf8')).toContain(
+        'Look for leaked secrets.',
+      );
+      expect(existsSync(join(dir, 'stages'))).toBe(false);
+
+      const shared = await json(await call('GET'));
+      expect(shared.pipeline.checks).toEqual(['tests', 'review', 'qa']);
+      expect(shared.stages.map((s) => s.id)).not.toContain('security');
+      // The board draws each project with its own pipeline.
+      expect(shared.projects?.[shop]).toMatchObject({ pipeline: { checks: ['security', 'review'] } });
+      expect(shared.projects?.[shop]?.stages.map((s) => s.id)).toContain('security');
+      expect((await json(await call('GET', undefined, TOKEN, at(notes)))).project?.own).toBe(false);
+
+      // Its next Save writes in its own folder.
+      await call('PUT', { pipeline: { ...order, checks: ['review'] } }, TOKEN, at(shop));
+      expect(JSON.parse(readFileSync(join(home, '.loop-engineering', 'pipeline.json'), 'utf8'))).toEqual({
+        ...order,
+        checks: ['review'],
+      });
+    });
+
+    it('a refused Save leaves no folder behind', async () => {
+      const res = await call('PUT', { pipeline: { ...order, checks: ['ghost'] } }, TOKEN, at(shop));
+      expect(res.status).toBe(400);
+      expect(existsSync(join(home, '.loop-engineering'))).toBe(false);
+    });
+
+    it('POST gives a project its own folder once (loop init)', async () => {
+      const first = await call('POST', undefined, TOKEN, at(notes));
+      expect(first.status).toBe(201);
+      expect(await json(first)).toMatchObject({
+        created: true,
+        project: { id: notes, own: true, dir: join(dir, 'notes', '.loop-engineering') },
+      });
+      expect(readdirSync(join(dir, 'notes', '.loop-engineering')).sort()).toEqual([
+        'README.md',
+        'pipeline.json',
+      ]);
+      const again = await call('POST', undefined, TOKEN, at(notes));
+      expect(again.status).toBe(200);
+      expect((await json(again)).created).toBe(false);
+    });
+
+    it('refuses an unknown project, a bad id, and a POST naming none', async () => {
+      expect((await call('GET', undefined, TOKEN, '/api/pipeline?project=999')).status).toBe(404);
+      expect((await call('PUT', { pipeline: order }, TOKEN, '/api/pipeline?project=999')).status).toBe(404);
+      expect((await call('GET', undefined, TOKEN, '/api/pipeline?project=x')).status).toBe(400);
+      expect((await call('POST', undefined, TOKEN, '/api/pipeline')).status).toBe(400);
+    });
+
+    it("skips a check of the PR's own project's pipeline", async () => {
+      await call('PUT', { pipeline: order, stages: { security } }, TOKEN, at(shop));
+      const pr = store.pullRequests.create({ projectId: shop, repo: 'web', number: 4, url: 'u' });
+      const skip = (check: string) => call('POST', { check, skip: true }, TOKEN, `/api/prs/${pr.id}/skip`);
+      expect((await skip('tests')).status).toBe(400);
+      expect((await skip('security')).status).toBe(200);
+    });
   });
 
   it('needs the dashboard token', async () => {

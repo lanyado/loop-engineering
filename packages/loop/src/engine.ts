@@ -69,9 +69,11 @@ import {
   checkOfJobKind,
   jobCheck,
   isBuiltinCheck,
+  stagesOf,
   type Pipeline,
   type StageLibrary,
   type StageRuns,
+  type StageSource,
 } from './stages.js';
 import { runsOn } from './changes.js';
 import {
@@ -263,8 +265,11 @@ export interface LoopDeps {
   createRequest?: CreateRequest;
   /** Shared with the Production Guardian. Default: its own, probing through `github`. */
   connectivity?: Connectivity;
-  /** The pipeline and its stage files. Default: the built-in stages in their built-in order. */
-  stages?: StageLibrary;
+  /**
+   * The pipeline and its stage files: one library for every project, or each project's own.
+   * Default: the built-in stages in their built-in order.
+   */
+  stages?: StageSource;
   log?: (message: string) => void;
 }
 
@@ -376,7 +381,7 @@ export class LoopEngine {
   private readonly jobs: Semaphore;
   private readonly createRequest: CreateRequest;
   private readonly net: Connectivity;
-  private readonly stages: StageLibrary;
+  private readonly stageSource: StageSource;
   /** The outage (its offlineSince) the human was already asked about. */
   private askedAbout: string | null = null;
   private readonly busy = new Set<number>();
@@ -402,7 +407,7 @@ export class LoopEngine {
     this.log = deps.log ?? ((m) => console.log(`[loop] ${m}`));
     this.jobs = new Semaphore(this.config.maxConcurrentJobs);
     this.net = deps.connectivity ?? new Connectivity(deps.github, deps.store.clock, this.log);
-    this.stages = deps.stages ?? builtinStageLibrary();
+    this.stageSource = deps.stages ?? builtinStageLibrary();
     this.createRequest =
       deps.createRequest ??
       ((input) =>
@@ -642,7 +647,7 @@ export class LoopEngine {
     const c: Ctx = { pr, s, project, repo, ref: repoRef(repo), rigor: this.rigorOf(pr) };
     // Fail closed: while pipeline.json cannot be read, the loop does nothing (no merge, deploy watch,
     // revert or cleanup), since it cannot know what the user wants.
-    const broken = this.pipeline().error;
+    const broken = this.pipeline(c).error;
     if (broken) return this.hold(c, broken);
     // A hold at a check is lifted where that check runs (advanceOpen); every other hold here.
     if (!(pr.outcome === null && atCheck(pr.stage))) this.unhold(c);
@@ -678,7 +683,7 @@ export class LoopEngine {
       if (next !== checkAt(c.pr.stage, c.s))
         return this.save(c, stageFor(next), { ...checkField(next), ...FRESH_ATTEMPTS });
       // Fail closed: a check whose stage file is missing or broken holds the PR, never skips.
-      const stage = this.stages.stage(next);
+      const stage = this.stages(c).stage(next);
       if (!stage || stage.error)
         return this.hold(c, `stage ${next} ${stage ? `is broken: ${stage.error}` : 'has no stage file'}`);
       // A fresh PR starts at round 1 with its first check: the comments of that check are round 1.
@@ -837,7 +842,7 @@ export class LoopEngine {
   private async checkStep(c: Ctx, gh: GhPr): Promise<boolean> {
     if (c.s.feedback) return this.awaitFix(c, gh);
     const id = c.s.check!; // advanceOpen only dispatches here at a check of the pipeline
-    const stage = this.stages.stage(id)!;
+    const stage = this.stages(c).stage(id)!;
     const passed = (usage: MetricsDelta) =>
       this.afterCheck(c, gh, { passed: { ...c.s.passed, [id]: gh.headRefOid } }, usage);
     if (!(await this.changes(c, stage.runs))) {
@@ -869,8 +874,13 @@ export class LoopEngine {
     return next === null ? this.toMerge(c, {}, {}) : this.save(c, stageFor(next), checkField(next));
   }
 
-  private pipeline(): Pipeline {
-    return this.stages.pipeline();
+  /** The PR's project's pipeline and stages, read fresh: an edit applies on the next step. */
+  private stages(c: Ctx): StageLibrary {
+    return stagesOf(this.stageSource, c.project);
+  }
+
+  private pipeline(c: Ctx): Pipeline {
+    return this.stages(c).pipeline();
   }
 
   /**
@@ -879,9 +889,9 @@ export class LoopEngine {
    * so the ask service reuses the pending question instead of leaving it beside a second one.
    */
   private passedText(c: Ctx): string {
-    const checks = this.pipeline().checks;
+    const checks = this.pipeline(c).checks;
     const skipped = (c.s.skip ?? []).filter((id) => checks.includes(id));
-    const names = skipped.map((id) => this.stages.stage(id)?.title ?? id).join(', ');
+    const names = skipped.map((id) => this.stages(c).stage(id)?.title ?? id).join(', ');
     if (checks.length === 0) return 'has no checks before merge';
     if (skipped.length === checks.length) return `ran no checks (you skipped ${names})`;
     return skipped.length > 0 ? `passed its checks (you skipped ${names})` : 'passed its checks';
@@ -900,7 +910,7 @@ export class LoopEngine {
   /** The checks this PR runs: the pipeline's, without the ones the human skipped for it. */
   private checksOf(c: Ctx): string[] {
     const skipped = c.s.skip ?? [];
-    return this.pipeline().checks.filter((id) => !skipped.includes(id));
+    return this.pipeline(c).checks.filter((id) => !skipped.includes(id));
   }
 
   private nextCheck(c: Ctx, head: string): string | null {
@@ -974,7 +984,7 @@ export class LoopEngine {
         context: `${gh.title}\n${gh.url}\nHead ${head}. ${
           !c.project.autoMerge
             ? `Auto-merge is off for ${c.project.name}.`
-            : !this.pipeline().checks.includes('review')
+            : !this.pipeline(c).checks.includes('review')
               ? 'The pipeline has no code review, so it is not merged automatically.'
               : !this.reviews(c)
                 ? 'Its code review was skipped, so it is not merged automatically.'
@@ -1039,7 +1049,7 @@ export class LoopEngine {
 
   private recordMerged(c: Ctx, gh: GhPr): boolean {
     if (!gh.mergeCommitSha) return false; // GitHub has not reported the merge commit yet
-    const deploys = Boolean(c.repo.vercelProject) && this.pipeline().deploy;
+    const deploys = Boolean(c.repo.vercelProject) && this.pipeline(c).deploy;
     this.history(
       c,
       `PR ${c.pr.repo}#${c.pr.number} merged (squash) as ${short(gh.mergeCommitSha)} after ${c.pr.round} round(s).`,
@@ -1177,7 +1187,7 @@ export class LoopEngine {
         session.id,
         name,
         this.feedbackFile(c, gh, f),
-        `New ${this.feedbackLabel(f)} for PR #${c.pr.number} is in .loop/${name}. Read it and address it.`,
+        `New ${this.feedbackLabel(c, f)} for PR #${c.pr.number} is in .loop/${name}. Read it and address it.`,
       );
     } catch (err) {
       if (!(err instanceof ValidationError)) throw err;
@@ -1190,14 +1200,14 @@ export class LoopEngine {
     return this.save(c, {}, { feedback: { ...f, sentAt: this.iso() } });
   }
 
-  private feedbackLabel(f: Feedback): string {
+  private feedbackLabel(c: Ctx, f: Feedback): string {
     if (f.kind !== 'check') return FEEDBACK_LABEL[f.kind];
-    return `${this.stages.stage(f.stage ?? '')?.title ?? f.stage ?? 'check'} feedback`;
+    return `${this.stages(c).stage(f.stage ?? '')?.title ?? f.stage ?? 'check'} feedback`;
   }
 
   private feedbackFile(c: Ctx, gh: GhPr, f: Feedback): string {
     return [
-      `# ${this.feedbackLabel(f)} for PR #${c.pr.number}`,
+      `# ${this.feedbackLabel(c, f)} for PR #${c.pr.number}`,
       '',
       `${gh.url}, round ${c.pr.round} of ${this.maxRounds(c)}, head ${gh.headRefOid}.`,
       '',
@@ -1304,7 +1314,8 @@ export class LoopEngine {
     if (s.deployFailure) return this.revertStep(c);
     const vercel = c.repo.vercelProject;
     // No Vercel project, or the pipeline stopped watching deploys: the PR ends merged.
-    if (!vercel || !pr.mergeCommitSha || !this.pipeline().deploy) return this.save(c, { stage: 'merge' }, {});
+    if (!vercel || !pr.mergeCommitSha || !this.pipeline(c).deploy)
+      return this.save(c, { stage: 'merge' }, {});
     const q = this.pendingQuestion(c, 'deploy_timeout');
     if (q && q.status !== 'pending') {
       const answer = this.consume(q, DEPLOY_OPTIONS) ?? 'Keep waiting';
@@ -1790,7 +1801,7 @@ export class LoopEngine {
     const limit = this.config.diffLimit;
     // Read again here, after the awaits since advanceOpen checked it: a file broken meanwhile fails the job.
     const usable = (id: string) => {
-      const stage = this.stages.stage(id);
+      const stage = this.stages(c).stage(id);
       if (!stage || stage.error) throw new Error(`stage ${id} changed before its job started`);
       return stage;
     };

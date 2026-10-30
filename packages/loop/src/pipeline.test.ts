@@ -1,7 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { verdictResult } from './fakes.js';
 import { skipCheck } from './skip.js';
-import { builtinStageLibrary, type Pipeline, type Stage, type StageLibrary } from './stages.js';
+import {
+  builtinStageLibrary,
+  type Pipeline,
+  type ProjectStageLibraries,
+  type Stage,
+  type StageLibrary,
+  type StageSource,
+} from './stages.js';
 import { loopState } from './state.js';
 import {
   blocking,
@@ -49,7 +56,7 @@ function library(pipeline: Partial<Pipeline>, extra: Stage[] = []) {
   return lib;
 }
 
-function harness(stages: StageLibrary, options: HarnessOptions = {}): Harness {
+function harness(stages: StageSource, options: HarnessOptions = {}): Harness {
   const h = new Harness({ ...options, deps: { ...options.deps, stages } });
   open.push(h);
   return h;
@@ -81,6 +88,51 @@ describe('pipeline order', () => {
     await h.engine.tick();
     expect(h.launcher.kinds()).toEqual(['review', 'tests', 'review', 'tests']);
     expect(h.pr()).toMatchObject({ outcome: 'merged', round: 2 });
+  });
+});
+
+describe("each project's own pipeline", () => {
+  it("runs a PR through its project's pipeline and stages, asked on every step", async () => {
+    const own = library({ checks: ['security', 'review'] }, [
+      { ...security, prompt: 'Only this project checks its payment keys.' },
+    ]);
+    const asked: number[] = [];
+    const stages: ProjectStageLibraries = {
+      forProject: (project) => {
+        asked.push(project.id);
+        return own;
+      },
+    };
+    const h = harness(stages);
+    h.launcher.on('check-security', checkPass()).on('review', clean());
+    await h.builderWithPr();
+    await h.engine.tick();
+    expect(h.launcher.kinds()).toEqual(['check-security', 'review']);
+    expect(JSON.stringify(h.launcher.jobs[0])).toContain('Only this project checks its payment keys.');
+    expect(h.pr()).toMatchObject({ outcome: 'merged', round: 1 });
+    expect(new Set(asked)).toEqual(new Set([h.project.id]));
+
+    // An edit to the project's pipeline reaches its next PR.
+    own.set({ checks: ['tests'] });
+    h.launcher.on('tests', testsPass());
+    await h.builderWithPr('Add a gift card');
+    await h.engine.tick();
+    expect(h.launcher.kinds().slice(2)).toEqual(['tests']);
+    // Without review in that pipeline, the human merges.
+    expect(h.pr(2)).toMatchObject({ stage: 'awaiting_approval', outcome: null });
+  });
+
+  it("a skip names a check of the PR's own project's pipeline", async () => {
+    const own = library({ checks: ['security'] }, [security]);
+    const h = harness({ forProject: () => own });
+    h.launcher.on('check-security', checkFail('a key in the diff'));
+    await h.builderWithPr();
+    await h.engine.tick();
+    expect(() => skipCheck(h.store, { forProject: () => own }, h.pr().id, 'tests', true)).toThrow(
+      /not a check of the pipeline/,
+    );
+    const pr = skipCheck(h.store, { forProject: () => own }, h.pr().id, 'security', true);
+    expect(loopState(pr).skip).toEqual(['security']);
   });
 });
 

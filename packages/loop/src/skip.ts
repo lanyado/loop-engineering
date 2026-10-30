@@ -1,5 +1,5 @@
 import { ValidationError, type PullRequest, type Store } from '@loop-engineering/core';
-import type { StageLibrary } from './stages.js';
+import { stagesOf, type StageSource } from './stages.js';
 import { loopState, patchState } from './state.js';
 
 /**
@@ -10,12 +10,13 @@ import { loopState, patchState } from './state.js';
  */
 export function skipCheck(
   store: Store,
-  stages: StageLibrary,
+  source: StageSource,
   prId: number,
   check: string,
   skip: boolean,
 ): PullRequest {
   const pr = store.pullRequests.require(prId);
+  const stages = stagesOf(source, store.projects.require(pr.projectId));
   if (pr.outcome !== null || pr.stage === 'escalated' || loopState(pr).revertOf !== undefined)
     throw new ValidationError(
       `PR ${pr.repo}#${pr.number} has left the loop's checks (merged, closed, escalated or a revert)`,
