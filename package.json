@@ -9,6 +9,9 @@
     "type": "git",
     "url": "git+https://github.com/lanyado/loop-engineering.git"
   },
+  "bin": {
+    "loop": "scripts/loop.mjs"
+  },
   "engines": {
     "node": ">=20.19"
   },
@@ -21,6 +24,7 @@
     "start": "node scripts/start.mjs",
     "start:server": "node apps/server/dist/main.js",
     "add-project": "tsc -b tsconfig.build.json && node apps/server/dist/add-project.js",
+    "loop": "tsc -b tsconfig.build.json && node apps/server/dist/loop-command.js",
     "build": "tsc -b tsconfig.build.json && npm run build -w @loop-engineering/dashboard",
     "clean": "tsc -b tsconfig.build.json --clean",
     "typecheck": "tsc -p tsconfig.json && tsc -p apps/dashboard/tsconfig.json",

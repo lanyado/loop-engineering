@@ -169,27 +169,53 @@ export async function runAddProjectCli(argv: string[], io: AddProjectIo): Promis
   }
 
   if (values['outside-home'] && project.kind === 'folder') project.allowOutsideHome = true;
+  if ((await addProject(project, { ...io, url: serverUrl(io.env), token })) === null) return 1;
+  io.out('Then press + Session on the project in the dashboard.');
+  return 0;
+}
 
-  const url = serverUrl(io.env);
+/** What talking to the server needs. */
+export type ServerIo = AddProjectIo & { url: string; token: string };
+
+/** The server's answer to `path` (any method), or null after saying it cannot be reached. */
+export async function callServer(
+  io: ServerIo,
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<{ status: number; body: Record<string, unknown> } | null> {
   let response;
   try {
-    response = await io.fetch(`${url}/api/projects`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(project),
+    response = await io.fetch(`${io.url}/api${path}`, {
+      method,
+      headers: { Authorization: `Bearer ${io.token}`, 'Content-Type': 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
   } catch {
-    io.err(`Cannot reach the server at ${url}. Start it with \`npm start\`, then run this again.`);
-    return 1;
+    io.err(`Cannot reach the server at ${io.url}. Start it with \`npm start\`, then run this again.`);
+    return null;
   }
-  const body = (await response.json().catch(() => ({}))) as { error?: unknown };
-  if (!response.ok) {
+  const json: unknown = await response.json().catch(() => ({}));
+  const object = json && typeof json === 'object' && !Array.isArray(json) ? json : {};
+  return { status: response.status, body: object as Record<string, unknown> };
+}
+
+/** The error an API response carries. */
+export const apiError = (res: { status: number; body: Record<string, unknown> }) =>
+  typeof res.body.error === 'string' ? res.body.error : `HTTP ${res.status}`;
+
+/** Registers the project with the server and says so; returns its id, or null after saying why not. */
+export async function addProject(project: NewProject, io: ServerIo): Promise<number | null> {
+  const res = await callServer(io, 'POST', '/projects', project);
+  if (!res) return null;
+  const created = res.body.project as { id?: unknown } | undefined;
+  if (res.status !== 201 || typeof created?.id !== 'number') {
     // The API names its own fields; point at this CLI's flags instead.
-    const why = (typeof body.error === 'string' ? body.error : `HTTP ${response.status}`)
+    const why = apiError(res)
       .replace('pass allowOutsideHome: true', 'pass --outside-home')
       .replace('pass allowGitFolder: true', 'pass --folder');
     io.err(`The server refused the project: ${why}`);
-    return 1;
+    return null;
   }
 
   const where = project.kind === 'git' ? project.repos[0]!.path : project.folderPath;
@@ -211,6 +237,5 @@ export async function runAddProjectCli(argv: string[], io: AddProjectIo): Promis
   if (remote && !/github\.com[:/]/.test(remote)) {
     io.out('Note: the PR loop works with GitHub remotes only; sessions still run on this repo.');
   }
-  io.out('Then press + Session on the project in the dashboard.');
-  return 0;
+  return created.id;
 }

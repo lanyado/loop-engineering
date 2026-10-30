@@ -58,6 +58,10 @@ export {
   FileStageLibrary,
   GUARDIAN_STAGE,
   PLANNER_STAGE,
+  PROJECT_STAGES_FOLDER,
+  ProjectStageFiles,
+  projectStagesDir,
+  stagesOf,
   isStageId,
   RESERVED_STAGE_IDS,
   STAGE_ACCESS,
@@ -65,8 +69,10 @@ export {
   STAGE_RUNS,
   type EditableStageLibrary,
   type Pipeline,
+  type ProjectStageLibraries,
   type Stage,
   type StageLibrary,
+  type StageSource,
 } from './stages.js';
 export { loopState, type Feedback, type FeedbackKind, type LoopState, type QuestionKind } from './state.js';
 export {

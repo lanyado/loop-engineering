@@ -481,7 +481,7 @@ export function demoData(now: Date): DemoData {
     }),
   ];
 
-  return {
+  const data: DemoData = {
     projects,
     tree,
     questions,
@@ -622,6 +622,10 @@ export function demoData(now: Date): DemoData {
       },
     },
   };
+  // shop has a pipeline of its own (`loop init`), the same as the shared one; the others share it.
+  const { pipeline, stages } = data.pipeline;
+  data.pipeline.projects = { 1: { pipeline, stages } };
+  return data;
 }
 
 function stage(
@@ -728,18 +732,21 @@ function request(
 }
 
 /**
- * The editor's one example: the shop project with Search relevance, a live session that shows every
- * part of a row the layout can hide (run time, a subagent, PR cost, an earlier PR), and a finished one.
+ * The session the editor draws a pipeline on: shop's Search relevance, whose PR lanes show every
+ * stage, or for a folder project resume's live session, which has no PRs.
  */
-export function editorExample(now: Date): Pick<DemoData, 'tree' | 'pullRequests' | 'questions' | 'usage'> {
-  const { tree, pullRequests, questions, usage } = demoData(now);
-  const shown = new Set([102, 103]);
+export function editorExample(
+  now: Date,
+  kind: 'git' | 'folder' = 'git',
+): Pick<DemoData, 'tree' | 'pullRequests' | 'questions'> {
+  const { tree, pullRequests, questions } = demoData(now);
+  // A session with PRs in flight (shop's "Search relevance"), or a folder project's (no PRs).
+  const [name, sessionId] = kind === 'git' ? ['shop', 102] : ['resume', 401];
   return {
     tree: tree
-      .filter((p) => p.name === 'shop')
-      .map((p) => ({ ...p, sessions: p.sessions.filter((s) => shown.has(s.id)) })),
-    pullRequests: pullRequests.filter((pr) => pr.sessionId === 102),
+      .filter((p) => p.name === name)
+      .map((p) => ({ ...p, sessions: p.sessions.filter((s) => s.id === sessionId) })),
+    pullRequests: pullRequests.filter((pr) => pr.sessionId === sessionId),
     questions,
-    usage,
   };
 }

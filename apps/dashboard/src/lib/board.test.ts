@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { buildBoard as buildWith, isPlanning, laneOrder, stageStates, type BoardPipeline } from './board';
+import {
+  buildBoard as buildWith,
+  isPlanning,
+  laneOrder,
+  pipelineErrors,
+  stageStates,
+  type BoardPipeline,
+} from './board';
 import { demoData } from './fixtures';
 import type { PipelineView, PullRequest, Question, Rigor, TreeProject, TreeSession } from './schemas';
 
@@ -434,6 +441,51 @@ describe('the pipeline (stage files) shapes every lane', () => {
     expect(merged.nodes.every((n) => !n.skippable)).toBe(true);
     const escalated = lane(view({}), [pr(3, 1, 'escalated')]);
     expect(escalated.nodes.every((n) => !n.skippable)).toBe(true);
+  });
+});
+
+describe("each project's own pipeline", () => {
+  const tree = [project(1, [session(1, 1)]), project(2, [session(2, 2)])];
+  const prs = [pr(1, 1, 'review'), pr(2, 2, 'review')];
+  const own: BoardPipeline = {
+    ...PIPELINE,
+    projects: {
+      1: { pipeline: { ...PIPELINE.pipeline, checks: ['review'], guardian: false }, stages: PIPELINE.stages },
+    },
+  };
+  const stagesOf = (board: ReturnType<typeof buildBoard>, id: number) =>
+    board.projects.find((p) => p.project.id === id)!.rows[0]!.lanes[0]!.nodes.map((n) => n.stage);
+
+  it('draws a project with its own pipeline from it, and the others from the shared one', () => {
+    const board = buildBoard(tree, prs, [], own);
+    expect(stagesOf(board, 1)).toEqual(['review', 'awaiting_approval', 'merge', 'deploying']);
+    expect(stagesOf(board, 2)).toEqual([
+      'tests',
+      'review',
+      'qa',
+      'awaiting_approval',
+      'merge',
+      'deploying',
+      'guardian',
+    ]);
+  });
+
+  it('names a project whose own pipeline.json is broken, and the shared one only while a project runs it', () => {
+    const broken = (view: BoardPipeline, error: string): BoardPipeline => ({
+      ...view,
+      pipeline: { ...view.pipeline, error },
+    });
+    const both: BoardPipeline = {
+      ...broken(PIPELINE, 'pipeline.json: not valid JSON'),
+      projects: { 1: broken(PIPELINE, 'pipeline.json: unknown setting "x"') },
+    };
+    expect(pipelineErrors(buildBoard(tree, prs, [], both), both)).toEqual([
+      'p1\'s pipeline.json: unknown setting "x"',
+      'pipeline.json: not valid JSON',
+    ]);
+    const onlyOwn = buildBoard([tree[0]!], [prs[0]!], [], both);
+    expect(pipelineErrors(onlyOwn, both)).toEqual(['p1\'s pipeline.json: unknown setting "x"']);
+    expect(pipelineErrors(buildBoard(tree, prs, [], PIPELINE), PIPELINE)).toEqual([]);
   });
 });
 

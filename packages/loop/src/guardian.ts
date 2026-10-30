@@ -40,7 +40,7 @@ import {
   parseGuardian,
   type GuardianContext,
 } from './prompts.js';
-import { builtinStageLibrary, type StageLibrary } from './stages.js';
+import { builtinStageLibrary, stagesOf, type StageSource } from './stages.js';
 import { loopState, patchState } from './state.js';
 
 const MINUTE = 60_000;
@@ -101,8 +101,11 @@ export interface GuardianDeps {
   createRequest?: CreateRequest;
   /** Shared with the PR loop engine. Default: its own, probing through `github`. */
   connectivity?: Connectivity;
-  /** Its pipeline.json can switch the scheduled runs off. Default: the built-in pipeline (on). */
-  stages?: StageLibrary;
+  /**
+   * Each project's pipeline.json can switch its scheduled runs off, and its guardian.md holds the
+   * instructions. Default: the built-in pipeline (on).
+   */
+  stages?: StageSource;
   timers?: Timers;
   log?: (message: string) => void;
 }
@@ -224,12 +227,12 @@ export class ProductionGuardian {
     const now = store.clock.now().getTime();
     const age = (iso: string) => now - Date.parse(iso);
     const found: ReturnType<ProductionGuardian['due']> = [];
-    // The pipeline without the Guardian, or a pipeline.json that cannot be read: no scheduled runs
-    // (an explicit runNow still runs).
-    const pipeline = this.deps.stages?.pipeline();
-    if (pipeline && (!pipeline.guardian || pipeline.error)) return found;
     for (const project of store.projects.list()) {
       if (project.kind !== 'git') continue;
+      // A pipeline without the Guardian, or a pipeline.json that cannot be read: no scheduled runs for
+      // the project (an explicit runNow still runs).
+      const pipeline = this.deps.stages && stagesOf(this.deps.stages, project).pipeline();
+      if (pipeline && (!pipeline.guardian || pipeline.error)) continue;
       for (const repo of project.repos) {
         if (!repo.productionUrl || this.busy.has(key(project, repo))) continue;
         const deploy = store.pullRequests
@@ -403,7 +406,7 @@ export class ProductionGuardian {
       sha: c.sha,
       pr: c.prInfo,
       retryOf,
-      instructions: (this.deps.stages ?? builtinStageLibrary()).guardian().prompt,
+      instructions: stagesOf(this.deps.stages ?? builtinStageLibrary(), c.project).guardian().prompt,
     };
     const name = `guardian${c.run.id}-${area}-${retryOf.length > 0 ? 2 : 1}`;
     const evidence = c.dir ? join(c.dir, area) : null;

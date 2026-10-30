@@ -3,7 +3,7 @@ import { backendFailure, ServerUnavailable } from '../../components/server-unava
 import { BackendError } from '../../lib/backend';
 import { HiddenProjects, ProjectPlacement } from '../../components/project-placement';
 import { ProjectSettings } from '../../components/settings-controls';
-import { buildBoard } from '../../lib/board';
+import { buildBoard, pipelineErrors } from '../../lib/board';
 import { arrangeProjects, parseLayout } from '../../lib/layout';
 import { modelDefaults } from '../../lib/models';
 import { requestTime } from '../../lib/server/clock';
@@ -30,9 +30,8 @@ export default async function BoardPage() {
     <>
       <BoardView
         board={board}
-        pipelineError={pipeline.pipeline.error}
+        pipelineErrors={pipelineErrors(board, pipeline)}
         projects={shown}
-        layout={layout}
         now={requestTime()}
         readOnly={readOnly}
         models={settings ? modelDefaults(settings) : undefined}

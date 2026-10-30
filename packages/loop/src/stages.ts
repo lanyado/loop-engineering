@@ -1,14 +1,25 @@
-import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import {
+  copyFileSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PR_OUTCOMES, PR_STAGES, ValidationError } from '@loop-engineering/core';
+import { PR_OUTCOMES, PR_STAGES, ValidationError, type Project } from '@loop-engineering/core';
 import type { CheckJobKind, PrJobKind } from './ports.js';
 
 /*
  * The PR loop's stages as files (see packages/loop/stages/README.md). The built-in stages ship next to
  * this package; a stages folder (data/stages by default) holds the user's versions and new stages, and
- * pipeline.json there says which checks run, in what order. The engine reads them through a
- * StageLibrary on every step, so a hand edit applies on the next tick.
+ * pipeline.json there says which checks run, in what order. A project can have its own such folder
+ * (.loop-engineering/ in its home, see ProjectStageFiles); the others share data/stages. The engine
+ * reads them through a StageLibrary on every step, so a hand edit applies on the next tick.
  */
 
 export const BUILTIN_CHECKS = ['tests', 'review', 'qa'] as const;
@@ -121,6 +132,18 @@ export interface StageLibrary {
 export interface EditableStageLibrary extends StageLibrary {
   update(change: PipelineUpdate): void;
 }
+
+/** Each project's stage library: its own folder's, or the shared one. */
+export interface ProjectStageLibraries {
+  forProject(project: Project): StageLibrary;
+}
+
+/** One library for every project, or each project's own. */
+export type StageSource = StageLibrary | ProjectStageLibraries;
+
+/** The library a project's PRs, sessions and Guardian runs use. */
+export const stagesOf = (source: StageSource, project: Project): StageLibrary =>
+  'forProject' in source ? source.forProject(project) : source;
 
 /** What the built-in stages may do and when they run: fixed by the code, not their files. */
 const BUILTIN_ACCESS: Record<BuiltinCheck | InstructionStage, Pick<StageFields, 'access' | 'runs'>> = {
@@ -381,6 +404,14 @@ export class FileStageLibrary implements EditableStageLibrary {
     this.signature = '';
   }
 
+  /** Copies the folder's stage files and pipeline.json, as they are (broken ones too), into `target`. */
+  copyInto(target: string): void {
+    for (const f of this.listFiles()) {
+      if (f.name === 'README.md') continue;
+      copyFileSync(join(this.dir, f.name), join(target, f.name));
+    }
+  }
+
   private load(): Loaded {
     const files = this.listFiles();
     const signature = files.map(version).join('|');
@@ -446,5 +477,117 @@ export class FileStageLibrary implements EditableStageLibrary {
     if (this.warned.has(key)) return;
     this.warned.add(key);
     this.log(message);
+  }
+}
+
+/** The folder in a project's home that holds its own pipeline and stage files. */
+export const PROJECT_STAGES_FOLDER = '.loop-engineering';
+
+/** Where a project keeps its own stage files: in its folder, or in its first repo's checkout. */
+export function projectStagesDir(project: Pick<Project, 'folderPath' | 'repos'>): string | null {
+  const home = project.folderPath ?? project.repos[0]?.path;
+  return home ? join(home, PROJECT_STAGES_FOLDER) : null;
+}
+
+const PROJECT_README = `# This project's pipeline
+
+loop-engineering runs this project's PRs through the checks in pipeline.json, in that order; each
+.md file here is one stage (its settings and prompt). planner.md and guardian.md, when here, are the
+Planner's and the Production Guardian's instructions for this project.
+
+Edit them on the dashboard's pencil (this project's tab) or by hand: the loop reads them again on
+its next step. The format is in loop-engineering's packages/loop/stages/README.md. Delete this folder
+and the project goes back to the shared pipeline.
+`;
+
+/** What is at a path: a real folder, something else (a file, a symlink), or nothing. */
+function kindAt(path: string): 'folder' | 'other' | 'none' {
+  try {
+    return lstatSync(path).isDirectory() ? 'folder' : 'other';
+  } catch {
+    return 'none';
+  }
+}
+
+const isFolder = (path: string) => {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Every project's stage library. A project whose home (its folder, or its first repo's checkout) has
+ * a .loop-engineering/ folder uses the stage files there, on top of the built-ins; every other
+ * project uses the shared folder. Only a real folder counts: through a symlink the dashboard's Save
+ * could write anywhere. Each folder's library is kept, so it rereads only files that changed.
+ */
+export class ProjectStageFiles implements ProjectStageLibraries {
+  private readonly own = new Map<string, FileStageLibrary>();
+
+  constructor(
+    readonly shared: FileStageLibrary,
+    private readonly log: (message: string) => void = (m) => console.log(`[stages] ${m}`),
+  ) {}
+
+  /** The project's own library, or null while it has no folder of its own. */
+  ownLibrary(project: Project): FileStageLibrary | null {
+    const dir = projectStagesDir(project);
+    if (!dir || kindAt(dir) !== 'folder') return null;
+    let library = this.own.get(dir);
+    if (!library) {
+      library = new FileStageLibrary(dir, (m) => this.log(`${project.name}: ${m}`));
+      this.own.set(dir, library);
+    }
+    return library;
+  }
+
+  forProject(project: Project): FileStageLibrary {
+    return this.ownLibrary(project) ?? this.shared;
+  }
+
+  /**
+   * Gives the project its own folder: a copy of the shared one as it is now (the editor showed that
+   * pipeline until then) with a README, and `change` applied to the copy. Built in a temporary folder
+   * and renamed into place, so the loop never sees half of it, and a change that does not validate
+   * leaves no folder behind. A project that has its own folder already gets `change` applied there.
+   */
+  init(project: Project, change?: PipelineUpdate): { library: FileStageLibrary; created: boolean } {
+    const existing = this.ownLibrary(project);
+    if (existing) {
+      if (change) existing.update(change);
+      return { library: existing, created: false };
+    }
+    const dir = projectStagesDir(project);
+    if (!dir) throw new ValidationError(`project ${project.name} has no folder to keep its pipeline in`);
+    if (kindAt(dir) !== 'none')
+      throw new ValidationError(`${dir} is in the way: it is not a folder (remove it, or make it one)`);
+    if (!isFolder(dirname(dir)))
+      throw new ValidationError(`project ${project.name}'s folder ${dirname(dir)} is not there`);
+    const tmp = `${dir}.tmp-${process.pid}`;
+    rmSync(tmp, { recursive: true, force: true });
+    mkdirSync(tmp, { mode: 0o755 });
+    try {
+      this.shared.copyInto(tmp);
+      if (kindAt(join(tmp, 'pipeline.json')) === 'none') {
+        const { checks, deploy, guardian } = this.shared.pipeline();
+        writeFileSync(
+          join(tmp, 'pipeline.json'),
+          `${JSON.stringify({ checks, deploy, guardian }, null, 2)}\n`,
+        );
+      }
+      writeFileSync(join(tmp, 'README.md'), PROJECT_README);
+      if (change) new FileStageLibrary(tmp, () => undefined).update(change);
+      renameSync(tmp, dir);
+    } catch (err) {
+      rmSync(tmp, { recursive: true, force: true });
+      // Another init got there first: that folder is the project's now.
+      const raced = this.ownLibrary(project);
+      if (!raced || err instanceof ValidationError) throw err;
+      if (change) raced.update(change);
+      return { library: raced, created: false };
+    }
+    return { library: this.ownLibrary(project)!, created: true };
   }
 }

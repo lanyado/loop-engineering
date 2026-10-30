@@ -71,12 +71,17 @@ await clip('questions', async (page) => {
 });
 
 await clip('editor', async (page) => {
-  await page.getByRole('link', { name: 'Edit the dashboard' }).click();
+  await page.getByRole('link', { name: 'Edit the pipelines' }).click();
   await page.waitForTimeout(1500);
   // The remove buttons wiggle in edit mode, so Playwright never sees them as stable.
-  await page.getByRole('button', { name: 'Remove Weekly limit' }).click({ force: true });
+  await page.getByRole('button', { name: 'Remove Manual QA' }).click({ force: true });
   await page.waitForTimeout(1000);
-  await page.getByRole('button', { name: 'Add Weekly limit' }).click({ force: true });
+  await page.getByRole('button', { name: 'Add Manual QA' }).click({ force: true });
+  await page.waitForTimeout(1000);
+  await page
+    .getByTestId('editor-tab')
+    .filter({ hasText: /^shop$/ })
+    .click();
   await page.waitForTimeout(1200);
 });
 

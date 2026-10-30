@@ -2112,10 +2112,35 @@ button.node-plus:hover:not(:disabled) {
 .editor .topbar {
   flex-wrap: wrap;
 }
-/* Room for the "−" and "+" badges, so they cover no text. */
-.editor .topbar .wiggle,
-.editor .topbar .ghost-item {
-  padding: 8px 0 0 12px;
+/* A tab per pipeline: the shared one, then each project's; dashed while a project runs the shared one. */
+.editor-tabs {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: var(--s-1);
+  min-width: 0;
+}
+.editor-tab {
+  padding: 6px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  color: var(--text);
+  font-size: var(--text-sm);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.editor-tab:hover {
+  background: var(--surface-2);
+}
+.editor-tab.on-shared {
+  border-style: dashed;
+  color: var(--muted);
+}
+.editor-tab.current {
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--accent-soft-text);
+  font-weight: 600;
 }
 .editor-notes {
   display: grid;
@@ -2130,28 +2155,6 @@ button.node-plus:hover:not(:disabled) {
 /* Room above each lane for the badges on its nodes' corners. */
 .editor .lane-flow {
   padding-top: 10px;
-}
-/* A part of a row (text, not a node): its badge sits in a margin of its own, over no text. */
-.editor .block {
-  margin-top: var(--s-2);
-  padding: 8px 0 0 14px;
-}
-/* Inline text (run time, subagents, the PR's cost): the badge sits to its left, on its middle. */
-.editor .session-meta .wiggle,
-.editor .session-meta .ghost-item,
-.editor .lane-label .wiggle,
-.editor .lane-label .ghost-item {
-  padding-left: 24px;
-}
-.editor .session-meta :is(.wiggle-remove, .ghost-add),
-.editor .lane-label :is(.wiggle-remove, .ghost-add) {
-  top: calc(50% - 10px);
-  left: 0;
-}
-.editor .lane-label > .wiggle,
-.editor .lane-label > .ghost-item {
-  overflow: visible;
-  justify-items: start;
 }
 /*
  * iOS-style edit mode: what can change wiggles gently where it sits, "−" on its corner removes it,
@@ -2207,29 +2210,9 @@ button.node-plus:hover:not(:disabled) {
     transform: rotate(0.6deg);
   }
 }
-/* A whole line (a list, a paragraph) takes the width and only sways a hair. */
-.wiggle.block,
-.ghost-item.block {
-  display: grid;
-  justify-items: stretch;
-}
-.wiggle.block {
-  animation-name: wiggle-block;
-}
-@keyframes wiggle-block {
-  from {
-    transform: translateX(-0.5px);
-  }
-  to {
-    transform: translateX(0.5px);
-  }
-}
 .wiggle-body {
   display: inline-flex;
   align-items: center;
-}
-.block > .wiggle-body {
-  display: block;
 }
 .ghost-item > .wiggle-body {
   opacity: 0.4;

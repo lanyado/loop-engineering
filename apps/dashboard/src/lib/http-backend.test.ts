@@ -1,6 +1,6 @@
 import { FakeTimers } from '@loop-engineering/ask-human';
 import { FakeClock, openStore, type Store } from '@loop-engineering/core';
-import { FileStageLibrary } from '@loop-engineering/loop';
+import { FileStageLibrary, ProjectStageFiles } from '@loop-engineering/loop';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { claudeUsageModule } from '../../../server/src/modules/claude-usage';
 import { dashboardApi } from '../../../server/src/modules/dashboard-api';
@@ -44,7 +44,9 @@ beforeEach(() => {
     modules: [
       dashboardApi(),
       // No stage files: the built-ins (nothing writes here).
-      pipelineModule({ stages: new FileStageLibrary('/nonexistent/stages', () => undefined) }),
+      pipelineModule({
+        stages: new ProjectStageFiles(new FileStageLibrary('/nonexistent/stages', () => undefined)),
+      }),
       // The shape of GET /api/loop/status (apps/server/src/modules/loop.test.ts runs the real route).
       {
         name: 'loop',
@@ -125,6 +127,22 @@ describe('HttpBackend against the real server', () => {
     const { choices } = demoData(new Date()).pipeline;
     expect([...choices.reserved].sort()).toEqual([...view.choices.reserved].sort());
     expect(choices.runs).toEqual(view.choices.runs);
+  });
+
+  it("reads a project's pipeline and where its own folder would be; a Save there goes to that project", async () => {
+    const project = store.projects.require(store.sessions.require(sessionId).projectId);
+    expect((await backend.pipeline()).projects).toEqual({});
+    const view = await backend.pipeline(project.id);
+    expect(view.project).toEqual({
+      id: project.id,
+      own: false,
+      dir: `${project.repos[0]!.path}/.loop-engineering`,
+    });
+    expect(view.pipeline.checks).toEqual(['tests', 'review', 'qa']);
+    // The repo's folder is not on this machine: the server says so, and writes nothing.
+    const update = { pipeline: { checks: ['review'], deploy: true, guardian: true } };
+    await expect(backend.updatePipeline(update, project.id)).rejects.toThrow(/is not there/);
+    await expect(backend.pipeline(999)).rejects.toMatchObject({ status: 404 });
   });
 
   it("reads a session's plan and newest task time, and the Planner's instructions", async () => {

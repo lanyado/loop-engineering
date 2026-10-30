@@ -1,6 +1,17 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Project } from '@loop-engineering/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { reviewSystem } from './prompts.js';
 import {
@@ -9,6 +20,10 @@ import {
   formatStageFile,
   isStageId,
   parseStageFile,
+  PROJECT_STAGES_FOLDER,
+  ProjectStageFiles,
+  projectStagesDir,
+  stagesOf,
   type StageFields,
 } from './stages.js';
 
@@ -280,5 +295,139 @@ describe('FileStageLibrary', () => {
     expect(readdirSync(join(dir, 'stages'))).toEqual(['pipeline.json']);
     expect(lib.stage('docs')).toBeUndefined();
     expect(lib.stage('review')).toMatchObject({ title: 'Code review', overridden: false });
+  });
+});
+
+describe('ProjectStageFiles', () => {
+  let dir: string;
+  let logs: string[];
+  let shared: FileStageLibrary;
+  let files: ProjectStageFiles;
+  let shop: Project;
+  let notes: Project;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'project-stages-'));
+    logs = [];
+    shared = new FileStageLibrary(join(dir, 'shared'), (m) => logs.push(m));
+    files = new ProjectStageFiles(shared, (m) => logs.push(m));
+    for (const home of ['shop-web', 'shop-api', 'notes']) mkdirSync(join(dir, home));
+    const repo = (name: string) => ({
+      name,
+      path: join(dir, name),
+      remote: `git@github.com:me/${name}.git`,
+      defaultBranch: 'main',
+    });
+    shop = {
+      id: 1,
+      name: 'shop',
+      kind: 'git',
+      folderPath: null,
+      repos: [repo('shop-web'), repo('shop-api')],
+      envFiles: [],
+      autoMerge: true,
+      createdAt: '2026-10-30T09:00:00.000Z',
+    };
+    notes = { ...shop, id: 2, name: 'notes', kind: 'folder', folderPath: join(dir, 'notes'), repos: [] };
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  const ownDir = (home: string) => join(dir, home, PROJECT_STAGES_FOLDER);
+
+  it("keeps a project's own stages in its folder, or in its first repo's checkout", () => {
+    expect(projectStagesDir(shop)).toBe(ownDir('shop-web'));
+    expect(projectStagesDir(notes)).toBe(ownDir('notes'));
+    expect(projectStagesDir({ folderPath: null, repos: [] })).toBeNull();
+  });
+
+  it('gives every project without a folder of its own the shared library', () => {
+    shared.update({ pipeline: { checks: ['review'], deploy: false, guardian: true } });
+    expect(files.ownLibrary(shop)).toBeNull();
+    expect(files.forProject(shop)).toBe(shared);
+    expect(stagesOf(files, notes).pipeline().checks).toEqual(['review']);
+    // A plain library is every project's.
+    expect(stagesOf(shared, shop)).toBe(shared);
+  });
+
+  it('init copies the shared folder as it is, then the project runs its own copy', () => {
+    shared.update({
+      pipeline: { checks: ['docs', 'review'], deploy: false, guardian: true },
+      stages: { docs: fields, planner: { ...fields, title: 'Planner', label: 'Planner', icon: 'sparkle' } },
+    });
+    writeFileSync(join(dir, 'shared', 'broken.md'), 'no front matter');
+
+    const { library, created } = files.init(shop);
+    expect(created).toBe(true);
+    expect(readdirSync(ownDir('shop-web')).sort()).toEqual([
+      'README.md',
+      'broken.md',
+      'docs.md',
+      'pipeline.json',
+      'planner.md',
+    ]);
+    expect(files.forProject(shop)).toBe(library);
+    expect(library.pipeline()).toEqual({ checks: ['docs', 'review'], deploy: false, guardian: true });
+    expect(library.planner().prompt).toBe(fields.prompt);
+    expect(library.stage('broken')?.error).toContain('---');
+
+    // From now on the two are apart: an edit to one leaves the other as it was.
+    library.update({ pipeline: { checks: ['tests'], deploy: true, guardian: false } });
+    expect(shared.pipeline().checks).toEqual(['docs', 'review']);
+    expect(files.forProject(shop).pipeline().checks).toEqual(['tests']);
+    expect(files.forProject(notes)).toBe(shared);
+  });
+
+  it('init writes the built-in pipeline when the shared folder has none, and is done only once', () => {
+    const first = files.init(notes);
+    expect(first.created).toBe(true);
+    expect(JSON.parse(readFileSync(join(ownDir('notes'), 'pipeline.json'), 'utf8'))).toEqual({
+      checks: ['tests', 'review', 'qa'],
+      deploy: true,
+      guardian: true,
+    });
+    first.library.update({ pipeline: { checks: ['review'], deploy: true, guardian: true } });
+    const again = files.init(notes);
+    expect(again).toEqual({ library: first.library, created: false });
+    expect(again.library.pipeline().checks).toEqual(['review']);
+  });
+
+  it('init with a change applies it to the copy, and leaves no folder when the change is refused', () => {
+    expect(() => files.init(shop, { pipeline: { checks: ['nope'], deploy: true, guardian: true } })).toThrow(
+      /unknown stage "nope"/,
+    );
+    expect(existsSync(ownDir('shop-web'))).toBe(false);
+    expect(readdirSync(join(dir, 'shop-web'))).toEqual([]);
+
+    const { library, created } = files.init(shop, {
+      pipeline: { checks: ['docs'], deploy: true, guardian: true },
+      stages: { docs: fields },
+    });
+    expect(created).toBe(true);
+    expect(library.pipeline().checks).toEqual(['docs']);
+    expect(shared.stage('docs')).toBeUndefined();
+  });
+
+  it('counts only a real folder: a symlink or a file there is in the way', () => {
+    mkdirSync(join(dir, 'elsewhere'));
+    symlinkSync(join(dir, 'elsewhere'), ownDir('shop-web'));
+    writeFileSync(ownDir('notes'), 'a file');
+    expect(files.forProject(shop)).toBe(shared);
+    expect(files.forProject(notes)).toBe(shared);
+    expect(() => files.init(shop)).toThrow(/is in the way/);
+    expect(() => files.init(notes)).toThrow(/is in the way/);
+    expect(readdirSync(join(dir, 'elsewhere'))).toEqual([]);
+  });
+
+  it('refuses a project whose folder is gone, or that has none', () => {
+    rmSync(join(dir, 'notes'), { recursive: true });
+    expect(() => files.init(notes)).toThrow(/is not there/);
+    expect(() => files.init({ ...shop, repos: [] })).toThrow(/has no folder/);
+  });
+
+  it("names the project in a broken file's warning, and rereads hand edits", () => {
+    const { library } = files.init(shop);
+    writeFileSync(join(ownDir('shop-web'), 'pipeline.json'), '{');
+    expect(files.forProject(shop).pipeline().error).toBe('pipeline.json: not valid JSON');
+    expect(logs).toEqual([expect.stringMatching(/^shop: pipeline\.json: not valid JSON/)]);
+    expect(files.forProject(shop)).toBe(library);
   });
 });

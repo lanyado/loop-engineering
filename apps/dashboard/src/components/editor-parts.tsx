@@ -8,7 +8,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react';
-import { insert, move, withGhosts } from '../lib/layout';
+import { move, withGhosts } from '../lib/layout';
 import { Dialog } from './dialog';
 
 /** Where an item sits in a row it can be reordered in: drag it, or use its arrows. */
@@ -324,7 +324,6 @@ export function Wiggle({
   onRemove,
   onOpen,
   order,
-  block = false,
   children,
 }: {
   item: string;
@@ -333,13 +332,11 @@ export function Wiggle({
   onRemove?: () => void;
   onOpen?: () => void;
   order?: Order;
-  /** A whole line (a list, a paragraph): it takes the width and barely moves. */
-  block?: boolean;
   children: ReactNode;
 }) {
   return (
     <span
-      className={`wiggle${block ? ' block' : ''}`}
+      className="wiggle"
       data-testid="editable-item"
       data-item={item}
       data-order={order?.index}
@@ -385,17 +382,15 @@ export function Ghost({
   item,
   label,
   onAdd,
-  block = false,
   children,
 }: {
   item: string;
   label: string;
   onAdd: () => void;
-  block?: boolean;
   children: ReactNode;
 }) {
   return (
-    <span className={`ghost-item${block ? ' block' : ''}`} data-testid="ghost-item" data-item={item}>
+    <span className="ghost-item" data-testid="ghost-item" data-item={item}>
       <span className="wiggle-body" inert>
         {children}
       </span>
@@ -407,49 +402,10 @@ export function Ghost({
   );
 }
 
-/** A row of items to reorder and remove, with the removed ones faded where they were. */
-export function EditableRow<T extends string>({
-  items,
-  all,
-  label,
-  render,
-  onChange,
-}: {
-  items: T[];
-  /** Every item the row may hold. */
-  all: readonly T[];
-  label: (item: T) => string;
-  render: (item: T) => ReactNode;
-  onChange: (items: T[]) => void;
-}) {
-  const { entries, change } = useGhostPlaces(items, all, onChange);
-  const order = useReorder(items, change);
-  return (
-    <>
-      {entries.map(({ item, ghost, at }) =>
-        ghost ? (
-          <Ghost key={item} item={item} label={label(item)} onAdd={() => change(insert(items, item, at))}>
-            {render(item)}
-          </Ghost>
-        ) : (
-          <Wiggle
-            key={item}
-            item={item}
-            label={label(item)}
-            onRemove={() => change(items.filter((x) => x !== item))}
-            order={order(at)}
-          >
-            {render(item)}
-          </Wiggle>
-        ),
-      )}
-    </>
-  );
-}
-
 /** Save and Discard each ask first; Save says where the changes go. */
 export function ConfirmDialog({
   action,
+  target,
   readOnly,
   saving,
   error,
@@ -457,6 +413,8 @@ export function ConfirmDialog({
   onKeepEditing,
 }: {
   action: 'save' | 'discard';
+  /** The pipeline the changes are to, e.g. "shop's pipeline". */
+  target: string;
   readOnly: boolean;
   saving: boolean;
   error: string | null;
@@ -470,11 +428,9 @@ export function ConfirmDialog({
       onClose={onKeepEditing}
       testId="confirm-dialog"
     >
-      <h2>{save ? 'Apply these changes to your dashboard?' : 'Discard your changes?'}</h2>
+      <h2>{save ? `Apply these changes to ${target}?` : 'Discard your changes?'}</h2>
       <p className="muted">
-        {save
-          ? 'Your dashboard gets this layout, and the PR loop uses this pipeline from its next step.'
-          : 'Your dashboard and the PR loop stay as they were.'}
+        {save ? 'The PR loop uses it from its next step.' : `Nothing changes in ${target}.`}
       </p>
       {error && (
         <p className="error small" role="alert">

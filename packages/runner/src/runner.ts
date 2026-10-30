@@ -70,8 +70,11 @@ export interface RunnerConfig {
    * (default); 'wait' keeps it paused (usage_limit) until the monitor resumes it on Claude.
    */
   onClaudeLimit?: 'opencode' | 'wait';
-  /** The Planner's current instructions, read at every launch; without it agents build without planning first. */
-  planner?: () => string;
+  /**
+   * The Planner's current instructions for a project (its own planner.md, or the shared one), read at
+   * every launch; without it agents build without planning first.
+   */
+  planner?: (project: Project) => string;
 }
 
 export interface RunnerDeps {
@@ -171,7 +174,7 @@ export class SessionRunner {
   private readonly log: (message: string) => void;
   private readonly claudeProjectsDir: string;
   private readonly onClaudeLimit: 'opencode' | 'wait';
-  private readonly planner: (() => string) | undefined;
+  private readonly planner: ((project: Project) => string) | undefined;
   /** Per-session promise chains: start, pause, resume, fallback and reconcile never interleave. */
   private readonly locks = new Map<number, Promise<unknown>>();
   /** What each Claude builder was last launched with, to tell whether a relaunch would change anything. */
@@ -1016,7 +1019,7 @@ export class SessionRunner {
     const { store } = this.deps;
     const s = store.sessions.require(sessionId);
     const project = store.projects.require(s.projectId);
-    const planner = this.planner?.();
+    const planner = this.planner?.(project);
     const common = { sessionId, ...(planner ? { planner } : {}) };
     if (project.kind === 'folder') {
       return sessionInstructions({ ...common, kind: 'folder', folder: project.folderPath ?? '' });

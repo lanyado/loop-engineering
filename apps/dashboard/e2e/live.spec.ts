@@ -765,19 +765,18 @@ test('ends a session from its details after a confirm step', async ({ page }, in
   await expect(card.getByTestId('session-plus')).toHaveCount(0);
 });
 
-test('the editor applies the layout and the pipeline on Save', async ({ page }, info) => {
+test('the editor applies the shared pipeline on Save, and keeps the board layout', async ({ page }, info) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await open(page);
-  // A project hidden on the board first: the editor's Save must keep it hidden (the server merges).
+  // A project hidden on the board first: the editor's Save must keep it hidden.
   const names = () => page.getByTestId('project').evaluateAll((els) => els.map((e) => e.dataset.project));
   const last = (await names()).at(-1)!;
   await projectSettings(page, last);
   await page.locator(`[data-testid="project"][data-project="${last}"]`).getByTestId('hide-project').click();
   await expect.poll(names).not.toContain(last);
-  await page.getByRole('link', { name: 'Edit the dashboard' }).click();
+  await page.getByRole('link', { name: 'Edit the pipelines' }).click();
   const editor = page.getByTestId('editor');
-  await editor.getByRole('button', { name: 'Remove Weekly limit' }).click();
-  await editor.getByRole('button', { name: 'Remove PR cost and tokens' }).click();
+  await expect(editor.getByTestId('pipeline-scope')).toContainText('The shared pipeline: blog, shop run it');
   await editor.getByRole('button', { name: 'Move Code review left' }).click();
   await editor.getByTestId('new-stage').click();
   await page.getByLabel('Name').fill('Docs check');
@@ -791,29 +790,88 @@ test('the editor applies the layout and the pipeline on Save', async ({ page }, 
   await page.getByLabel('Instructions').fill('Read the code, then plan in five lines.');
   await page.getByTestId('stage-save').click();
   await editor.getByTestId('editor-save').click();
+  await expect(page.getByTestId('confirm-dialog')).toContainText(
+    'Apply these changes to the shared pipeline?',
+  );
   await page.getByTestId('confirm-yes').click();
   await expect(page).toHaveURL(/\/$/);
   await snap(page, info, 'after-approve');
 
   // The real board and the real server have it.
-  await expect(page.locator('[data-testid="usage-meter"][data-window="Weekly"]')).toHaveCount(0);
-  const { pipeline, stages, guardian, planner } = await api<{
+  const { pipeline, stages, guardian, planner, projects } = await api<{
     pipeline: { checks: string[] };
     stages: { id: string; prompt: string }[];
     guardian: { prompt: string };
     planner: { prompt: string; overridden: boolean };
+    projects: Record<string, unknown>;
   }>('/pipeline');
   expect(pipeline.checks).toEqual(['review', 'tests', 'qa', 'docs-check']);
   expect(stages.find((s) => s.id === 'docs-check')?.prompt).toBe('Check the README covers the change.');
   expect(guardian.prompt).toBe('Check the booking flow end to end.');
   expect(planner).toMatchObject({ prompt: 'Read the code, then plan in five lines.', overridden: true });
   expect(stages.map((s) => s.id)).not.toContain('planner');
+  expect(projects).toEqual({});
   const lane = page.getByTestId('lane').first();
   await expect(lane.locator('[data-testid="node"]').first()).toHaveAttribute('data-stage', 'review');
   await expect(lane.locator('[data-stage="docs-check"]')).toContainText('Docs');
   expect(await names()).not.toContain(last);
-  const { settings } = await api<{ settings: { dashboardLayout: { hiddenDetails: string[] } } }>('/settings');
-  expect(settings.dashboardLayout.hiddenDetails).toEqual(['prMetrics']);
+});
+
+test("a project's tab gives it its own pipeline on Save; the other projects keep the shared one", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await open(page);
+  await page.getByRole('link', { name: 'Edit the pipelines' }).click();
+  const editor = page.getByTestId('editor');
+  await editor.locator('[data-testid="editor-tab"][data-project="' + ids.shop + '"]').click();
+  await expect(page).toHaveURL(new RegExp(`/edit\\?project=${ids.shop}$`));
+  await expect(editor.getByTestId('pipeline-scope')).toContainText('shop runs the shared pipeline');
+  // QA goes for shop only, and its Planner gets its own instructions.
+  await editor.getByRole('button', { name: 'Remove Manual QA' }).click();
+  await editor.getByRole('button', { name: 'Edit Planner' }).click();
+  await page.getByLabel('Instructions').fill('Plan shop work in three lines.');
+  await page.getByTestId('stage-save').click();
+  // Another tab while something changed asks first; Keep editing stays here.
+  await editor.locator('[data-testid="editor-tab"][data-project="shared"]').click();
+  await expect(page.getByTestId('confirm-dialog')).toContainText('Discard your changes?');
+  await page.getByRole('button', { name: 'Keep editing' }).click();
+  await expect(page).toHaveURL(new RegExp(`project=${ids.shop}$`));
+  await editor.getByTestId('editor-save').click();
+  await expect(page.getByTestId('confirm-dialog')).toContainText(
+    "Apply these changes to shop's own new pipeline?",
+  );
+  await page.getByTestId('confirm-yes').click();
+  await expect(page).toHaveURL(/\/$/);
+
+  type View = {
+    pipeline: { checks: string[] };
+    planner: { prompt: string };
+    project: { own: boolean; dir: string };
+    projects?: Record<string, { pipeline: { checks: string[] } }>;
+  };
+  const shop = await api<View>(`/pipeline?project=${ids.shop}`);
+  expect(shop).toMatchObject({ pipeline: { checks: ['tests', 'review'] }, project: { own: true } });
+  expect(shop.planner.prompt).toBe('Plan shop work in three lines.');
+  expect(readFileSync(join(shop.project.dir, 'planner.md'), 'utf8')).toContain(
+    'Plan shop work in three lines.',
+  );
+  const blog = await api<View>(`/pipeline?project=${ids.blog}`);
+  expect(blog).toMatchObject({ pipeline: { checks: ['tests', 'review', 'qa'] }, project: { own: false } });
+  expect((await api<View>('/pipeline')).projects?.[ids.shop]?.pipeline.checks).toEqual(['tests', 'review']);
+
+  // The board draws shop's lanes without QA, and blog's with it.
+  const lanes = (project: string) =>
+    page.locator(`[data-testid="project"][data-project="${project}"] [data-testid="lane"]`).first();
+  await expect(lanes('shop').locator('[data-stage="qa"]')).toHaveCount(0);
+  await expect(lanes('blog').locator('[data-stage="qa"]')).toHaveCount(1);
+
+  // Back in the editor, shop's tab is its own now, and the shared tab still has QA.
+  await page.getByRole('link', { name: 'Edit the pipelines' }).click();
+  await expect(editor.locator('[data-testid="editor-tab"][data-project="' + ids.shop + '"]')).not.toHaveClass(
+    /on-shared/,
+  );
+  await expect(editor.locator('.lane-step > [data-item="qa"]')).toHaveCount(1);
 });
 
 test('a project moves up and hides from its settings, and shows again from the list under the board', async ({

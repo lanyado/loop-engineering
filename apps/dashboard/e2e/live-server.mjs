@@ -6,9 +6,10 @@
 //   POST /test/task   { text } sends the checkout session a new task (so its Planner plans again)
 // Claude's usage limits come from a snapshot file written here, as the status line script would.
 // A SessionRunner on fake tmux, git and an in-memory fs backs "End session": no agent, no real git.
+// Projects' repos are empty folders here, where a project's own pipeline (.loop-engineering/) goes.
 // Run after `npm run build`. Env: LIVE_PORT, DASHBOARD_TOKEN, MCP_TOKEN.
 import { createServer as createHttpServer } from 'node:http';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openStore } from '@loop-engineering/core';
@@ -19,7 +20,7 @@ import {
   MemoryFs,
   SessionRunner,
 } from '@loop-engineering/runner';
-import { FileStageLibrary } from '@loop-engineering/loop';
+import { FileStageLibrary, ProjectStageFiles } from '@loop-engineering/loop';
 import {
   claudeUsageModule,
   createServer,
@@ -74,12 +75,12 @@ webTerminals.url = (spec) => {
 };
 
 function seed(server) {
-  const repo = (name) => ({
-    name,
-    path: `/tmp/${name}`,
-    remote: `git@example.com:${name}.git`,
-    defaultBranch: 'main',
-  });
+  // Real (empty) folders: a project's own pipeline is written into its first repo's.
+  const repo = (name) => {
+    const path = join(dir, 'repos', name);
+    mkdirSync(path, { recursive: true });
+    return { name, path, remote: `git@example.com:${name}.git`, defaultBranch: 'main' };
+  };
   const shop = store.projects.create({
     name: 'shop',
     repos: [repo('web'), repo('api')],
@@ -216,8 +217,10 @@ const testRoutes = {
     const guard = (c) => c.req.header('Authorization') === `Bearer ${mcpToken}`;
     app.post('/test/reset', (c) => {
       if (!guard(c)) return c.json({ error: 'unauthorized' }, 401);
+      // Back to the built-in pipeline, with no project's own.
+      rmSync(join(dir, 'stages'), { recursive: true, force: true });
+      rmSync(join(dir, 'repos'), { recursive: true, force: true });
       reset(server);
-      rmSync(join(dir, 'stages'), { recursive: true, force: true }); // back to the built-in pipeline
       return c.json({ ok: true, ids });
     });
     app.get('/test/terminal-launches', (c) =>
@@ -345,7 +348,9 @@ const server = createServer({
   modules: [
     dashboardApi({ home: tmpdir() }),
     claudeUsageModule({ file: usageFile }),
-    pipelineModule({ stages: new FileStageLibrary(join(dir, 'stages'), () => undefined) }),
+    pipelineModule({
+      stages: new ProjectStageFiles(new FileStageLibrary(join(dir, 'stages'), () => undefined)),
+    }),
     plannerModule(),
     terminalModule({ open: () => Promise.resolve(), web: webTerminals, sweepMs: 200 }),
     testRoutes,

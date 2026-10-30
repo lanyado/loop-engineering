@@ -19,7 +19,7 @@ import {
   type Session,
   type Subagent,
 } from '@loop-engineering/core';
-import type { StageLibrary } from '@loop-engineering/loop';
+import { stagesOf, type StageSource } from '@loop-engineering/loop';
 import { routerProjectId } from '@loop-engineering/router';
 import { Hono, type Context } from 'hono';
 import * as z from 'zod';
@@ -91,8 +91,11 @@ export interface DashboardApiOptions {
   protectedRoots?: string[];
   /** Default os.homedir(). */
   home?: string;
-  /** The pipeline: a session's model can only be set for the builder, the conflict fixer or its checks. */
-  stages?: StageLibrary;
+  /**
+   * The pipelines: a session's model can only be set for the builder, the conflict fixer or the
+   * checks of its project's pipeline.
+   */
+  stages?: StageSource;
 }
 
 export function dashboardApi(options: DashboardApiOptions = {}): ServerModule {
@@ -386,7 +389,10 @@ export function dashboardRoutes(ctx: ServerContext, options: DashboardApiOptions
     if (session.status === 'ended')
       return c.json({ error: `session ${sessionId} has ended; its agents no longer run` }, 409);
     // Like submit_plan: the builder, the conflict fixer, or a check of the current pipeline.
-    if (options.stages && ![BUILDER_AGENT, 'conflict', ...options.stages.pipeline().checks].includes(agent))
+    const checks = options.stages
+      ? stagesOf(options.stages, store.projects.require(session.projectId)).pipeline().checks
+      : null;
+    if (checks && ![BUILDER_AGENT, 'conflict', ...checks].includes(agent))
       return c.json({ error: `"${agent}" is not an agent of the pipeline` }, 400);
     const before = session.models[agent];
     if (before?.model === model && before.by === 'human') return c.json({ session });

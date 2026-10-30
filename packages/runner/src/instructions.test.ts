@@ -211,6 +211,18 @@ describe('the runner hands the rules to every agent it launches', () => {
     expect(second).not.toContain('Plan in three lines.');
   });
 
+  it("gives each project's sessions that project's planner instructions", async () => {
+    const launches = captureLaunches();
+    const h = harness({ planner: (project) => `Plan the way ${project.name} likes.` });
+    h.fs.dirs.add('/home/me/resume');
+    const resume = h.store.projects.create({ name: 'Resume', kind: 'folder', folderPath: '/home/me/resume' });
+    await h.runner.startSession(h.shop.id, { text: 'x' });
+    await h.runner.startSession(resume.id, { text: 'y' });
+    const [shop, folder] = launches().map((l) => l.systemPrompt);
+    expect(shop).toContain(`Plan the way ${h.shop.name} likes.`);
+    expect(folder).toContain('Plan the way Resume likes.');
+  });
+
   it('a folder project gets the folder rules', async () => {
     const launches = captureLaunches();
     const h = harness();

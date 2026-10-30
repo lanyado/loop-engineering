@@ -1,6 +1,5 @@
 import type { ReactNode } from 'react';
 import type { Board, ProjectBoard } from '../lib/board';
-import { shows, type Layout } from '../lib/layout';
 import type { ModelDefaults } from '../lib/models';
 import { FinishedGroup } from './finished-sessions';
 import { PipelineRow } from './pipeline';
@@ -30,25 +29,22 @@ function ProjectHeader({ board }: { board: ProjectBoard }) {
 }
 
 /**
- * The board: questions no row shows, then each project with its pipelines. The page renders it
- * from the server's data, the editor from demo data with the layout being edited.
+ * The board: questions no row shows, then each project with its pipelines, from the server's data.
  */
 export function BoardView({
   board,
-  pipelineError,
+  pipelineErrors,
   projects,
-  layout,
   now,
   readOnly,
   settings,
   models,
 }: {
   board: Board;
-  /** pipeline.json cannot be read: the PR loop waits. */
-  pipelineError?: string | undefined;
+  /** A pipeline.json that cannot be read, the shared one or a project's: the PR loop waits for those PRs. */
+  pipelineErrors: string[];
   /** board.projects in the layout's order, without the hidden ones. */
   projects: ProjectBoard[];
-  layout: Layout;
   now: number;
   readOnly: boolean;
   /** What a project's slider icon opens. */
@@ -59,11 +55,11 @@ export function BoardView({
   return (
     <>
       <h1 className="sr-only">Pipelines</h1>
-      {pipelineError && (
-        <p className="offline-banner" data-testid="pipeline-error">
-          The PR loop waits until this is fixed: {pipelineError}.
+      {pipelineErrors.map((error) => (
+        <p key={error} className="offline-banner" data-testid="pipeline-error">
+          The PR loop waits until this is fixed: {error}.
         </p>
-      )}
+      ))}
       {board.unplaced.length > 0 && (
         <section className="unplaced" data-testid="unplaced">
           <h2>Waiting on you</h2>
@@ -92,7 +88,6 @@ export function BoardView({
                   key={row.session.id}
                   row={row}
                   folder={p.project.kind === 'folder'}
-                  hidden={layout.hiddenDetails}
                   readOnly={readOnly}
                   now={now}
                   models={models}
@@ -100,9 +95,7 @@ export function BoardView({
               ))}
             </ul>
           )}
-          {p.finished.length > 0 && shows(layout.hiddenDetails, 'finished') && (
-            <FinishedGroup sessions={p.finished} now={now} />
-          )}
+          {p.finished.length > 0 && <FinishedGroup sessions={p.finished} now={now} />}
         </ProjectShell>
       ))}
     </>

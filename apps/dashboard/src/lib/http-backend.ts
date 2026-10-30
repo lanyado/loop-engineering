@@ -12,6 +12,10 @@ export interface HttpBackendOptions {
   timeoutMs?: number;
 }
 
+/** The shared pipeline, or one project's. */
+const pipelinePath = (projectId?: number) =>
+  projectId === undefined ? '/pipeline' : `/pipeline?project=${projectId}`;
+
 export class HttpBackend implements Backend {
   readonly demo = false;
   private readonly base: string;
@@ -41,12 +45,12 @@ export class HttpBackend implements Backend {
     return (await this.send('PATCH', `/projects/${id}`, patch, responses.project)).project;
   }
 
-  async pipeline() {
-    return this.get('/pipeline', responses.pipeline);
+  async pipeline(projectId?: number) {
+    return this.get(pipelinePath(projectId), responses.pipeline);
   }
 
-  async updatePipeline(update: PipelineUpdate) {
-    return this.send('PUT', '/pipeline', update, responses.pipeline);
+  async updatePipeline(update: PipelineUpdate, projectId?: number) {
+    return this.send('PUT', pipelinePath(projectId), update, responses.pipeline);
   }
 
   async skipCheck(prId: number, check: string, skip: boolean) {
