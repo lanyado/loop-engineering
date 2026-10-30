@@ -380,7 +380,6 @@ function WithTerminal({
       aria-label="Open this PR's checks on GitHub"
       title="Open this PR's checks on GitHub"
       data-testid="stage-checks"
-      onDoubleClick={(e) => e.stopPropagation()}
     >
       ↗
     </a>
