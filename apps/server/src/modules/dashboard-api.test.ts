@@ -14,6 +14,7 @@ import { ensureRouterSession } from '@loop-engineering/router';
 import { harness as runnerHarness } from '../../../../packages/runner/src/test-support/harness.js';
 import { REPO_ROOT } from '../env.js';
 import { dashboardApi } from './dashboard-api.js';
+import { ATTACHMENT_LIMITS } from './attachments.js';
 
 const caseInsensitive = existsSync(tmpdir().toUpperCase());
 
@@ -681,6 +682,32 @@ describe('requests', () => {
     const tooMany = Array.from({ length: 6 }, () => ({ name: 'a.txt', data }));
     expect(
       (await call('POST', '/requests', { text: 'x', projectId: shop.id, attachments: tooMany })).status,
+    ).toBe(400);
+  });
+
+  it('lifts the body limit for a file-carrying request and keeps the 5 MB file cap', async () => {
+    const { shop } = seed();
+    // A base64 blob well over the default 64 KB body limit, yet a valid request.
+    const fine = Buffer.alloc(300 * 1024).toString('base64');
+    expect(
+      (
+        await call('POST', '/requests', {
+          text: 'x',
+          projectId: shop.id,
+          attachments: [{ name: 'a.txt', data: fine }],
+        })
+      ).status,
+    ).toBe(201);
+    // Just over the per-file cap (base64 is small enough for the schema; the store refuses it).
+    const tooBig = Buffer.alloc(ATTACHMENT_LIMITS.bytes + 1).toString('base64');
+    expect(
+      (
+        await call('POST', '/requests', {
+          text: 'x',
+          projectId: shop.id,
+          attachments: [{ name: 'b.txt', data: tooBig }],
+        })
+      ).status,
     ).toBe(400);
   });
 
