@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, join } from 'node:path';
 import { ValidationError } from '@loop-engineering/core';
 import * as z from 'zod';
 
@@ -27,11 +27,12 @@ export function safeFileName(name: string, index: number): string {
   return cleaned === '' ? `file-${index + 1}` : cleaned;
 }
 
-/** Where uploads live: next to the database, or the temp dir for an in-memory one. */
-export function uploadsRoot(dbPath: string): string {
-  return dbPath !== ':memory:' && dbPath.startsWith('/')
-    ? join(dirname(dbPath), 'uploads')
-    : join(tmpdir(), 'loop-uploads');
+/**
+ * Where uploads live: the temp dir, because that is the one place outside a worktree every agent may
+ * read (OpenCode denies other external directories; see agent-config.ts). The OS clears it over time.
+ */
+export function uploadsRoot(): string {
+  return join(tmpdir(), 'loop-uploads');
 }
 
 /**

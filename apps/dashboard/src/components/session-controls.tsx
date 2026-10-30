@@ -102,7 +102,8 @@ export function Composer({
           }}
           onPaste={(e) => {
             const files = [...e.clipboardData.files];
-            if (files.length > 0) {
+            // Rich text copied from Excel or Word carries an image too: keep the text then.
+            if (files.length > 0 && !e.clipboardData.types.includes('text/plain')) {
               e.preventDefault();
               addFiles(files);
             }
@@ -130,7 +131,10 @@ export function Composer({
                 type="button"
                 className="ghost small"
                 aria-label={`Remove ${p.file.name}`}
-                onClick={() => setPicked((list) => list.filter((x) => x.key !== p.key))}
+                onClick={() => {
+                  setPicked((list) => list.filter((x) => x.key !== p.key));
+                  setProblem(null);
+                }}
               >
                 ×
               </button>

@@ -447,8 +447,7 @@ export function dashboardRoutes(ctx: ServerContext, options: DashboardApiOptions
 
   api.post('/requests', async (c) => {
     const input = parse(newRequest, await body(c));
-    const withFiles = () =>
-      saveAttachments(uploadsRoot(ctx.config.dbPath), input.text, input.attachments ?? []);
+    const withFiles = () => saveAttachments(uploadsRoot(), input.text, input.attachments ?? []);
     if (input.sessionId !== undefined) {
       const session = store.sessions.require(input.sessionId);
       if (input.projectId != null && input.projectId !== session.projectId)

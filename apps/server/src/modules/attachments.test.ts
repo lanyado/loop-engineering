@@ -43,8 +43,7 @@ describe('attachments', () => {
     expect(() => saveAttachments(root(), 't', [{ name: 'e', data: '=' }])).toThrow(/empty/);
   });
 
-  it('keeps uploads next to the database', () => {
-    expect(uploadsRoot('/var/loop/loop.db')).toBe('/var/loop/uploads');
-    expect(uploadsRoot(':memory:')).toContain('loop-uploads');
+  it('keeps uploads in the temp dir, which every agent may read', () => {
+    expect(uploadsRoot()).toBe(join(tmpdir(), 'loop-uploads'));
   });
 });
