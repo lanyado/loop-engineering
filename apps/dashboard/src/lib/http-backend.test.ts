@@ -275,6 +275,12 @@ describe('HttpBackend against the real server', () => {
       projectId: project!.id,
       source: 'dashboard',
     });
+    const withFile = await backend.createRequest({
+      text: 'See shot',
+      projectId: project!.id,
+      attachments: [{ name: 'shot.png', data: 'YQ==' }],
+    });
+    expect(withFile.text).toMatch(/Attached files[^]*shot\.png/);
     await expect(backend.createRequest({ text: 'Anywhere', projectId: 0 })).rejects.toBeInstanceOf(Error);
   });
 

@@ -12,6 +12,7 @@ import {
   SESSION_TTL_MS,
   cookieIsSecure,
 } from '../lib/auth';
+import type { AttachmentInput } from '../lib/schemas';
 import type { TerminalTarget } from '../lib/terminal-tabs';
 import { BackendError, ReadOnlyError, type Backend } from '../lib/backend';
 import { clientIp, LoginLimiter } from '../lib/login-limiter';
@@ -128,16 +129,24 @@ export async function savePipeline(input: unknown): Promise<ActionResult> {
   });
 }
 
-export async function createRequest(text: string, projectId: number): Promise<ActionResult> {
-  return write(newRequestInput, { text, projectId }, async (d, backend) => {
+export async function createRequest(
+  text: string,
+  projectId: number,
+  attachments?: AttachmentInput[],
+): Promise<ActionResult> {
+  return write(newRequestInput, { text, projectId, attachments }, async (d, backend) => {
     await backend.createRequest(d);
     return 'Sent.';
   });
 }
 
-export async function messageSession(sessionId: number, text: string): Promise<ActionResult> {
-  return write(sessionMessageInput, { sessionId, text }, async (d, backend) => {
-    await backend.messageSession(d.sessionId, d.text);
+export async function messageSession(
+  sessionId: number,
+  text: string,
+  attachments?: AttachmentInput[],
+): Promise<ActionResult> {
+  return write(sessionMessageInput, { sessionId, text, attachments }, async (d, backend) => {
+    await backend.messageSession(d.sessionId, d.text, d.attachments);
     return 'Sent to the session.';
   });
 }

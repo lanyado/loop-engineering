@@ -349,13 +349,29 @@ export const stageTerminalInput = z.object({
   /** review, tests, qa or a custom stage's id; the server checks which. */
   stage: z.string().min(1).max(32),
 });
+/** Files attached to a prompt: bytes as base64, small enough for a screenshot or a document. */
+export const ATTACHMENT_LIMITS = { files: 5, bytes: 5 * 1024 * 1024 } as const;
+export const attachmentsInput = z
+  .array(
+    z.object({
+      name: z.string().trim().min(1).max(200),
+      data: z
+        .string()
+        .min(1)
+        .max(Math.ceil((ATTACHMENT_LIMITS.bytes * 4) / 3) + 4, 'A file is over 5 MB'),
+    }),
+  )
+  .max(ATTACHMENT_LIMITS.files, `Attach at most ${ATTACHMENT_LIMITS.files} files`);
+export type AttachmentInput = z.infer<typeof attachmentsInput>[number];
 export const newRequestInput = z.object({
   text: z.string().trim().min(1, 'Describe the task').max(LIMITS.request),
   projectId: z.number().int().positive(),
+  attachments: attachmentsInput.optional(),
 });
 export const sessionMessageInput = z.object({
   sessionId: z.number().int().positive(),
   text: z.string().trim().min(1, 'Write a message').max(LIMITS.request),
+  attachments: attachmentsInput.optional(),
 });
 export const telegramId = z.coerce
   .number({ message: 'A channel user ID is a number' })

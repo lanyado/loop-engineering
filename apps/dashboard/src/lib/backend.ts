@@ -1,5 +1,6 @@
 import type {
   AnswerResult,
+  AttachmentInput,
   ClaudeUsage,
   Project,
   PipelineUpdate,
@@ -29,9 +30,13 @@ export interface Backend {
   pullRequests(): Promise<PullRequest[]>;
   settings(): Promise<Settings>;
   updateSettings(patch: SettingsPatch): Promise<Settings>;
-  createRequest(input: { text: string; projectId: number }): Promise<TaskRequest>;
+  createRequest(input: {
+    text: string;
+    projectId: number;
+    attachments?: AttachmentInput[];
+  }): Promise<TaskRequest>;
   /** A message for one open session (the "+" on its node); the router delivers it there. */
-  messageSession(sessionId: number, text: string): Promise<TaskRequest>;
+  messageSession(sessionId: number, text: string, attachments?: AttachmentInput[]): Promise<TaskRequest>;
   /** Claude Code's usage limits; null until the status line has saved them. */
   usage(): Promise<ClaudeUsage | null>;
   /** Since when the loop is paused because GitHub is unreachable (ISO); null while it is online. */

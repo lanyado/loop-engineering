@@ -2049,6 +2049,30 @@ button.node-plus:hover:not(:disabled) {
   align-items: center;
   gap: var(--s-2) var(--s-3);
 }
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  max-width: 240px;
+  padding: 0 var(--s-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-sm);
+}
+.attachment > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .project > .composer {
   margin-bottom: var(--s-4);
 }

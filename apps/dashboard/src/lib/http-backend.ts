@@ -1,6 +1,6 @@
 import type * as z from 'zod';
 import { BackendError, type Backend } from './backend';
-import { responses, type PipelineUpdate, type Rigor } from './schemas';
+import { responses, type AttachmentInput, type PipelineUpdate, type Rigor } from './schemas';
 
 export interface HttpBackendOptions {
   /** e.g. https://loop.example.com (no trailing /api). */
@@ -107,12 +107,13 @@ export class HttpBackend implements Backend {
     return (await this.send('PATCH', '/settings', patch, responses.settings)).settings;
   }
 
-  async createRequest(input: { text: string; projectId: number }) {
+  async createRequest(input: { text: string; projectId: number; attachments?: AttachmentInput[] }) {
     return (await this.send('POST', '/requests', input, responses.request)).request;
   }
 
-  async messageSession(sessionId: number, text: string) {
-    return (await this.send('POST', '/requests', { text, sessionId }, responses.request)).request;
+  async messageSession(sessionId: number, text: string, attachments?: AttachmentInput[]) {
+    return (await this.send('POST', '/requests', { text, sessionId, attachments }, responses.request))
+      .request;
   }
 
   async usage() {

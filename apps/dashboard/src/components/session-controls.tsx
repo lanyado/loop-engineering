@@ -10,6 +10,8 @@ import {
   openTerminal,
   type ActionResult,
 } from '../app/actions';
+import { attachProblem, readAttachments, type Picked } from '../lib/attachments';
+import type { AttachmentInput } from '../lib/schemas';
 import { OutsideClose } from './outside-close';
 import { StartingPipeline, startingAfter, visibleStarting, type Starting } from './starting-pipeline';
 
@@ -29,7 +31,7 @@ export function Composer({
   label: string;
   placeholder: string;
   submitLabel: string;
-  send: (text: string) => Promise<ActionResult>;
+  send: (text: string, attachments: AttachmentInput[]) => Promise<ActionResult>;
   onClose: () => void;
   /** Called with the text once it was sent successfully. */
   onSent?: (text: string) => void;
@@ -43,6 +45,20 @@ export function Composer({
   const [pending, start] = useTransition();
   const [text, setText] = useState('');
   const [result, setResult] = useState<ActionResult | null>(null);
+  const [picked, setPicked] = useState<Picked[]>([]);
+  const [problem, setProblem] = useState<string | null>(null);
+  const nextKey = useRef(0);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const addFiles = (files: File[]) => {
+    if (files.length === 0) return;
+    const why = attachProblem(
+      picked.map((p) => p.file),
+      files,
+    );
+    setProblem(why);
+    if (why) return;
+    setPicked((list) => [...list, ...files.map((file) => ({ file, key: nextKey.current++ }))]);
+  };
   const edit = (value: string) => {
     setText(value);
     if (draftRef) draftRef.current = value.trim() !== '';
@@ -55,10 +71,18 @@ export function Composer({
         e.preventDefault();
         if (readOnly || pending || text.trim() === '') return;
         start(async () => {
-          const r = await send(text);
+          let attachments: AttachmentInput[];
+          try {
+            attachments = await readAttachments(picked.map((p) => p.file));
+          } catch {
+            setResult({ ok: false, error: 'Could not read an attached file' });
+            return;
+          }
+          const r = await send(text, attachments);
           setResult(r);
           if (r.ok) {
             edit('');
+            setPicked([]);
             onSent?.(text);
           }
         });
@@ -76,6 +100,20 @@ export function Composer({
               e.currentTarget.form?.requestSubmit();
             }
           }}
+          onPaste={(e) => {
+            const files = [...e.clipboardData.files];
+            // Rich text copied from Excel or Word carries an image too: keep the text then.
+            if (files.length > 0 && !e.clipboardData.types.includes('text/plain')) {
+              e.preventDefault();
+              addFiles(files);
+            }
+          }}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            if (e.dataTransfer.files.length === 0) return;
+            e.preventDefault();
+            addFiles([...e.dataTransfer.files]);
+          }}
           rows={rows}
           maxLength={4000}
           placeholder={placeholder}
@@ -84,7 +122,48 @@ export function Composer({
           autoFocus
         />
       </label>
+      {picked.length > 0 && (
+        <ul className="attachments" data-testid="attachments">
+          {picked.map((p) => (
+            <li key={p.key} className="attachment">
+              <span title={p.file.name}>{p.file.name || 'pasted image'}</span>
+              <button
+                type="button"
+                className="ghost small"
+                aria-label={`Remove ${p.file.name}`}
+                onClick={() => {
+                  setPicked((list) => list.filter((x) => x.key !== p.key));
+                  setProblem(null);
+                }}
+              >
+                ×
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
       <span className="composer-actions">
+        <input
+          ref={fileInput}
+          type="file"
+          multiple
+          hidden
+          data-testid="attach-input"
+          onChange={(e) => {
+            addFiles([...(e.target.files ?? [])]);
+            e.target.value = '';
+          }}
+        />
+        <button
+          type="button"
+          className="ghost"
+          disabled={readOnly || pending}
+          onClick={() => fileInput.current?.click()}
+          title="Attach files, or paste or drop a screenshot into the box"
+          data-testid="attach-button"
+        >
+          📎 Attach
+        </button>
         <button type="submit" className="primary" disabled={readOnly || pending || text.trim() === ''}>
           {pending ? 'Sending…' : submitLabel}
           {!pending && (
@@ -96,6 +175,11 @@ export function Composer({
         <button type="button" className="ghost" onClick={onClose}>
           Close
         </button>
+        {problem && (
+          <span className="small error" role="alert">
+            {problem}
+          </span>
+        )}
         {result && (
           <span className={`small ${result.ok ? 'ok' : 'error'}`} role={result.ok ? 'status' : 'alert'}>
             {result.ok ? result.message : result.error}
@@ -152,7 +236,7 @@ export function SessionRowShell({
               label={`Message to “${title}”${paused ? ' (it is paused: sending resumes it)' : ''}`}
               placeholder="e.g. Also handle refunds"
               submitLabel="Send to session"
-              send={(text) => messageSession(sessionId, text)}
+              send={(text, files) => messageSession(sessionId, text, files)}
               onClose={() => setPanel(null)}
               readOnly={readOnly}
               testId="session-composer"
@@ -353,7 +437,7 @@ export function ProjectShell({
               label={`New session in ${projectName}`}
               placeholder="What should be done? e.g. Add a dark mode"
               submitLabel="Start session"
-              send={(text) => createRequest(text, projectId)}
+              send={(text, files) => createRequest(text, projectId, files)}
               onClose={() => setPanel(null)}
               onSent={started}
               readOnly={readOnly}
