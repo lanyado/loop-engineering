@@ -7,20 +7,20 @@ and the defaults in `packages/loop/src/engine.ts`. **Evidence** marks what the h
 
 ## What the history shows
 
-| Signal | Evidence |
-| --- | --- |
-| Review/QA jobs failing three times, then escalating to the human | PRs #30, #31, #32, #33, #35 on Oct 19 |
-| Long review ping-pong | #33 took 11 rounds (hit 10, human took over), #26 took 6, #32 took 6; one-round PRs (#25, #27, #40) were small and focused |
-| Provider rate limits cascading through free OpenCode models | Sessions 86, 87, 89 hopped `deepseek-flash` → `big-pickle` → `nemotron` in under a minute |
-| Network outages counted as failed attempts | Request #27 (Oct 21) |
-| CI failing on a test that asserted job order after the stage order changed | Request #23, `engine.test.ts` |
-| The loop's own pushes (tester's tests) restarting review | PR #21 "hit 5 rounds (new commits kept arriving)" |
+| Signal                                                                     | Evidence                                                                                                                   |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Review/QA jobs failing three times, then escalating to the human           | PRs #30, #31, #32, #33, #35 on Oct 19                                                                                      |
+| Long review ping-pong                                                      | #33 took 11 rounds (hit 10, human took over), #26 took 6, #32 took 6; one-round PRs (#25, #27, #40) were small and focused |
+| Provider rate limits cascading through free OpenCode models                | Sessions 86, 87, 89 hopped `deepseek-flash` → `big-pickle` → `nemotron` in under a minute                                  |
+| Network outages counted as failed attempts                                 | Request #27 (Oct 21)                                                                                                       |
+| CI failing on a test that asserted job order after the stage order changed | Request #23, `engine.test.ts`                                                                                              |
+| The loop's own pushes (tester's tests) restarting review                   | PR #21 "hit 5 rounds (new commits kept arriving)"                                                                          |
 
 ## Prompt changes
 
 1. **Review: report everything in one pass.** Add to `review.md`: "List every blocking issue in this
    round. Do not hold issues back for later rounds, and do not raise new blocking issues about code
-   that was unchanged since the last round." *Why (judgment):* #33 and #26 look like drip-fed findings.
+   that was unchanged since the last round." _Why (judgment):_ #33 and #26 look like drip-fed findings.
 2. **Review: define "blocking" narrowly.** Blocking = wrong behaviour, a missed requirement, a
    security flaw, or a missing test for new behaviour. Naming, structure and "could also" ideas are
    Optional. Ask for a `file:line` and a concrete failure scenario for every blocking item, and drop
