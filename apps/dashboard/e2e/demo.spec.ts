@@ -451,35 +451,35 @@ test('the theme switch works in read-only demo mode and survives a reload', asyn
   await expect.poll(themeCookies).toMatchObject([{ value: 'light' }]);
 });
 
-test('the pencil edits one example project in place; Save and Discard each ask first, and demo data cannot be saved', async ({
+test('the pencil edits the shared pipeline on an example session; Save and Discard each ask first, and demo data cannot be saved', async ({
   page,
 }, info) => {
   // Still items: the wiggle is off with reduced motion, so clicks land without waiting for it.
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await open(page);
-  await page.getByRole('link', { name: 'Edit the dashboard' }).click();
+  await page.getByRole('link', { name: 'Edit the pipelines' }).click();
   const editor = page.getByTestId('editor');
   await expect(editor).toBeVisible();
-  // No help text, and the Planner node carries none of its buttons here.
-  await expect(editor.getByText('An example project with your layout')).toHaveCount(0);
+  // A tab for the shared pipeline, then one per project; the shared one first.
+  const tabs = editor.getByTestId('editor-tab');
+  await expect(tabs).toHaveText(['Shared', 'shop', 'blog', 'infra', 'resume']);
+  await expect(tabs.first()).toHaveAttribute('aria-current', 'page');
+  await expect(editor.getByTestId('pipeline-scope')).toContainText(
+    'The shared pipeline: blog, infra, resume run it',
+  );
+  // Only the pipeline changes here: the top bar, the run time, the PR cost and the rest are not editable.
+  await expect(editor.locator('.topbar [data-testid="editable-item"]')).toHaveCount(0);
+  await expect(editor.getByRole('button', { name: 'Remove Weekly limit' })).toHaveCount(0);
+  await expect(editor.getByRole('button', { name: 'Remove PR cost and tokens' })).toHaveCount(0);
+  // The Planner node carries none of its buttons here.
   await expect(editor.getByTestId('session-plus')).toHaveCount(0);
-  // One example project, and nothing to save yet: Discard just leaves.
+  // One example session, and nothing to save yet: Discard just leaves.
   await expect(editor.getByTestId('project')).toHaveCount(1);
+  await expect(editor.getByTestId('session-row')).toHaveCount(1);
   await expect(editor.getByTestId('editor-save')).toBeDisabled();
   await editor.getByTestId('editor-discard').click();
   await expect(page).toHaveURL(/\/$/);
-  await page.getByRole('link', { name: 'Edit the dashboard' }).click();
-
-  // Top bar: the weekly limit goes, and stays in place faded, with a "+" that brings it back.
-  await editor.getByRole('button', { name: 'Remove Weekly limit' }).click();
-  await expect(editor.locator('[data-testid="ghost-item"][data-item="weekly"]')).toHaveCount(1);
-  await editor.getByRole('button', { name: 'Add Weekly limit' }).click();
-  await expect(editor.locator('[data-testid="editable-item"][data-item="weekly"]')).toHaveCount(1);
-  await editor.getByRole('button', { name: 'Remove Weekly limit' }).click();
-
-  // A part of the row: the PR's cost goes, faded where it was.
-  await editor.getByRole('button', { name: 'Remove PR cost and tokens' }).click();
-  await expect(editor.locator('[data-testid="ghost-item"][data-item="prMetrics"]')).toContainText('tokens');
+  await page.getByRole('link', { name: 'Edit the pipelines' }).click();
 
   // The pipeline is edited on the example's own lane. A removed check waits faded where it was.
   const steps = editor.getByTestId('lane').locator('.lane-step > [data-item]');
@@ -572,7 +572,9 @@ test('the pencil edits one example project in place; Save and Discard each ask f
 
   // Save asks first, and demo data cannot be applied; Keep editing goes back to the editor.
   await editor.getByTestId('editor-save').click();
-  await expect(page.getByTestId('confirm-dialog')).toContainText('Apply these changes to your dashboard?');
+  await expect(page.getByTestId('confirm-dialog')).toContainText(
+    'Apply these changes to the shared pipeline?',
+  );
   await expect(page.getByTestId('confirm-yes')).toBeDisabled();
   await page.getByRole('button', { name: 'Keep editing' }).click();
   await expect(page.getByTestId('confirm-dialog')).toHaveCount(0);
@@ -581,17 +583,70 @@ test('the pencil edits one example project in place; Save and Discard each ask f
   await expect(page.getByTestId('confirm-dialog')).toContainText('Discard your changes?');
   await page.getByTestId('confirm-yes').click();
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.locator('[data-testid="usage-meter"][data-window="Weekly"]')).toHaveCount(1);
   await expect(page.getByTestId('lane').first().locator('[data-testid="node"]').first()).toHaveAttribute(
     'data-stage',
     'tests',
   );
 });
 
+test("each project has its own tab: its own pipeline, the shared one until its first Save, or a folder's Planner", async ({
+  page,
+}, info) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/edit');
+  const editor = page.getByTestId('editor');
+  const tab = (name: string) => editor.getByTestId('editor-tab').filter({ hasText: new RegExp(`^${name}$`) });
+
+  // shop has a pipeline of its own; nothing to save until something changes.
+  await tab('shop').click();
+  await expect(page).toHaveURL(/\/edit\?project=1$/);
+  await expect(tab('shop')).toHaveAttribute('aria-current', 'page');
+  await expect(editor.getByTestId('pipeline-scope')).toHaveText(
+    "shop's own pipeline in /Users/demo/shop/.loop-engineering.",
+  );
+  await expect(editor.getByRole('heading', { name: 'shop' })).toBeVisible();
+  await expect(editor.getByTestId('editor-save')).toBeDisabled();
+  await editor.getByRole('button', { name: 'Remove Manual QA' }).click();
+  await expect(editor.getByTestId('editor-save')).toBeEnabled();
+  // Another tab while something changed asks first, and Discard goes there.
+  await tab('blog').click();
+  await expect(page.getByTestId('confirm-dialog')).toContainText("Nothing changes in shop's pipeline.");
+  await page.getByTestId('confirm-yes').click();
+  await expect(page).toHaveURL(/\/edit\?project=2$/);
+
+  // blog runs the shared pipeline: Save would give it its own copy, so it is on at once.
+  await expect(tab('blog')).toHaveClass(/on-shared/);
+  await expect(editor.getByTestId('pipeline-scope')).toContainText(
+    'blog runs the shared pipeline. Save gives it its own in /Users/demo/blog/.loop-engineering',
+  );
+  await expect(editor.getByTestId('editor-save')).toBeEnabled();
+  await editor.getByTestId('editor-save').click();
+  await expect(page.getByTestId('confirm-dialog')).toContainText(
+    "Apply these changes to blog's own new pipeline?",
+  );
+  await expect(page.getByTestId('confirm-yes')).toBeDisabled();
+  await page.getByRole('button', { name: 'Keep editing' }).click();
+  await snap(page, info, 'editor-project-tab');
+
+  // A folder project has no PRs: only its Planner, on a folder session with no lane.
+  await tab('resume').click();
+  await expect(editor.getByTestId('folder-note')).toBeVisible();
+  await expect(editor.getByTestId('lane')).toHaveCount(0);
+  await expect(editor.getByTestId('new-stage')).toHaveCount(0);
+  await expect(editor.getByTestId('no-review-warning')).toHaveCount(0);
+  await editor.getByRole('button', { name: 'Edit Planner' }).click();
+  await expect(page.getByLabel('Instructions')).toHaveValue(/ask the human with ask_human/);
+  await page.keyboard.press('Escape');
+
+  // An unknown project shows the shared tab.
+  await page.goto('/edit?project=999');
+  await expect(tab('Shared')).toHaveAttribute('aria-current', 'page');
+});
+
 test('with motion on, a drag moves each item once and lands where it is dropped', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await open(page);
-  await page.getByRole('link', { name: 'Edit the dashboard' }).click();
+  await page.getByRole('link', { name: 'Edit the pipelines' }).click();
   const editor = page.getByTestId('editor');
 
   /** Drags `from` to the point `to` in small steps, recording each order the row passes through. */
@@ -629,17 +684,6 @@ test('with motion on, a drag moves each item once and lands where it is dropped'
     return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
   };
 
-  // The top bar: the narrow Claude mark past the wide 5-hour meter's middle.
-  const top = () =>
-    editor
-      .locator('.topbar-items > [data-item]')
-      .evaluateAll((els) => els.map((e) => e.getAttribute('data-item')!));
-  const meter = await centre('.topbar-items > [data-item="fiveHour"]');
-  expect(await drag('.topbar-items', 'claude', { x: meter.x + 40, y: meter.y }, top)).toEqual([
-    'brand claude fiveHour weekly',
-    'brand fiveHour claude weekly',
-  ]);
-
   // The lane: QA to the first place, past two checks: two moves, and it lands first.
   const lane = () =>
     editor
@@ -652,25 +696,6 @@ test('with motion on, a drag moves each item once and lands where it is dropped'
     'qa tests review',
   ]);
   await expect(page.getByTestId('stage-sheet')).toHaveCount(0);
-
-  // On a phone the top bar wraps onto two lines: a drag across the lines lands once, without a loop.
-  await page.setViewportSize({ width: 390, height: 800 });
-  const weekly = await centre('.topbar-items > [data-item="weekly"]');
-  const brand = await centre('.topbar-items > [data-item="brand"]');
-  const wrapped = await drag('.topbar-items', 'weekly', { x: brand.x - 10, y: brand.y }, top);
-  expect(wrapped.at(-1)).toBe('weekly brand fiveHour claude');
-  expect(new Set(wrapped).size).toBe(wrapped.length); // never back to an order it had
-  expect(weekly.y).toBeGreaterThan(brand.y); // it did start on the second line
-  await expect(editor).toBeVisible();
-  // A small drag along the second line, and a slow sweep across it, leave the order alone; dropped on
-  // the right half of the first line, it goes last there (third), and never swaps back on the way.
-  const second = await centre('.topbar-items > [data-item="claude"]');
-  const along = await drag('.topbar-items', 'claude', { x: second.x + 10, y: second.y }, top);
-  expect(along).toEqual(['weekly brand fiveHour claude']);
-  const wide = await centre('.topbar-items > [data-item="fiveHour"]');
-  const across = await drag('.topbar-items', 'claude', { x: wide.x + wide.x / 3, y: wide.y }, top);
-  expect(new Set(across).size).toBe(across.length);
-  await page.setViewportSize({ width: 1280, height: 800 });
 
   // Escape mid-drag puts it back.
   const b = (await editor.locator('.lane-step > [data-item="qa"]').boundingBox())!;

@@ -1,8 +1,10 @@
 import { newestFinishedFirst } from './format';
 import type { PipelineView, PullRequest, Question, TreeProject, TreeSession } from './schemas';
 
-/** What the board draws lanes from: the pipeline and its stages. */
-export type BoardPipeline = Pick<PipelineView, 'pipeline' | 'stages'>;
+/** What the board draws a project's lanes from: its pipeline and stages. */
+export type ProjectPipeline = Pick<PipelineView, 'pipeline' | 'stages'>;
+/** The shared pipeline, and the projects that have their own (by id): the others run the shared one. */
+export type BoardPipeline = ProjectPipeline & Pick<PipelineView, 'projects'>;
 
 /*
  * The one-screen board: every project, and in it every live session as a pipeline read left to right
@@ -144,7 +146,7 @@ const nodeOf = (pr: PullRequest) => (pr.stage === 'check' ? (pr.loopState.check 
  */
 export function laneOrder(
   project: { autoMerge: boolean },
-  view: BoardPipeline,
+  view: ProjectPipeline,
   pr: PullRequest | null,
 ): string[] {
   // A check with no stage file stays in: the loop holds PRs there until the file is back.
@@ -198,7 +200,7 @@ function loopQuestionNode(kind: string, pr: PullRequest): string {
 
 function lane(
   project: TreeProject,
-  view: BoardPipeline,
+  view: ProjectPipeline,
   pr: PullRequest | null,
   loopQuestion?: Question,
 ): Lane {
@@ -276,7 +278,7 @@ export function buildBoard(
   tree: TreeProject[],
   prs: PullRequest[],
   pending: Question[],
-  view: BoardPipeline,
+  pipelines: BoardPipeline,
 ): Board {
   const pendingById = new Map(pending.map((q) => [q.id, q]));
   // A loop question names its PR (loopState.question); it goes on that PR's lane, not the builder.
@@ -290,6 +292,7 @@ export function buildBoard(
   const placed = new Set<number>();
 
   const projects = tree.map((project): ProjectBoard => {
+    const view = pipelines.projects?.[project.id] ?? pipelines;
     const projectPrs = prs.filter((pr) => pr.projectId === project.id);
     const rows: Row[] = [];
     const finished: TreeSession[] = [];
@@ -377,4 +380,19 @@ export function buildBoard(
   const order = new Map(projects.map((p, i) => [p.project.id, i]));
   projects.sort((a, b) => rank(a) - rank(b) || order.get(a.project.id)! - order.get(b.project.id)!);
   return { projects, unplaced };
+}
+
+/**
+ * The pipeline.json files the PR loop cannot read, where the board's projects run them: each
+ * project's own, and the shared one while a project runs it. The loop waits for their PRs.
+ */
+export function pipelineErrors(board: Board, view: BoardPipeline): string[] {
+  const own = view.projects ?? {};
+  const projects = board.projects.map((p) => p.project);
+  const mine = projects.flatMap((p) => {
+    const error = own[p.id]?.pipeline.error;
+    return error ? [`${p.name}'s ${error}`] : [];
+  });
+  const shared = view.pipeline.error;
+  return shared && projects.some((p) => !own[p.id]) ? [...mine, shared] : mine;
 }

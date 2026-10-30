@@ -1,6 +1,5 @@
 import Link from 'next/link';
 import { formatAgo, formatDuration, usageTone } from '../lib/format';
-import type { TopbarItem as TopbarItemName } from '../lib/layout';
 import type { ClaudeUsage, UsageWindow } from '../lib/schemas';
 import { Logo } from './logo';
 
@@ -57,32 +56,16 @@ function Meter({ label, window, now }: { label: string; window: UsageWindow | nu
   );
 }
 
-/** One top bar item (lib/layout.ts); the usage items need Claude's limits, captured or not. */
-export function TopbarItem({
-  item,
+/** One usage limit; a note while none were captured yet. */
+function Limit({
+  window,
   usage,
   now,
-  preview = false,
 }: {
-  item: TopbarItemName;
+  window: 'fiveHour' | 'weekly';
   usage: ClaudeUsage | null;
   now: number;
-  /** In the editor: the logo is not a link that would leave it. */
-  preview?: boolean;
 }) {
-  if (item === 'brand')
-    return preview ? (
-      <span className="brand">
-        <Logo />
-        Loop
-      </span>
-    ) : (
-      <Link href="/" className="brand">
-        <Logo />
-        Loop
-      </Link>
-    );
-  if (item === 'claude') return <ClaudeMark />;
   const captured = usage && (usage.fiveHour || usage.sevenDay);
   if (!captured)
     return (
@@ -91,34 +74,29 @@ export function TopbarItem({
         data-testid="usage-missing"
         title="Pipe your status line JSON into scripts/capture-claude-usage.sh (see README)."
       >
-        {item === 'fiveHour' ? '5-hour' : 'Weekly'}: not captured yet
+        {window === 'fiveHour' ? '5-hour' : 'Weekly'}: not captured yet
       </span>
     );
-  return item === 'fiveHour' ? (
+  return window === 'fiveHour' ? (
     <Meter label="5-hour" window={usage.fiveHour} now={now} />
   ) : (
     <Meter label="Weekly" window={usage.sevenDay} now={now} />
   );
 }
 
-/** The top bar's items in the saved order, then a note when the limits are old. */
-export function TopbarItems({
-  items,
-  usage,
-  now,
-}: {
-  items: TopbarItemName[];
-  usage: ClaudeUsage | null;
-  now: number;
-}) {
+/** The top bar: the logo, the Claude mark and both usage limits, then a note when the limits are old. */
+export function TopbarItems({ usage, now }: { usage: ClaudeUsage | null; now: number }) {
   const stale = usage && now - Date.parse(usage.capturedAt) > STALE_MS;
-  const meters = items.includes('fiveHour') || items.includes('weekly');
   return (
     <div className="topbar-items" data-testid="topbar-items">
-      {items.map((item) => (
-        <TopbarItem key={item} item={item} usage={usage} now={now} />
-      ))}
-      {stale && meters && (
+      <Link href="/" className="brand">
+        <Logo />
+        Loop
+      </Link>
+      <ClaudeMark />
+      <Limit window="fiveHour" usage={usage} now={now} />
+      <Limit window="weekly" usage={usage} now={now} />
+      {stale && (
         <span className="usage-stale muted small" data-testid="usage-stale">
           as of {formatAgo(usage.capturedAt, now)}
         </span>

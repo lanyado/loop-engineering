@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { arrangeProjects, DEFAULT_LAYOUT, insert, move, parseLayout, toggle, withGhosts } from './layout';
+import { arrangeProjects, DEFAULT_LAYOUT, insert, move, parseLayout, withGhosts } from './layout';
 
 const project = (id: number, pending = 0) => ({ project: { id }, pending });
 
@@ -7,28 +7,26 @@ describe('parseLayout', () => {
   it('is the default for nothing, junk or a broken part, keeping the good parts', () => {
     expect(parseLayout(undefined)).toEqual(DEFAULT_LAYOUT);
     expect(parseLayout('x')).toEqual(DEFAULT_LAYOUT);
-    expect(DEFAULT_LAYOUT.topbar).toEqual(['brand', 'claude', 'fiveHour', 'weekly']);
     // One unknown item is dropped, not the whole list; duplicates once.
-    expect(parseLayout({ topbar: ['weekly', 'nope'], hiddenProjects: [3, 3, -1] })).toEqual({
-      ...DEFAULT_LAYOUT,
-      topbar: ['weekly'],
+    expect(parseLayout({ projectOrder: [2, 'x', 1], hiddenProjects: [3, 3, -1] })).toEqual({
+      projectOrder: [2, 1],
       hiddenProjects: [3],
     });
-    expect(parseLayout({ topbar: ['weekly', 'weekly', 'brand'] }).topbar).toEqual(['weekly', 'brand']);
-    expect(parseLayout({ topbar: [] }).topbar).toEqual([]); // everything hidden is a choice
+  });
+
+  it("drops what older dashboards saved there: the top bar's items and hidden row details", () => {
+    expect(parseLayout({ topbar: ['weekly'], hiddenDetails: ['prMetrics'], projectOrder: [4] })).toEqual({
+      projectOrder: [4],
+      hiddenProjects: [],
+    });
   });
 });
 
-describe('move and toggle', () => {
-  it('move keeps every item and ignores moves off the ends', () => {
+describe('move', () => {
+  it('keeps every item and ignores moves off the ends', () => {
     expect(move(['a', 'b', 'c'], 0, 2)).toEqual(['b', 'c', 'a']);
     expect(move(['a', 'b', 'c'], 2, 0)).toEqual(['c', 'a', 'b']);
     expect(move(['a', 'b'], 0, -1)).toEqual(['a', 'b']);
-  });
-
-  it('toggle adds or takes out', () => {
-    expect(toggle([1, 2], 2)).toEqual([1]);
-    expect(toggle([1], 2)).toEqual([1, 2]);
   });
 });
 

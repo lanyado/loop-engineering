@@ -8,7 +8,6 @@ import {
   type StageNode,
 } from '../lib/board';
 import { formatAgo, formatPrMetrics, humanize, pauseLabel, roundLabel, sessionRuntime } from '../lib/format';
-import { shows, type RowDetail } from '../lib/layout';
 import { JOB_STAGES, stageTarget, terminalTabs } from '../lib/terminal-tabs';
 import { agentModel, type ModelDefaults } from '../lib/models';
 import type { PullRequest, Question, TreeSession } from '../lib/schemas';
@@ -383,11 +382,10 @@ export interface LaneStep {
 }
 
 /**
- * The editor's hooks into a row: the parts the layout can hide get their "−" (or "+" when hidden),
- * and it lays out each lane's steps itself, so the pipeline is edited where it is drawn.
+ * The editor's hooks into a row: it lays out each lane's steps itself, so the pipeline is edited
+ * where it is drawn.
  */
 export interface RowEdit {
-  part: (detail: RowDetail, content: ReactNode) => ReactNode;
   /** The Planner node: tapping it edits its instructions. */
   planner: (node: ReactNode) => ReactNode;
   /** `node` draws a node as the board does, without its buttons; `detail` replaces its state word. */
@@ -399,7 +397,6 @@ function LaneView({
   first,
   session,
   models,
-  part,
   edit,
   readOnly,
 }: {
@@ -408,7 +405,6 @@ function LaneView({
   /** The session: its rigor (Light has its own round cap) and the models its agents use. */
   session: TreeSession;
   models: ModelDefaults | undefined;
-  part: RowEdit['part'];
   edit: RowEdit | undefined;
   readOnly: boolean;
 }) {
@@ -508,12 +504,9 @@ function LaneView({
             {pr.outcome === null && (
               <span className="muted">{roundLabel(pr.round, pr.loopState.maxRounds, rigor)}</span>
             )}
-            {part(
-              'prMetrics',
-              <span className="muted lane-metrics" data-testid="pr-metrics">
-                {formatPrMetrics(pr.metrics)}
-              </span>,
-            )}
+            <span className="muted lane-metrics" data-testid="pr-metrics">
+              {formatPrMetrics(pr.metrics)}
+            </span>
           </>
         )}
       </span>
@@ -654,7 +647,6 @@ function askerLabel(q: Question, row: Row): string {
 export function PipelineRow({
   row,
   folder,
-  hidden = [],
   readOnly,
   now,
   edit,
@@ -662,8 +654,6 @@ export function PipelineRow({
 }: {
   row: Row;
   folder: boolean;
-  /** Parts of the row the dashboard's layout hides. */
-  hidden?: readonly RowDetail[];
   readOnly: boolean;
   now: number;
   /** In the editor: a preview whose parts and pipeline are edited in place. */
@@ -671,8 +661,6 @@ export function PipelineRow({
   /** The defaults and the choices of the model captions; none (settings unreadable): no captions. */
   models?: ModelDefaults;
 }) {
-  const part: RowEdit['part'] = (detail, content) =>
-    edit ? edit.part(detail, content) : shows(hidden, detail) ? content : null;
   const { session, planner, builder } = row;
   const planning = planner.state !== 'planned';
   const builderNode: NodeState =
@@ -758,14 +746,12 @@ export function PipelineRow({
                 {humanize(session.status)}
                 {pause && ` · ${pause}`}
               </span>
-              {part('runtime', <span className="muted">{running}</span>)}
-              {session.subagents.length > 0 &&
-                part(
-                  'subagents',
-                  <span className="muted" data-testid="subagent-count">
-                    {session.subagents.length} subagent{session.subagents.length === 1 ? '' : 's'}
-                  </span>,
-                )}
+              <span className="muted">{running}</span>
+              {session.subagents.length > 0 && (
+                <span className="muted" data-testid="subagent-count">
+                  {session.subagents.length} subagent{session.subagents.length === 1 ? '' : 's'}
+                </span>
+              )}
             </div>
           </div>
           {/* Folder projects have no PRs, so nothing for the dial to set. */}
@@ -833,7 +819,6 @@ export function PipelineRow({
                     first={i === 0}
                     session={session}
                     models={models}
-                    part={part}
                     edit={edit}
                     readOnly={readOnly}
                   />
@@ -849,22 +834,20 @@ export function PipelineRow({
         </div>
       </div>
       {!edit && <TerminalDock tabs={terminalTabs(row)} readOnly={readOnly} />}
-      {row.olderPrs.length > 0 &&
-        part(
-          'earlierPrs',
-          <p className="muted small older-prs" data-testid="earlier-prs">
-            Earlier PRs:{' '}
-            {row.olderPrs.map((pr, i) => (
-              <span key={pr.id}>
-                {i > 0 && ', '}
-                <a href={pr.url} target="_blank" rel="noreferrer" className="mono">
-                  {pr.repo}#{pr.number}
-                </a>{' '}
-                ({humanize(pr.outcome ?? pr.stage)})
-              </span>
-            ))}
-          </p>,
-        )}
+      {row.olderPrs.length > 0 && (
+        <p className="muted small older-prs" data-testid="earlier-prs">
+          Earlier PRs:{' '}
+          {row.olderPrs.map((pr, i) => (
+            <span key={pr.id}>
+              {i > 0 && ', '}
+              <a href={pr.url} target="_blank" rel="noreferrer" className="mono">
+                {pr.repo}#{pr.number}
+              </a>{' '}
+              ({humanize(pr.outcome ?? pr.stage)})
+            </span>
+          ))}
+        </p>
+      )}
       {questions.length > 0 && (
         <div className="row-questions" inert={edit !== undefined}>
           {questions.map((q) => (

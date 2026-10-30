@@ -53,10 +53,16 @@ export interface Backend {
   webTerminal(target: { sessionId: number } | { prId: number; stage: string }): Promise<string>;
   /** Skips one check of the PR loop for one PR, or brings it back. */
   skipCheck(prId: number, check: string, skip: boolean): Promise<void>;
-  /** The PR loop's pipeline and its stages (stage files). */
-  pipeline(): Promise<PipelineView>;
-  /** Writes the pipeline and changed stage files (null: delete a custom stage, reset a built-in one). */
-  updatePipeline(update: PipelineUpdate): Promise<PipelineView>;
+  /**
+   * The PR loop's pipeline and its stages (stage files): the shared one with each project's own, or
+   * (with a project id) the one that project runs.
+   */
+  pipeline(projectId?: number): Promise<PipelineView>;
+  /**
+   * Writes the pipeline and changed stage files (null: delete a custom stage, reset a built-in one):
+   * the shared ones, or a project's own, which the first Save makes as a copy of the shared ones.
+   */
+  updatePipeline(update: PipelineUpdate, projectId?: number): Promise<PipelineView>;
   /**
    * A finished session's stored transcript (its past conversation, redacted), or null when nothing
    * is stored yet.

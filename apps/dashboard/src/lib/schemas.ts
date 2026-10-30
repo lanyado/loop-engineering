@@ -1,5 +1,5 @@
 import * as z from 'zod';
-import { layoutInput, layoutPatch } from './layout';
+import { layoutInput } from './layout';
 
 /*
  * Wire types for the always-on server's /api (apps/server). The dashboard is deployed on its own
@@ -260,6 +260,8 @@ export const stageChoicesSchema = z.object({
   reserved: z.array(z.string()),
 });
 export type StageChoices = z.infer<typeof stageChoicesSchema>;
+/** What the board draws a project's lanes from: its pipeline and stages. */
+export const boardPipelineSchema = z.object({ pipeline: pipelineSchema, stages: z.array(stageSchema) });
 export const pipelineViewSchema = z.object({
   pipeline: pipelineSchema,
   stages: z.array(stageSchema),
@@ -268,6 +270,16 @@ export const pipelineViewSchema = z.object({
   /** The Planner's instructions (planner.md), the same way; absent from older servers. */
   planner: stageSchema.optional(),
   choices: stageChoicesSchema,
+  /**
+   * The shared pipeline only: the pipeline of each project with its own folder, by project id (the
+   * others run the shared one). Absent from older servers, where every project shares it.
+   */
+  projects: z.record(z.string(), boardPipelineSchema).optional(),
+  /**
+   * One project's pipeline only: whether it has its own folder (else it runs the shared one), and
+   * where that folder is or would be.
+   */
+  project: z.object({ id: z.number(), own: z.boolean(), dir: z.string().nullable() }).optional(),
 });
 export type PipelineView = z.infer<typeof pipelineViewSchema>;
 
@@ -383,6 +395,9 @@ export const pipelineUpdateInput = z.object({
   stages: z.record(z.string().max(32), stageInput.nullable()).optional(),
 });
 export type PipelineUpdate = z.infer<typeof pipelineUpdateInput>;
-/** What the editor's Save sends: the layout, and the pipeline when it changed. */
-export const editsInput = z.object({ layout: layoutPatch, pipeline: pipelineUpdateInput.optional() });
+/** What the editor's Save sends: a project's pipeline, or the shared one (no project). */
+export const pipelineSaveInput = z.object({
+  projectId: z.number().int().positive().optional(),
+  update: pipelineUpdateInput,
+});
 export const hideProjectInput = z.object({ projectId: z.number().int().positive(), hidden: z.boolean() });

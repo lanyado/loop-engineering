@@ -53,6 +53,19 @@ describe('DemoBackend', () => {
     }
   });
 
+  it("serves the shared pipeline with shop's own, and each project's with where its folder is", async () => {
+    const shared = responses.pipeline.parse(await demo.pipeline());
+    expect(Object.keys(shared.projects ?? {})).toEqual(['1']);
+    expect(responses.pipeline.parse(await demo.pipeline(1)).project).toEqual({
+      id: 1,
+      own: true,
+      dir: '/Users/demo/shop/.loop-engineering',
+    });
+    const resume = await demo.pipeline(4);
+    expect(resume.project).toEqual({ id: 4, own: false, dir: '/Users/demo/resume/.loop-engineering' });
+    expect(resume).not.toHaveProperty('projects');
+  });
+
   it('refuses every write', () => {
     expect(() => demo.answer()).toThrow(ReadOnlyError);
     expect(() => demo.updateProject()).toThrow(ReadOnlyError);

@@ -73,12 +73,14 @@ Then press **+ Session** on the project, type what you want done, and watch the 
 
 ## Settings
 
-| What                                                            | Where                                             |
-| --------------------------------------------------------------- | ------------------------------------------------- |
-| Top bar items, pipeline stages and their prompts, row details   | Dashboard, the pencil in the top bar              |
-| Session model, fallback model, Claude Code / OpenCode on or off | Dashboard, the gear in the top bar                |
-| Auto-merge, order, hiding (per project)                         | Dashboard, the slider icon on a project           |
-| PR loop, ports, worktrees folder, job limits, providers         | `.env` in the repo root, then restart `npm start` |
+| What                                                                   | Where                                                     |
+| ---------------------------------------------------------------------- | --------------------------------------------------------- |
+| Pipeline stages, their order and their prompts (shared or per project) | Dashboard, the pencil in the top bar: one tab per project |
+| Session model, fallback model, Claude Code / OpenCode on or off        | Dashboard, the gear in the top bar                        |
+| Auto-merge, order, hiding (per project)                                | Dashboard, the slider icon on a project                   |
+| PR loop, ports, worktrees folder, job limits, providers                | `.env` in the repo root, then restart `npm start`         |
+
+**A pipeline per project.** Every project runs the shared pipeline until it has its own. Run `loop init` in a project's folder (once: `npm link` in this repo puts `loop` on your PATH; or `npm run loop -- init <path>` from here) and the project gets a `.loop-engineering/` folder there, a copy of the shared pipeline, with its own tab in the pencil. A folder that isn't a project yet is added first. Saving on a project's tab does the same. Edit its stages, their order and their prompts there or by hand; delete the folder to go back to the shared pipeline ([details](docs/reference.md#a-pipeline-per-project)).
 
 These are the `.env` values you're most likely to change. Everything else has a sensible default and is documented in [`.env.example`](.env.example).
 

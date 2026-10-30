@@ -43,8 +43,17 @@ export class DemoBackend implements Backend {
     return Promise.resolve(this.data.usage);
   }
 
-  pipeline() {
-    return Promise.resolve(this.data.pipeline);
+  pipeline(projectId?: number) {
+    const { pipeline, tree } = this.data;
+    if (projectId === undefined) return Promise.resolve(pipeline);
+    const { projects = {}, ...shared } = pipeline;
+    const project = tree.find((p) => p.id === projectId);
+    const home = project && (project.folderPath ?? `/Users/demo/${project.name}`);
+    return Promise.resolve({
+      ...shared,
+      ...projects[projectId],
+      project: { id: projectId, own: projectId in projects, dir: home ? `${home}/.loop-engineering` : null },
+    });
   }
 
   offlineSince() {
