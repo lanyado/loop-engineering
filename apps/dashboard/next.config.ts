@@ -4,6 +4,8 @@ const config: NextConfig = {
   // The build type-checks app code only; tests and e2e specs are checked by `npm run typecheck`.
   typescript: { tsconfigPath: 'tsconfig.next.json' },
   poweredByHeader: false,
+  // Prompts can carry attached files (up to 5 x 5 MB, sent as base64 in the action call).
+  experimental: { serverActions: { bodySizeLimit: '40mb' } },
   // The old tabs are one screen now (the board at /); keep their links working.
   redirects: () =>
     Promise.resolve(

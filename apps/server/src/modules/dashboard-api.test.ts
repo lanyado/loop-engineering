@@ -668,6 +668,22 @@ describe('requests', () => {
     expect((await call('GET', `/requests?projectId=${shop.id}`)).json.requests).toHaveLength(2);
   });
 
+  it('saves attached files and names their paths in the task text', async () => {
+    const { shop } = seed();
+    const data = Buffer.from('fake png').toString('base64');
+    const res = await call('POST', '/requests', {
+      text: 'See the screenshot',
+      projectId: shop.id,
+      attachments: [{ name: 'shot.png', data }],
+    });
+    expect(res.status).toBe(201);
+    expect(res.json.request.text).toMatch(/^See the screenshot\n\nAttached files[^]*- \/.*shot\.png$/);
+    const tooMany = Array.from({ length: 6 }, () => ({ name: 'a.txt', data }));
+    expect(
+      (await call('POST', '/requests', { text: 'x', projectId: shop.id, attachments: tooMany })).status,
+    ).toBe(400);
+  });
+
   it('announces every task, and refuses one that names neither a project nor a session', async () => {
     seed();
     const events: { type: string }[] = [];

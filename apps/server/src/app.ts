@@ -50,7 +50,13 @@ export function createApp(ctx: ServerContext, options: AppOptions): Hono {
   api.use('*', bearerAuth({ token: ctx.config.dashboardToken }));
   // Stage prompts are the one large body: PUT /pipeline has its own limit (modules/pipeline.ts).
   const pipelinePut = (c: Context) => c.req.method === 'PUT' && c.req.path === `/api${PIPELINE_PATH}`;
-  api.use('*', except(pipelinePut, bodyLimit({ maxSize: 64 * 1024 })));
+  // POST /requests may carry attached files (base64), so it gets room for the most it accepts.
+  const requestPost = (c: Context) => c.req.method === 'POST' && c.req.path === '/api/requests';
+  api.use(
+    '*',
+    except((c) => pipelinePut(c) || requestPost(c), bodyLimit({ maxSize: 64 * 1024 })),
+  );
+  api.use('/requests', bodyLimit({ maxSize: 40 * 1024 * 1024 }));
   api.route('/', questionRoutes(ctx));
   api.route('/', eventRoutes(ctx, options.sseKeepAliveMs));
   for (const module of options.modules) module.api?.(api, ctx);

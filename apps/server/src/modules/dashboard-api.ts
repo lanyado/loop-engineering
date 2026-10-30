@@ -26,6 +26,7 @@ import * as z from 'zod';
 import type { ServerContext, ServerModule } from '../context.js';
 import { REPO_ROOT } from '../env.js';
 import { idParam as id } from '../ids.js';
+import { attachments, saveAttachments, uploadsRoot } from './attachments.js';
 
 /**
  * The dashboard's read/write API, mounted under the authenticated /api (DASHBOARD_TOKEN):
@@ -195,6 +196,7 @@ const newRequest = z.strictObject({
   text: text(LIMITS.request),
   projectId: id.nullable().optional(),
   sessionId: id.optional(),
+  attachments: attachments.optional(),
 });
 
 const list = <T extends string>(values: readonly [T, ...T[]]) =>
@@ -445,6 +447,8 @@ export function dashboardRoutes(ctx: ServerContext, options: DashboardApiOptions
 
   api.post('/requests', async (c) => {
     const input = parse(newRequest, await body(c));
+    const withFiles = () =>
+      saveAttachments(uploadsRoot(ctx.config.dbPath), input.text, input.attachments ?? []);
     if (input.sessionId !== undefined) {
       const session = store.sessions.require(input.sessionId);
       if (input.projectId != null && input.projectId !== session.projectId)
@@ -453,7 +457,7 @@ export function dashboardRoutes(ctx: ServerContext, options: DashboardApiOptions
       if (session.status === 'ended')
         return c.json({ error: 'that session has ended; start a new session in its project instead' }, 409);
       const request = createDashboardRequest(ctx, {
-        text: input.text,
+        text: withFiles(),
         projectId: session.projectId,
         targetSessionId: session.id,
       });
@@ -463,7 +467,7 @@ export function dashboardRoutes(ctx: ServerContext, options: DashboardApiOptions
       return c.json({ error: 'tasks cannot target the project reserved for routing questions' }, 400);
     }
     if (input.projectId == null) throw new ValidationError('a task needs a projectId or a sessionId');
-    const request = createDashboardRequest(ctx, { text: input.text, projectId: input.projectId });
+    const request = createDashboardRequest(ctx, { text: withFiles(), projectId: input.projectId });
     return c.json({ request }, 201);
   });
 
