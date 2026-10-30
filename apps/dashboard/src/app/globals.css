@@ -43,8 +43,6 @@
   --rigor-light: light-dark(#15803d, #22c55e);
   --rigor-standard: light-dark(#0891b2, #22d3ee);
   --rigor-thorough: light-dark(#7c3aed, #a78bfa);
-  --rigor-bolt: light-dark(#d97706, #fbbf24);
-  --rigor-off: light-dark(#e4e7ec, #374050);
 
   /* Type scale (1.2 ratio around a 16px body). */
   --font: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
@@ -1414,10 +1412,7 @@ button.icon-button,
   --c: var(--rigor-standard);
   position: relative;
   min-height: 0;
-  padding: 7px 14px 8px;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 5px;
+  padding: 7px 14px;
   border-radius: 16px;
   border: 1.5px solid transparent;
   background: transparent;
@@ -1477,55 +1472,6 @@ button.icon-button,
   background: transparent;
   border-color: transparent;
 }
-.rigor-icon {
-  width: 17px;
-  height: 17px;
-  flex: none;
-  color: var(--c);
-}
-.rigor-name {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-.rigor-meters {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-}
-.rigor-bolts {
-  display: inline-flex;
-  gap: 1px;
-}
-.rigor-bolts svg {
-  width: 9px;
-  height: 13px;
-  fill: var(--rigor-off);
-}
-.rigor-bolts svg.on {
-  fill: var(--rigor-bolt);
-}
-.rigor-dots {
-  display: inline-flex;
-  gap: 4px;
-}
-.rigor-dots i {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--rigor-off);
-}
-.rigor-dots i.on {
-  background: var(--text);
-}
-.rigor-axis {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--s-3);
-  padding: 0 var(--s-3);
-  font-size: 0.6875rem;
-  color: var(--muted);
-}
 .rigor-note {
   margin: 0;
   padding: 0 var(--s-2);
@@ -1533,19 +1479,6 @@ button.icon-button,
 @media (forced-colors: active) {
   .rigor-stop[aria-checked='true'] {
     outline: 2px solid CanvasText;
-  }
-  .rigor-meters {
-    forced-color-adjust: none;
-  }
-  .rigor-bolts svg,
-  .rigor-dots i {
-    fill: GrayText;
-    background: GrayText;
-  }
-  .rigor-bolts svg.on,
-  .rigor-dots i.on {
-    fill: CanvasText;
-    background: CanvasText;
   }
 }
 @media (pointer: coarse) {
@@ -1557,7 +1490,7 @@ button.icon-button,
   .rigor {
     flex-basis: 100%;
   }
-  /* Four stops with their meters do not fit a phone's width in a row: two by two, still in order. */
+  /* Four stops do not fit a phone's width in a row: two by two, still in order. */
   .rigor-track {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     border-radius: var(--radius-lg);
