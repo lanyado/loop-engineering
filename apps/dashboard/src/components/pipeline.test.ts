@@ -6,7 +6,7 @@ vi.mock('server-only', () => ({}));
 import { buildBoard } from '../lib/board';
 import { demoData } from '../lib/fixtures';
 import { modelDefaults } from '../lib/models';
-import { PipelineRow } from './pipeline';
+import { PipelineRow, stageChecksUrl } from './pipeline';
 
 /*
  * The send-back display: a stage sent work back to the builder, so its lane draws a dashed line
@@ -144,5 +144,20 @@ describe('the model captions on the agent nodes', () => {
     const html = renderRow(201, board(), { models });
     expect(html).toContain('opencode/glm-5.3-flash-free');
     expect(html).not.toContain('node-model-button');
+  });
+});
+
+describe('stageChecksUrl', () => {
+  const lane = (url: string) => ({ pr: { url } }) as never;
+  const node = (stage: string, state: string) => ({ stage, state }) as never;
+  it('links a started Tests stage to the PR checks', () => {
+    expect(stageChecksUrl(lane('https://github.com/o/r/pull/7'), node('tests', 'done'))).toBe(
+      'https://github.com/o/r/pull/7/checks',
+    );
+  });
+  it('has no link before the stage starts, for other stages, or off GitHub', () => {
+    expect(stageChecksUrl(lane('https://github.com/o/r/pull/7'), node('tests', 'todo'))).toBeNull();
+    expect(stageChecksUrl(lane('https://github.com/o/r/pull/7'), node('review', 'done'))).toBeNull();
+    expect(stageChecksUrl(lane('https://example.com/pull/7'), node('tests', 'done'))).toBeNull();
   });
 });

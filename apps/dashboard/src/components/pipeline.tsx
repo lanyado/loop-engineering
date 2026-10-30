@@ -352,22 +352,46 @@ function stageTerminal(lane: Lane, node: StageNode): TerminalTarget | null {
   return stageTarget(lane, node);
 }
 
+/** The Tests stage may run as a GitHub Action: link the PR's checks page once it has started. */
+export function stageChecksUrl(lane: Lane, node: StageNode): string | null {
+  if (!lane.pr || node.stage !== 'tests' || node.state === 'todo') return null;
+  return /^https:\/\/github\.com\//.test(lane.pr.url) ? `${lane.pr.url.replace(/\/$/, '')}/checks` : null;
+}
+
 /** A node that opens its terminal on double-click, with a ">_" button for it. */
 function WithTerminal({
   target,
+  checksUrl = null,
   readOnly,
   children,
 }: {
   target: TerminalTarget | null;
+  /** Where the stage's CI run is, for a stage with no terminal of its own (a GitHub Action). */
+  checksUrl?: string | null;
   readOnly: boolean;
   children: (button: ReactNode) => ReactNode;
 }) {
-  if (!target) return <>{children(null)}</>;
+  const checks = checksUrl && (
+    <a
+      className="node-checks"
+      href={checksUrl}
+      target="_blank"
+      rel="noreferrer"
+      aria-label="Open this PR's checks on GitHub"
+      title="Open this PR's checks on GitHub"
+      data-testid="stage-checks"
+      onDoubleClick={(e) => e.stopPropagation()}
+    >
+      ↗
+    </a>
+  );
+  if (!target) return <>{children(checks && <span className="node-actions">{checks}</span>)}</>;
   return (
     <DoubleClickTerminal target={target} readOnly={readOnly}>
       {children(
         <span className="node-actions">
           <TerminalButton target={target} readOnly={readOnly} />
+          {checks}
         </span>,
       )}
     </DoubleClickTerminal>
@@ -424,7 +448,11 @@ function LaneView({
     // Skip / Run again flips the node before the server answers (SkipState holds that until then).
     const skipFor = buttons && node.skippable ? pr : null;
     return (
-      <WithTerminal target={buttons ? stageTerminal(lane, node) : null} readOnly={readOnly}>
+      <WithTerminal
+        target={buttons ? stageTerminal(lane, node) : null}
+        checksUrl={buttons ? stageChecksUrl(lane, node) : null}
+        readOnly={readOnly}
+      >
         {(button) => {
           const drawn = (
             <Node
