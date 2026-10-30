@@ -31,6 +31,13 @@ export function Dialog({
       className="editor-sheet stack"
       aria-label={label}
       data-testid={testId}
+      onClick={(e) => {
+        // A click on the backdrop lands on the <dialog> itself, outside the sheet's box.
+        const r = e.currentTarget.getBoundingClientRect();
+        const outside =
+          e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+        if (e.target === e.currentTarget && outside) onClose();
+      }}
       onCancel={(e) => {
         e.preventDefault(); // Escape: the parent closes it, so its state stays the one truth
         onClose();

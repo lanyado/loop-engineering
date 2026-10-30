@@ -2,7 +2,7 @@
 
 import type { TerminalTarget } from '../lib/terminal-tabs';
 import { useRouter } from 'next/navigation';
-import { createContext, useContext, useEffect, useState, useTransition, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, useTransition, type ReactNode } from 'react';
 import {
   createRequest,
   messageSession,
@@ -10,6 +10,7 @@ import {
   openTerminal,
   type ActionResult,
 } from '../app/actions';
+import { OutsideClose } from './outside-close';
 import { StartingPipeline, startingAfter, visibleStarting, type Starting } from './starting-pipeline';
 
 /** A text box that sends one message, then clears; used for "+" on a session and on a project. */
@@ -23,6 +24,7 @@ export function Composer({
   readOnly,
   testId,
   rows = 3,
+  draftRef,
 }: {
   label: string;
   placeholder: string;
@@ -35,10 +37,16 @@ export function Composer({
   testId: string;
   /** Taller for a new session's brief: the prompt tends to be longer than a reply. */
   rows?: number;
+  /** Kept up to date with whether unsent text is typed, so an outside click can leave a draft alone. */
+  draftRef?: { current: boolean };
 }) {
   const [pending, start] = useTransition();
   const [text, setText] = useState('');
   const [result, setResult] = useState<ActionResult | null>(null);
+  const edit = (value: string) => {
+    setText(value);
+    if (draftRef) draftRef.current = value.trim() !== '';
+  };
   return (
     <form
       className="composer"
@@ -50,7 +58,7 @@ export function Composer({
           const r = await send(text);
           setResult(r);
           if (r.ok) {
-            setText('');
+            edit('');
             onSent?.(text);
           }
         });
@@ -60,7 +68,7 @@ export function Composer({
         <span>{label}</span>
         <textarea
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => edit(e.target.value)}
           onKeyDown={(e) => {
             // Cmd+Enter on a Mac, Ctrl+Enter elsewhere.
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing) {
@@ -129,23 +137,27 @@ export function SessionRowShell({
   children: ReactNode;
 }) {
   const [panel, setPanel] = useState<RowPanel>(null);
+  const draft = useRef(false);
   const show = (p: RowPanel) => setPanel((current) => (current === p ? null : p));
   return (
     <RowContext.Provider value={{ panel, show }}>
       <li className="session-row" data-testid="session-row" data-session-id={sessionId}>
         {children}
-        {panel === 'details' && details}
-        {panel === 'feedback' && feedback}
+        {panel === 'details' && <OutsideClose onClose={() => setPanel(null)}>{details}</OutsideClose>}
+        {panel === 'feedback' && <OutsideClose onClose={() => setPanel(null)}>{feedback}</OutsideClose>}
         {panel === 'message' && (
-          <Composer
-            label={`Message to “${title}”${paused ? ' (it is paused: sending resumes it)' : ''}`}
-            placeholder="e.g. Also handle refunds"
-            submitLabel="Send to session"
-            send={(text) => messageSession(sessionId, text)}
-            onClose={() => setPanel(null)}
-            readOnly={readOnly}
-            testId="session-composer"
-          />
+          <OutsideClose onClose={() => setPanel(null)} canClose={() => !draft.current}>
+            <Composer
+              draftRef={draft}
+              label={`Message to “${title}”${paused ? ' (it is paused: sending resumes it)' : ''}`}
+              placeholder="e.g. Also handle refunds"
+              submitLabel="Send to session"
+              send={(text) => messageSession(sessionId, text)}
+              onClose={() => setPanel(null)}
+              readOnly={readOnly}
+              testId="session-composer"
+            />
+          </OutsideClose>
         )}
       </li>
     </RowContext.Provider>
@@ -307,6 +319,7 @@ export function ProjectShell({
   const router = useRouter();
   const [panel, setPanel] = useState<ProjectPanel>(null);
   const [starting, setStarting] = useState<Starting[]>([]);
+  const draft = useRef(false);
   const show = (p: ProjectPanel) => setPanel((current) => (current === p ? null : p));
   const shown = visibleStarting(starting, rowCount);
 
@@ -334,19 +347,26 @@ export function ProjectShell({
       <section className="project" data-testid="project" data-project={projectName}>
         {header}
         {panel === 'new' && (
-          <Composer
-            label={`New session in ${projectName}`}
-            placeholder="What should be done? e.g. Add a dark mode"
-            submitLabel="Start session"
-            send={(text) => createRequest(text, projectId)}
-            onClose={() => setPanel(null)}
-            onSent={started}
-            readOnly={readOnly}
-            testId="project-composer"
-            rows={8}
-          />
+          <OutsideClose onClose={() => setPanel(null)} canClose={() => !draft.current}>
+            <Composer
+              draftRef={draft}
+              label={`New session in ${projectName}`}
+              placeholder="What should be done? e.g. Add a dark mode"
+              submitLabel="Start session"
+              send={(text) => createRequest(text, projectId)}
+              onClose={() => setPanel(null)}
+              onSent={started}
+              readOnly={readOnly}
+              testId="project-composer"
+              rows={8}
+            />
+          </OutsideClose>
         )}
-        {panel === 'settings' && <div className="project-settings-panel">{settings}</div>}
+        {panel === 'settings' && (
+          <OutsideClose onClose={() => setPanel(null)}>
+            <div className="project-settings-panel">{settings}</div>
+          </OutsideClose>
+        )}
         {shown.length > 0 && (
           <ul className="rows starting-rows">
             {shown.map((s) => (
@@ -372,7 +392,7 @@ export function ProjectButtons({ projectName }: { projectName: string }) {
         onClick={() => show('new')}
         data-testid="project-plus"
       >
-        + Session
+        {panel === 'new' ? '− Session' : '+ Session'}
       </button>
       <button
         type="button"
