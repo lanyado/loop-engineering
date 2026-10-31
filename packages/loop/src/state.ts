@@ -26,6 +26,8 @@ export interface Feedback {
   sentAt: string | null;
   /** Times the builder was resumed with it because its agent had exited (see MAX_BUILDER_RESUMES). */
   resumes?: number;
+  /** Ticks on which a running builder did not take it (see MAX_SEND_FAILURES). */
+  sendFailures?: number;
 }
 
 export type QuestionKind = 'approval' | 'escalation' | 'deploy_timeout' | 'revert_failed';

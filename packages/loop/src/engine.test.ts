@@ -300,9 +300,41 @@ describe('review loop', () => {
       await h.engine.tick();
       await agentExits(h, session.id);
       vi.spyOn(h.runner, 'resume').mockRejectedValue(new Error('tmux: no server running'));
-      for (let i = 0; i < 4; i++) await h.engine.tick();
+      await h.engine.tick();
+      expect(h.pr().stage).toBe('review'); // one failure is one try, not the whole budget in one tick
+      expect(loopState(h.pr()).feedback).toMatchObject({ resumes: 1 });
+      for (let i = 0; i < 3; i++) await h.engine.tick();
       expect(h.pr().stage).toBe('escalated');
       expect(h.asked()[0]?.text).toMatch(/keeps exiting/);
+    });
+
+    it('an OpenCode builder is resumed too, in a fresh conversation', async () => {
+      const h = harness();
+      h.launcher.on('tests', testsPass()).on('review', blocking('fix it'));
+      const { session } = await h.builderWithPr();
+      await h.engine.tick();
+      h.store.sessions.update(session.id, { provider: 'opencode', model: 'opencode/some-model' });
+      await agentExits(h, session.id);
+      const resume = vi.spyOn(h.runner, 'resume');
+      await h.engine.tick();
+      expect(resume).toHaveBeenCalledWith(session.id, expect.objectContaining({ fresh: true }));
+      expect(h.store.sessions.require(session.id)).toMatchObject({ status: 'active' });
+      expect(h.sent).toHaveLength(2);
+    });
+
+    it('a running builder that never takes the feedback goes to the human', async () => {
+      const h = harness();
+      h.launcher.on('tests', testsPass()).on('review', blocking('fix it'));
+      const { session } = await h.builderWithPr();
+      // Stuck at a dialog: no input box, so nothing can be typed.
+      h.tmux.windows.get(h.store.sessions.require(session.id).tmuxTarget!)!.output =
+        ' Do you want to proceed?\n ❯ 1. Yes';
+      await h.engine.tick();
+      expect(h.pr().stage).toBe('review');
+      for (let i = 0; i < 19; i++) await h.engine.tick();
+      expect(h.sent).toHaveLength(0);
+      expect(h.pr().stage).toBe('escalated');
+      expect(h.asked()[0]?.text).toMatch(/does not take messages/);
     });
 
     it('is left alone when the human paused it', async () => {

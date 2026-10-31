@@ -738,6 +738,35 @@ describe('sendToSession', () => {
     expect(w.keys).toBe('\n');
   });
 
+  it('types the sentence even when the box holds a pasted draft, which is not its text', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    const w = claudeTakes(h, s.tmuxTarget);
+    w.output = claudePane('[Pasted text #1 +4 lines]');
+    await h.runner.sendToSession(s.id, 'fix x');
+    expect(w.keys).toBe('fix x\n');
+  });
+
+  it('does not count a box that vanished after typing as taken, and presses nothing into what replaced it', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    const w = h.window(s.tmuxTarget);
+    const send = h.tmux.sendKeys.bind(h.tmux);
+    vi.spyOn(h.tmux, 'sendKeys').mockImplementation(async (t, text, options) => {
+      await send(t, text, options);
+      w.output = ' Do you want to proceed?\n ❯ 1. Yes\n   2. No';
+    });
+    await expect(h.runner.sendToSession(s.id, 'fix x')).rejects.toThrow(/did not take the message/);
+    expect(w.keys).toBe('fix x\n');
+  });
+
+  it('refuses text too long for the input box check (it belongs in a file)', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    await expect(h.runner.sendToSession(s.id, 'x'.repeat(801))).rejects.toThrow(/over 800 characters/);
+    expect(h.window(s.tmuxTarget).keys).toBe('');
+  });
+
   it('types nothing while Claude shows no input box (still starting, or a dialog)', async () => {
     const h = harness();
     const s = await h.runner.startSession(h.shop.id, REQUEST);

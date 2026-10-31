@@ -20,8 +20,8 @@ const MAX_STATUS_LINES = 4;
 /** The box grows with the typed text; a region taller than this is not the box. */
 const MAX_BOX_LINES = 15;
 
-/** What Claude shows instead of a long paste (or of its start). */
-const PASTE_PLACEHOLDER = /\[Pasted text #\d+|paste again to expand/i;
+/** What Claude shows instead of a multi-line or long paste. */
+const PASTE_PLACEHOLDER = /\[Pasted text #\d+/;
 
 /** The text in Claude's input box, or null when the bottom of the pane is not Claude's input box. */
 export function inputBoxText(pane: string): string | null {
@@ -36,10 +36,16 @@ export function inputBoxText(pane: string): string | null {
   return box.join(' ').replace(PROMPT, '').replace(/\s+/g, ' ').trim();
 }
 
-/** Whether `typed` still sits unsubmitted in Claude's input box (wrapping and spacing ignored). */
+const bare = (s: string) => s.replace(/\s+/g, '');
+
+/** Whether the box shows `typed` itself (wrapping and spacing ignored). */
+export function inputBoxHasText(pane: string, typed: string): boolean {
+  const box = inputBoxText(pane);
+  return !!box && bare(box).includes(bare(typed));
+}
+
+/** Whether `typed`, just typed, may still sit unsubmitted in the box: itself, or folded as a paste. */
 export function inputBoxHolds(pane: string, typed: string): boolean {
   const box = inputBoxText(pane);
-  if (!box) return false;
-  const bare = (s: string) => s.replace(/\s+/g, '');
-  return PASTE_PLACEHOLDER.test(box) || bare(box).includes(bare(typed));
+  return !!box && (PASTE_PLACEHOLDER.test(box) || bare(box).includes(bare(typed)));
 }

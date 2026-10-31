@@ -64,12 +64,9 @@ describe('inputBoxHolds', () => {
     expect(inputBoxHolds('no box here', SENTENCE)).toBe(false);
   });
 
+  // Live Claude Code 2.1.316: while it works, a queued message leaves the box and this hint takes its place.
   it('reads a busy agent with a queued message as no longer holding it', () => {
     expect(inputBoxHolds(holding('Press up to edit queued messages'), SENTENCE)).toBe(false);
-  });
-
-  it('counts a long paste Claude folded as still pending', () => {
-    expect(inputBoxHolds(holding('…address it. (paste again to expand)'), SENTENCE)).toBe(true);
   });
 });
 

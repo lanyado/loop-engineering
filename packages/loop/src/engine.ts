@@ -320,6 +320,12 @@ const REVERT_OPTIONS = ['Retry', "I'll handle it"] as const;
 const MAX_TRANSITIONS = 25;
 /** Times a builder whose agent exited is resumed for one feedback before the human is asked. */
 const MAX_BUILDER_RESUMES = 3;
+/** Ticks a running builder may fail to take one feedback (no input box, never submitted) before the human is asked. */
+const MAX_SEND_FAILURES = 20;
+const feedbackFrom = (f: Feedback): Pick<Feedback, 'kind' | 'stage'> => ({
+  kind: f.kind,
+  ...(f.stage ? { stage: f.stage } : {}),
+});
 
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 const short = (sha: string | null | undefined) => (sha ?? '').slice(0, 7);
@@ -1177,7 +1183,6 @@ export class LoopEngine {
     if (!f) return false;
     if (gh.headRefOid !== f.sha) return this.restartChecks(c, `the builder pushed ${short(gh.headRefOid)}`);
     const session = c.pr.sessionId === null ? undefined : this.deps.store.sessions.get(c.pr.sessionId);
-    const from = { kind: f.kind, ...(f.stage ? { stage: f.stage } : {}) };
     if (!session || session.status === 'ended') {
       return this.escalate(
         c,
@@ -1185,19 +1190,13 @@ export class LoopEngine {
         f.items,
         false,
         {},
-        from,
+        feedbackFrom(f),
       );
     }
     const name = `pr${c.pr.id}-round${c.pr.round}-${f.stage ?? f.kind}.md`;
     const sentence = `New ${this.feedbackLabel(c, f)} for PR #${c.pr.number} is in .loop/${name}. Read it and address it.`;
-    // OpenCode agents that exit are resumed by the runner's monitor (with a fresh conversation when it
-    // rotates the model); resuming them here too would race it.
-    if (
-      session.status === 'paused' &&
-      session.pauseReason === 'agent_exited' &&
-      session.provider === 'claude'
-    ) {
-      return this.resumeBuilder(c, gh, f, session.id, name, sentence);
+    if (session.status === 'paused' && session.pauseReason === 'agent_exited') {
+      return this.resumeBuilder(c, gh, f, session, name, sentence);
     }
     if (f.sentAt) return false;
     try {
@@ -1208,6 +1207,20 @@ export class LoopEngine {
         `send-${c.pr.id}-${f.sha}`,
         `PR ${c.pr.repo}#${c.pr.number}: feedback waits for session ${session.id} (${errorMessage(err)})`,
       );
+      // A paused builder waits for its resume; a running one that never takes the message goes to the human.
+      if (session.status !== 'active') return false;
+      const sendFailures = (f.sendFailures ?? 0) + 1;
+      if (sendFailures >= MAX_SEND_FAILURES) {
+        return this.escalate(
+          c,
+          `PR #${c.pr.number} needs fixes but its builder does not take messages (${errorMessage(err)})`,
+          f.items,
+          false,
+          {},
+          feedbackFrom(f),
+        );
+      }
+      this.save(c, {}, { feedback: { ...f, sendFailures } });
       return false;
     }
     return this.save(c, {}, { feedback: { ...f, sentAt: this.iso() } });
@@ -1217,7 +1230,7 @@ export class LoopEngine {
     c: Ctx,
     gh: GhPr,
     f: Feedback,
-    sessionId: number,
+    session: Session,
     name: string,
     sentence: string,
   ): Promise<boolean> {
@@ -1229,28 +1242,32 @@ export class LoopEngine {
         f.items,
         false,
         {},
-        { kind: f.kind, ...(f.stage ? { stage: f.stage } : {}) },
+        feedbackFrom(f),
       );
     }
-    let resumed;
+    let resumed: Session;
     try {
-      resumed = await this.deps.runner.resume(sessionId, {
+      resumed = await this.deps.runner.resume(session.id, {
         ifReason: 'agent_exited',
         reason: `its agent exited while PR #${c.pr.number} waits for its fixes`,
         deliver: { name, content: this.feedbackFile(c, gh, f), sentence },
+        // OpenCode continues its last conversation, which may be the one that just failed (the runner's
+        // model rotation resumes fresh too): a new one gets the full state.
+        ...(session.provider === 'opencode' ? { fresh: true } : {}),
       });
     } catch (err) {
       // Counted like an exit, so a launch that keeps failing (tmux, a missing CLI) reaches the human.
       this.log(
-        `PR ${c.pr.repo}#${c.pr.number}: could not resume session ${sessionId} (${errorMessage(err)})`,
+        `PR ${c.pr.repo}#${c.pr.number}: could not resume session ${session.id} (${errorMessage(err)})`,
       );
-      return this.save(c, {}, { feedback: { ...f, resumes: resumes + 1 } });
+      this.save(c, {}, { feedback: { ...f, resumes: resumes + 1 } });
+      return false; // not progress: the next tick tries again
     }
     // Paused again for another reason meanwhile (the human, the usage limit): wait for that to clear.
     if (resumed.status !== 'active') return false;
     this.history(
       c,
-      `PR ${c.pr.repo}#${c.pr.number}: session ${sessionId}'s agent had exited before it fixed the ${this.feedbackLabel(c, f)}; resumed it with the feedback.`,
+      `PR ${c.pr.repo}#${c.pr.number}: session ${session.id}'s agent had exited before it fixed the ${this.feedbackLabel(c, f)}; resumed it with the feedback.`,
     );
     return this.save(c, {}, { feedback: { ...f, sentAt: this.iso(), resumes: resumes + 1 } });
   }
