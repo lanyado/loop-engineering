@@ -290,7 +290,19 @@ describe('review loop', () => {
       await agentExits(h, session.id);
       await h.engine.tick();
       expect(h.pr().stage).toBe('escalated');
-      expect(h.asked()[0]?.text).toMatch(/builder's agent exited 4 times/);
+      expect(h.asked()[0]?.text).toMatch(/builder's agent keeps exiting \(resumed 3 times\)/);
+    });
+
+    it('counts a resume that fails outright, so a broken launch reaches the human', async () => {
+      const h = harness();
+      h.launcher.on('tests', testsPass()).on('review', blocking('fix it'));
+      const { session } = await h.builderWithPr();
+      await h.engine.tick();
+      await agentExits(h, session.id);
+      vi.spyOn(h.runner, 'resume').mockRejectedValue(new Error('tmux: no server running'));
+      for (let i = 0; i < 4; i++) await h.engine.tick();
+      expect(h.pr().stage).toBe('escalated');
+      expect(h.asked()[0]?.text).toMatch(/keeps exiting/);
     });
 
     it('is left alone when the human paused it', async () => {

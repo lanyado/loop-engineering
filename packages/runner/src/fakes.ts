@@ -3,6 +3,11 @@ import type { Fs } from './drivers/fs.js';
 import type { GitDriver } from './drivers/git.js';
 import type { NewWindow, TmuxDriver, TmuxWindow } from './drivers/tmux.js';
 
+/** The bottom of an idle Claude Code screen: an empty input box. New fake windows start with it. */
+export const IDLE_CLAUDE_PANE = ['────────────────', '❯ ', '────────────────', '  ? for shortcuts'].join(
+  '\n',
+);
+
 export interface FakeWindow extends NewWindow {
   target: string;
   /** What capture() returns; set it to simulate agent output. */
@@ -20,7 +25,7 @@ export class FakeTmuxDriver implements TmuxDriver {
 
   newWindow(spec: NewWindow): Promise<string> {
     const target = `${spec.session}:@${this.nextId++}`;
-    this.windows.set(target, { ...spec, target, output: '', keys: '', dead: false });
+    this.windows.set(target, { ...spec, target, output: IDLE_CLAUDE_PANE, keys: '', dead: false });
     return Promise.resolve(target);
   }
 

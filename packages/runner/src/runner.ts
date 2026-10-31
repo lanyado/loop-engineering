@@ -40,7 +40,7 @@ import type { GitDriver } from './drivers/git.js';
 import type { TmuxDriver, TmuxWindow } from './drivers/tmux.js';
 import { sessionInstructions } from './instructions.js';
 import { renderLaunchScript, shellQuote } from './launch.js';
-import { inputBoxHolds } from './input-box.js';
+import { inputBoxHolds, inputBoxText } from './input-box.js';
 import { sanitizeLine } from './sanitize.js';
 import { detectTrustPrompt, TRUST_TAIL_LINES } from './trust-prompt.js';
 import { DEFAULT_TAIL_LINES, detectUsageLimit, USAGE_LIMIT_PATTERNS } from './usage-limit.js';
@@ -110,6 +110,8 @@ const RELAUNCH_MIN_GAP_MS = 60_000;
 /** After typing to a Claude agent: how long Claude gets to take the message, and how often Enter is retried. */
 const SUBMIT_CHECK_MS = 800;
 const SUBMIT_RETRIES = 3;
+/** How long a Claude agent (one just launched, or behind a dialog) gets to show its input box. */
+const INPUT_BOX_WAIT_MS = 30_000;
 
 export interface ResumeOptions {
   /** Only resume a session paused for this reason (an automatic resume never undoes a manual pause). */
@@ -533,26 +535,39 @@ export class SessionRunner {
       throw new ValidationError(`session ${sessionId} is ${s.status}; its agent is not running`);
     }
     if (!(await this.isAlive(s))) throw new ValidationError(`the agent of session ${sessionId} is gone`);
-    await this.deps.tmux.sendKeys(s.tmuxTarget, line);
-    if (s.provider === 'claude') await this.confirmSubmitted(s, line);
-    return s;
-  }
-
-  /**
-   * Claude can take the Enter typed right after the text as part of a paste, leaving the message in
-   * its input box (inputBoxHolds): press Enter again until the box lets go of it. Throws when it never
-   * does, so the caller keeps the message pending instead of counting it as delivered.
-   */
-  private async confirmSubmitted(s: Session, line: string): Promise<void> {
-    const target = s.tmuxTarget!;
+    if (s.provider !== 'claude') {
+      await this.deps.tmux.sendKeys(s.tmuxTarget, line);
+      return s;
+    }
+    // Claude: type only into its input box (not a dialog, not a screen still starting), never twice,
+    // and make sure the message leaves the box.
+    const target = s.tmuxTarget;
+    const pane = await this.waitForInputBox(s);
+    await this.deps.tmux.sendKeys(target, inputBoxHolds(pane, line) ? '' : line);
     for (let attempt = 0; attempt <= SUBMIT_RETRIES; attempt++) {
       await this.sleep(SUBMIT_CHECK_MS);
-      if (!inputBoxHolds(await this.deps.tmux.capture(target), line)) return;
+      // No box now: a dialog or Claude's answer took the screen, which only a submitted message does.
+      if (!inputBoxHolds(await this.deps.tmux.capture(target), line)) return s;
+      // Claude took the Enter typed with the text as part of a paste: press it on its own.
       if (attempt < SUBMIT_RETRIES) await this.deps.tmux.sendKeys(target, '', { enter: true });
     }
     throw new ValidationError(
       `the agent of session ${s.id} did not take the message (it is still in its input box)`,
     );
+  }
+
+  /** The pane once Claude shows its input box; throws, without typing anything, if it never does. */
+  private async waitForInputBox(s: Session): Promise<string> {
+    for (let waited = 0; ; waited += SUBMIT_CHECK_MS) {
+      const pane = await this.deps.tmux.capture(s.tmuxTarget!);
+      if (inputBoxText(pane) !== null) return pane;
+      if (waited >= INPUT_BOX_WAIT_MS) {
+        throw new ValidationError(
+          `the agent of session ${s.id} shows no input box (starting, or a dialog is open)`,
+        );
+      }
+      await this.sleep(SUBMIT_CHECK_MS);
+    }
   }
 
   /** Kills the agent and ends the session. Worktrees stay on disk; end() removes them. */

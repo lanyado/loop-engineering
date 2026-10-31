@@ -1177,17 +1177,26 @@ export class LoopEngine {
     if (!f) return false;
     if (gh.headRefOid !== f.sha) return this.restartChecks(c, `the builder pushed ${short(gh.headRefOid)}`);
     const session = c.pr.sessionId === null ? undefined : this.deps.store.sessions.get(c.pr.sessionId);
+    const from = { kind: f.kind, ...(f.stage ? { stage: f.stage } : {}) };
     if (!session || session.status === 'ended') {
       return this.escalate(
         c,
         `PR #${c.pr.number} needs fixes but its building session has ended`,
         f.items,
         false,
+        {},
+        from,
       );
     }
     const name = `pr${c.pr.id}-round${c.pr.round}-${f.stage ?? f.kind}.md`;
     const sentence = `New ${this.feedbackLabel(c, f)} for PR #${c.pr.number} is in .loop/${name}. Read it and address it.`;
-    if (session.status === 'paused' && session.pauseReason === 'agent_exited') {
+    // OpenCode agents that exit are resumed by the runner's monitor (with a fresh conversation when it
+    // rotates the model); resuming them here too would race it.
+    if (
+      session.status === 'paused' &&
+      session.pauseReason === 'agent_exited' &&
+      session.provider === 'claude'
+    ) {
       return this.resumeBuilder(c, gh, f, session.id, name, sentence);
     }
     if (f.sentAt) return false;
@@ -1216,9 +1225,11 @@ export class LoopEngine {
     if (resumes >= MAX_BUILDER_RESUMES) {
       return this.escalate(
         c,
-        `PR #${c.pr.number} needs fixes but its builder's agent exited ${resumes + 1} times`,
+        `PR #${c.pr.number} needs fixes but its builder's agent keeps exiting (resumed ${resumes} times)`,
         f.items,
         false,
+        {},
+        { kind: f.kind, ...(f.stage ? { stage: f.stage } : {}) },
       );
     }
     let resumed;
@@ -1229,12 +1240,11 @@ export class LoopEngine {
         deliver: { name, content: this.feedbackFile(c, gh, f), sentence },
       });
     } catch (err) {
-      if (!(err instanceof ValidationError)) throw err;
-      this.warnOnce(
-        `resume-${c.pr.id}-${f.sha}-${resumes}`,
+      // Counted like an exit, so a launch that keeps failing (tmux, a missing CLI) reaches the human.
+      this.log(
         `PR ${c.pr.repo}#${c.pr.number}: could not resume session ${sessionId} (${errorMessage(err)})`,
       );
-      return false;
+      return this.save(c, {}, { feedback: { ...f, resumes: resumes + 1 } });
     }
     // Paused again for another reason meanwhile (the human, the usage limit): wait for that to clear.
     if (resumed.status !== 'active') return false;

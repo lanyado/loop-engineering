@@ -40,7 +40,14 @@ describe('inputBoxHolds', () => {
   it('is true while the typed sentence sits in the box, wrapped or not', () => {
     expect(inputBoxHolds(holding(SENTENCE), SENTENCE)).toBe(true);
     expect(
-      inputBoxHolds(holding('New review feedback for PR #7 is in', '.loop/pr28-round1-review.md.'), SENTENCE),
+      inputBoxHolds(
+        holding(
+          'New review feedback for PR #7 is in',
+          '.loop/pr28-round1-review.md. Read it and',
+          'address it.',
+        ),
+        SENTENCE,
+      ),
     ).toBe(true);
   });
 
@@ -55,5 +62,38 @@ describe('inputBoxHolds', () => {
   it('is false for other text in the box, and for a pane with no box', () => {
     expect(inputBoxHolds(holding('something the human is typing'), SENTENCE)).toBe(false);
     expect(inputBoxHolds('no box here', SENTENCE)).toBe(false);
+  });
+
+  it('reads a busy agent with a queued message as no longer holding it', () => {
+    expect(inputBoxHolds(holding('Press up to edit queued messages'), SENTENCE)).toBe(false);
+  });
+
+  it('counts a long paste Claude folded as still pending', () => {
+    expect(inputBoxHolds(holding('…address it. (paste again to expand)'), SENTENCE)).toBe(true);
+  });
+});
+
+describe('what is not the input box', () => {
+  // Claude 2.1's permission dialog: a top rule and no closing one under it.
+  const DIALOG = [
+    '❯ ' + SENTENCE,
+    '───────────────────────────────',
+    '❯ old text',
+    '───────────────────────────────',
+    ' Bash command',
+    '   npm test',
+    ' Do you want to proceed?',
+    ' ❯ 1. Yes',
+    "   2. Yes, and don't ask again",
+    '   3. No, and tell Claude what to do differently (esc)',
+  ].join('\n');
+
+  it('a dialog under the last rules is not the box, so nothing is typed into it', () => {
+    expect(inputBoxText(DIALOG)).toBeNull();
+    expect(inputBoxHolds(DIALOG, SENTENCE)).toBe(false);
+  });
+
+  it('a region that does not start with the prompt mark is not the box', () => {
+    expect(inputBoxText(['──────', 'some output', '──────', 'status'].join('\n'))).toBeNull();
   });
 });

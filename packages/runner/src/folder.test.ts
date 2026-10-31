@@ -191,6 +191,7 @@ describe('folder checks at every launch, on a real disk', () => {
         tmux,
         agentCli: new DefaultAgentCli(),
         log: () => undefined,
+        sleep: () => Promise.resolve(),
       },
       {
         worktreesRoot: join(dir, 'wt'),
