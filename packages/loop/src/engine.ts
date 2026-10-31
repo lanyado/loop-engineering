@@ -1208,7 +1208,11 @@ export class LoopEngine {
         `PR ${c.pr.repo}#${c.pr.number}: feedback waits for session ${session.id} (${errorMessage(err)})`,
       );
       // A paused builder waits for its resume; a running one that never takes the message goes to the human.
-      if (session.status !== 'active') return false;
+      if (session.status !== 'active') {
+        // The failure clock only runs while the builder runs: a pause in between starts it over.
+        if (f.failingSince) this.save(c, {}, { feedback: { ...f, failingSince: undefined } });
+        return false;
+      }
       const failingSince = f.failingSince ?? this.iso();
       if (this.now() - Date.parse(failingSince) >= SEND_FAILING_MS) {
         return this.escalate(

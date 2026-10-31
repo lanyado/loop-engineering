@@ -341,6 +341,25 @@ describe('review loop', () => {
       expect(h.asked()[0]?.text).toMatch(/has not taken messages for 30 min/);
     });
 
+    it('starts the failure clock over after the builder was paused in between', async () => {
+      const h = harness();
+      h.launcher.on('tests', testsPass()).on('review', blocking('fix it'));
+      const { session } = await h.builderWithPr();
+      const target = h.store.sessions.require(session.id).tmuxTarget!;
+      h.tmux.windows.get(target)!.output = ' Do you want to proceed?\n ❯ 1. Yes';
+      await h.engine.tick();
+      expect(loopState(h.pr()).feedback?.failingSince).toBeDefined();
+      await h.runner.pause(session.id, 'usage_limit');
+      await h.engine.tick();
+      expect(loopState(h.pr()).feedback?.failingSince).toBeUndefined();
+      await h.runner.resume(session.id);
+      h.tmux.windows.get(h.store.sessions.require(session.id).tmuxTarget!)!.output =
+        ' Do you want to proceed?\n ❯ 1. Yes';
+      h.clock.advance(45 * 60_000);
+      await h.engine.tick();
+      expect(h.pr().stage).toBe('review');
+    });
+
     it('is left alone when the human paused it', async () => {
       const h = harness();
       h.launcher.on('tests', testsPass()).on('review', blocking('fix it'));
