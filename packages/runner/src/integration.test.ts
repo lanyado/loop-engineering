@@ -237,7 +237,15 @@ describe.skipIf(!hasTmux())('runner with real tmux (fake agents)', () => {
       const fakeClaude = join(root, 'fake-claude-folder.sh');
       await writeFile(
         fakeClaude,
-        ['#!/bin/sh', `pwd -P > '${cwdOut}'`, 'echo "FOLDER AGENT up"', 'exec sleep 300', ''].join('\n'),
+        [
+          '#!/bin/sh',
+          `pwd -P > '${cwdOut}'`,
+          'echo "FOLDER AGENT up"',
+          // Claude's empty input box, so the runner will type into it.
+          "printf '────────────\\n❯ \\n────────────\\n'",
+          'exec sleep 300',
+          '',
+        ].join('\n'),
         { mode: 0o755 },
       );
       const snapshot = async () => {

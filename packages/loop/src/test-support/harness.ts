@@ -125,6 +125,7 @@ export class Harness {
           suffix: () => `x${++this.n}`,
         },
         log: (m) => this.logs.push(m),
+        sleep: () => Promise.resolve(),
       },
       {
         worktreesRoot: '/wt',
@@ -140,6 +141,12 @@ export class Harness {
           pause: (...args) => this.runner.pause(...args),
           end: (...args) => this.runner.end(...args),
           stop: (...args) => this.runner.stop(...args),
+          resume: async (sessionId, options) => {
+            const session = await this.runner.resume(sessionId, options);
+            if (options?.deliver)
+              this.sent.push({ sessionId, text: options.deliver.sentence, file: options.deliver.content });
+            return session;
+          },
           deliverFile: async (sessionId, name, content, sentence) => {
             const path = await this.runner.deliverFile(sessionId, name, content, sentence);
             this.sent.push({ sessionId, text: sentence, file: content });

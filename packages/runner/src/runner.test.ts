@@ -18,9 +18,13 @@ import { SessionRunner } from './runner.js';
 import { opencodePermission } from './agent-config.js';
 import { sessionInstructions, unattendedNote } from './instructions.js';
 import { shellQuote } from './launch.js';
+import { inputBoxText } from './input-box.js';
 import { harness } from './test-support/harness.js';
 
 const REQUEST = { text: 'Add login page\n\nUse the existing auth API.' };
+/** The bottom of Claude's screen, with `input` in its input box. */
+const claudePane = (input: string) =>
+  ['─────── Add login page ─', `❯ ${input}`, '────────────────', '  ⏵⏵ auto mode on'].join('\n');
 const DIR = '/wt/shop/add-login-page-sfx1';
 const WT = `${DIR}/web`;
 const CONFIG = '/wt/.loop-runner/s1';
@@ -685,6 +689,100 @@ describe('sendToSession', () => {
     await expect(h.runner.sendToSession(s.id, 'hi')).rejects.toThrow(ValidationError);
     await h.runner.stop(s.id);
     await expect(h.runner.sendToSession(s.id, 'hi')).rejects.toThrow(/ended/);
+  });
+
+  /** Makes the window behave like Claude: typed text lands in the box; Enter submits once `takes` is reached. */
+  const claudeTakes = (h: ReturnType<typeof harness>, target: string | null, takes = 1) => {
+    const w = h.window(target);
+    const send = h.tmux.sendKeys.bind(h.tmux);
+    let enters = 0;
+    vi.spyOn(h.tmux, 'sendKeys').mockImplementation(async (t, text, options) => {
+      await send(t, text, options);
+      const typed = inputBoxText(w.output) ?? '';
+      if (text !== '') w.output = claudePane(text);
+      if ((options?.enter ?? true) && ++enters >= takes) w.output = `❯ ${text || typed}\n${claudePane('')}`;
+    });
+    return w;
+  };
+
+  it('presses Enter again while Claude still holds the typed text in its input box', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    const w = claudeTakes(h, s.tmuxTarget, 2); // the first Enter counted as part of the paste
+    await h.runner.sendToSession(s.id, 'Review round 1: fix x');
+    expect(w.keys).toBe('Review round 1: fix x\n\n');
+  });
+
+  it('does not press Enter again once Claude took the message', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    const w = claudeTakes(h, s.tmuxTarget);
+    await h.runner.sendToSession(s.id, 'fix x');
+    expect(w.keys).toBe('fix x\n');
+  });
+
+  it('fails, so the caller keeps the message pending, when Claude never takes it', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    const w = claudeTakes(h, s.tmuxTarget, 99);
+    await expect(h.runner.sendToSession(s.id, 'fix x')).rejects.toThrow(/did not take the message/);
+    expect(w.keys).toBe('fix x\n\n\n\n');
+  });
+
+  it('only presses Enter for a message still sitting in the box from an earlier try, never retypes it', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    const w = claudeTakes(h, s.tmuxTarget);
+    w.output = claudePane('fix x');
+    await h.runner.sendToSession(s.id, 'fix x');
+    expect(w.keys).toBe('\n');
+  });
+
+  it('types the sentence even when the box holds a pasted draft, which is not its text', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    const w = claudeTakes(h, s.tmuxTarget);
+    w.output = claudePane('[Pasted text #1 +4 lines]');
+    await h.runner.sendToSession(s.id, 'fix x');
+    expect(w.keys).toBe('fix x\n');
+  });
+
+  it('does not count a box that vanished after typing as taken, and presses nothing into what replaced it', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    const w = h.window(s.tmuxTarget);
+    const send = h.tmux.sendKeys.bind(h.tmux);
+    vi.spyOn(h.tmux, 'sendKeys').mockImplementation(async (t, text, options) => {
+      await send(t, text, options);
+      w.output = ' Do you want to proceed?\n ❯ 1. Yes\n   2. No';
+    });
+    await expect(h.runner.sendToSession(s.id, 'fix x')).rejects.toThrow(/did not take the message/);
+    expect(w.keys).toBe('fix x\n');
+  });
+
+  it('refuses text too long for the input box check (it belongs in a file)', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    await expect(h.runner.sendToSession(s.id, 'x'.repeat(801))).rejects.toThrow(/over 800 characters/);
+    expect(h.window(s.tmuxTarget).keys).toBe('');
+  });
+
+  it('types nothing while Claude shows no input box (still starting, or a dialog)', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    h.window(s.tmuxTarget).output = ' Do you want to proceed?\n ❯ 1. Yes\n   2. No';
+    await expect(h.runner.sendToSession(s.id, 'fix x')).rejects.toThrow(/shows no input box/);
+    expect(h.window(s.tmuxTarget).keys).toBe('');
+  });
+
+  it('resume with deliver hands the file to an agent that is already running', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    const sentence =
+      'New review feedback for PR #1 is in .loop/pr1-round1-review.md. Read it and address it.';
+    await h.runner.resume(s.id, { deliver: { name: 'pr1-round1-review.md', content: 'fix x', sentence } });
+    expect(h.fs.files.get(`${WT}/.loop/pr1-round1-review.md`)?.content).toBe('fix x');
+    expect(h.window(s.tmuxTarget).keys).toBe(`${sentence}\n`);
   });
 
   it('deliverFile writes .loop/<name> in the worktree (0600, git-excluded) and types the sentence', async () => {

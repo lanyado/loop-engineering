@@ -40,6 +40,7 @@ import type { GitDriver } from './drivers/git.js';
 import type { TmuxDriver, TmuxWindow } from './drivers/tmux.js';
 import { sessionInstructions } from './instructions.js';
 import { renderLaunchScript, shellQuote } from './launch.js';
+import { inputBoxHasText, inputBoxHolds, inputBoxText } from './input-box.js';
 import { sanitizeLine } from './sanitize.js';
 import { detectTrustPrompt, TRUST_TAIL_LINES } from './trust-prompt.js';
 import { DEFAULT_TAIL_LINES, detectUsageLimit, USAGE_LIMIT_PATTERNS } from './usage-limit.js';
@@ -89,6 +90,8 @@ export interface RunnerDeps {
   log?: (message: string) => void;
   /** Milliseconds, for the relaunch rate limit. Default Date.now. */
   now?: () => number;
+  /** Waits, while a typed message is checked for having been submitted. Default: a real timer. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 /** What to work on: new text, or a request the router already recorded. */
@@ -103,6 +106,14 @@ export interface StartOptions {
 
 /** Least time between two relaunches of one session. */
 const RELAUNCH_MIN_GAP_MS = 60_000;
+
+/** After typing to a Claude agent: how long Claude gets to take the message, and how often Enter is retried. */
+const SUBMIT_CHECK_MS = 800;
+const SUBMIT_RETRIES = 3;
+/** How long Claude gets to show its input box: just after its launch, and otherwise. */
+const INPUT_BOX_STARTUP_MS = 30_000;
+const INPUT_BOX_WAIT_MS = 3_000;
+const MAX_TYPED_CHARS = 800;
 
 export interface ResumeOptions {
   /** Only resume a session paused for this reason (an automatic resume never undoes a manual pause). */
@@ -180,7 +191,10 @@ export class SessionRunner {
   /** What each Claude builder was last launched with, to tell whether a relaunch would change anything. */
   private readonly launched = new Map<number, { model: string; effort: Effort | null }>();
   private readonly relaunchedAt = new Map<number, number>();
+  /** When each session's agent was last launched (the input box wait is longer just after). */
+  private readonly launchedAt = new Map<number, number>();
   private readonly now: () => number;
+  private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(
     private readonly deps: RunnerDeps,
@@ -204,6 +218,7 @@ export class SessionRunner {
     this.ids = deps.ids ?? { uuid: randomUUID, suffix: () => randomBytes(3).toString('hex') };
     this.log = deps.log ?? ((m) => console.warn(`[runner] ${m}`));
     this.now = deps.now ?? Date.now;
+    this.sleep = deps.sleep ?? ((ms) => new Promise((done) => setTimeout(done, ms)));
     this.claudeProjectsDir =
       config.claudeProjectsDir ?? join(this.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'projects');
     this.onClaudeLimit = config.onClaudeLimit ?? 'opencode';
@@ -316,7 +331,16 @@ export class SessionRunner {
     const { store } = this.deps;
     const s = store.sessions.require(sessionId);
     if (s.status === 'ended') throw new ValidationError(`session ${sessionId} has ended`);
-    if (s.status === 'active' && (await this.isAlive(s))) return s;
+    if (s.status === 'active' && (await this.isAlive(s))) {
+      // Already running (e.g. a relaunch finished first): the file is still handed over.
+      if (options.deliver) {
+        const project = store.projects.require(s.projectId);
+        const { name, content, sentence } = options.deliver;
+        await this.writeLoopFile(s, project, await this.sessionCwd(s, project), name, content);
+        await this.sendNow(sessionId, sentence);
+      }
+      return s;
+    }
     if (s.status === 'paused' && options.ifReason && s.pauseReason !== options.ifReason) return s;
     await this.killOwnWindow(s); // a dead pane kept by remain-on-exit
     const project = store.projects.require(s.projectId);
@@ -510,13 +534,56 @@ export class SessionRunner {
     if (line.startsWith('!') || line.startsWith('/')) {
       throw new ValidationError('text sent to an agent may not start with "!" or "/"');
     }
+    // Claude shows only the end of a very long paste, so its box can no longer tell whether it was sent.
+    // Longer text belongs in a file (deliverFile).
+    if (line.length > MAX_TYPED_CHARS)
+      throw new ValidationError(`text sent to an agent is over ${MAX_TYPED_CHARS} characters`);
     const s = this.deps.store.sessions.require(sessionId);
     if (s.status !== 'active' || !s.tmuxTarget) {
       throw new ValidationError(`session ${sessionId} is ${s.status}; its agent is not running`);
     }
     if (!(await this.isAlive(s))) throw new ValidationError(`the agent of session ${sessionId} is gone`);
-    await this.deps.tmux.sendKeys(s.tmuxTarget, line);
-    return s;
+    if (s.provider !== 'claude') {
+      await this.deps.tmux.sendKeys(s.tmuxTarget, line);
+      return s;
+    }
+    // Claude: type only into its input box (not a dialog, not a screen still starting), never twice,
+    // and make sure the message leaves the box.
+    const target = s.tmuxTarget;
+    const pane = await this.waitForInputBox(s);
+    await this.deps.tmux.sendKeys(target, inputBoxHasText(pane, line) ? '' : line);
+    for (let attempt = 0; attempt <= SUBMIT_RETRIES; attempt++) {
+      await this.sleep(SUBMIT_CHECK_MS);
+      const after = await this.deps.tmux.capture(target);
+      // Taken: the box is still drawn (Claude keeps it while it works) and no longer holds the text.
+      if (inputBoxText(after) !== null && !inputBoxHolds(after, line)) return s;
+      // Claude took the Enter typed with the text as part of a paste: press it on its own. With no
+      // box in sight nothing is pressed (it could answer a dialog); the next check looks again.
+      if (inputBoxText(after) !== null && attempt < SUBMIT_RETRIES) {
+        await this.deps.tmux.sendKeys(target, '', { enter: true });
+      }
+    }
+    throw new ValidationError(`the agent of session ${s.id} did not take the message`);
+  }
+
+  /**
+   * The pane once Claude shows its input box; throws, without typing anything, if it never does. Only
+   * an agent launched moments ago gets the long wait: the session's lock is held meanwhile, and an
+   * agent sitting at a dialog should not keep pauses and checks of the session waiting.
+   */
+  private async waitForInputBox(s: Session): Promise<string> {
+    const starting = this.now() - (this.launchedAt.get(s.id) ?? -Infinity) < INPUT_BOX_STARTUP_MS;
+    const limit = starting ? INPUT_BOX_STARTUP_MS : INPUT_BOX_WAIT_MS;
+    for (let waited = 0; ; waited += SUBMIT_CHECK_MS) {
+      const pane = await this.deps.tmux.capture(s.tmuxTarget!);
+      if (inputBoxText(pane) !== null) return pane;
+      if (waited >= limit) {
+        throw new ValidationError(
+          `the agent of session ${s.id} shows no input box (starting, or a dialog is open)`,
+        );
+      }
+      await this.sleep(SUBMIT_CHECK_MS);
+    }
   }
 
   /** Kills the agent and ends the session. Worktrees stay on disk; end() removes them. */
@@ -1031,6 +1098,7 @@ export class SessionRunner {
   private async launch(sessionId: number, cwd: string, spec: LaunchSpec): Promise<string> {
     const { fs, tmux, agentCli, store } = this.deps;
     const configDir = this.configDir(sessionId);
+    this.launchedAt.set(sessionId, this.now());
     if (spec.provider === 'claude')
       this.launched.set(sessionId, { model: spec.model, effort: spec.effort ?? null });
     const paths = await writeSessionConfig(fs, configDir, cwd, {

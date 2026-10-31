@@ -318,6 +318,14 @@ const TAKE_OVER = 'Take over';
 const DEPLOY_OPTIONS = ['Keep waiting', 'Mark deployed', 'Revert'] as const;
 const REVERT_OPTIONS = ['Retry', "I'll handle it"] as const;
 const MAX_TRANSITIONS = 25;
+/** Times a builder whose agent exited is resumed for one feedback before the human is asked. */
+const MAX_BUILDER_RESUMES = 3;
+/** How long a running builder may fail to take one feedback (no input box, never submitted) before the human is asked. */
+const SEND_FAILING_MS = 30 * MINUTE;
+const feedbackFrom = (f: Feedback): Pick<Feedback, 'kind' | 'stage'> => ({
+  kind: f.kind,
+  ...(f.stage ? { stage: f.stage } : {}),
+});
 
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 const short = (sha: string | null | undefined) => (sha ?? '').slice(0, 7);
@@ -1166,12 +1174,14 @@ export class LoopEngine {
    * Delivers pending feedback to the builder session, then waits for a push past it. The items
    * (reviewer, tester and CI text: untrusted) go into .loop/<file> in the session's working folder
    * (runner.deliverFile); only a fixed sentence naming that file is typed into the agent.
+   * A builder whose agent exited (a crash, a closed window) would never push, before or after the
+   * feedback reached it: it is resumed with the feedback in its first prompt, at most
+   * MAX_BUILDER_RESUMES times per feedback, then the human is asked.
    */
   private async awaitFix(c: Ctx, gh: GhPr): Promise<boolean> {
     const f = c.s.feedback;
     if (!f) return false;
     if (gh.headRefOid !== f.sha) return this.restartChecks(c, `the builder pushed ${short(gh.headRefOid)}`);
-    if (f.sentAt) return false;
     const session = c.pr.sessionId === null ? undefined : this.deps.store.sessions.get(c.pr.sessionId);
     if (!session || session.status === 'ended') {
       return this.escalate(
@@ -1179,25 +1189,91 @@ export class LoopEngine {
         `PR #${c.pr.number} needs fixes but its building session has ended`,
         f.items,
         false,
+        {},
+        feedbackFrom(f),
       );
     }
     const name = `pr${c.pr.id}-round${c.pr.round}-${f.stage ?? f.kind}.md`;
+    const sentence = `New ${this.feedbackLabel(c, f)} for PR #${c.pr.number} is in .loop/${name}. Read it and address it.`;
+    if (session.status === 'paused' && session.pauseReason === 'agent_exited') {
+      return this.resumeBuilder(c, gh, f, session, name, sentence);
+    }
+    if (f.sentAt) return false;
     try {
-      await this.deps.runner.deliverFile(
-        session.id,
-        name,
-        this.feedbackFile(c, gh, f),
-        `New ${this.feedbackLabel(c, f)} for PR #${c.pr.number} is in .loop/${name}. Read it and address it.`,
-      );
+      await this.deps.runner.deliverFile(session.id, name, this.feedbackFile(c, gh, f), sentence);
     } catch (err) {
       if (!(err instanceof ValidationError)) throw err;
       this.warnOnce(
         `send-${c.pr.id}-${f.sha}`,
         `PR ${c.pr.repo}#${c.pr.number}: feedback waits for session ${session.id} (${errorMessage(err)})`,
       );
+      // A paused builder waits for its resume; a running one that never takes the message goes to the human.
+      if (session.status !== 'active') {
+        // The failure clock only runs while the builder runs: a pause in between starts it over.
+        if (f.failingSince) this.save(c, {}, { feedback: { ...f, failingSince: undefined } });
+        return false;
+      }
+      const failingSince = f.failingSince ?? this.iso();
+      if (this.now() - Date.parse(failingSince) >= SEND_FAILING_MS) {
+        return this.escalate(
+          c,
+          `PR #${c.pr.number} needs fixes but its builder has not taken messages for ${SEND_FAILING_MS / MINUTE} min (${errorMessage(err)})`,
+          f.items,
+          false,
+          {},
+          feedbackFrom(f),
+        );
+      }
+      if (!f.failingSince) this.save(c, {}, { feedback: { ...f, failingSince } });
       return false;
     }
     return this.save(c, {}, { feedback: { ...f, sentAt: this.iso() } });
+  }
+
+  private async resumeBuilder(
+    c: Ctx,
+    gh: GhPr,
+    f: Feedback,
+    session: Session,
+    name: string,
+    sentence: string,
+  ): Promise<boolean> {
+    const resumes = f.resumes ?? 0;
+    if (resumes >= MAX_BUILDER_RESUMES) {
+      return this.escalate(
+        c,
+        `PR #${c.pr.number} needs fixes but its builder's agent keeps exiting (resumed ${resumes} times)`,
+        f.items,
+        false,
+        {},
+        feedbackFrom(f),
+      );
+    }
+    let resumed: Session;
+    try {
+      resumed = await this.deps.runner.resume(session.id, {
+        ifReason: 'agent_exited',
+        reason: `its agent exited while PR #${c.pr.number} waits for its fixes`,
+        deliver: { name, content: this.feedbackFile(c, gh, f), sentence },
+        // OpenCode continues its last conversation, which may be the one that just failed (the runner's
+        // model rotation resumes fresh too): a new one gets the full state.
+        ...(session.provider === 'opencode' ? { fresh: true } : {}),
+      });
+    } catch (err) {
+      // Counted like an exit, so a launch that keeps failing (tmux, a missing CLI) reaches the human.
+      this.log(
+        `PR ${c.pr.repo}#${c.pr.number}: could not resume session ${session.id} (${errorMessage(err)})`,
+      );
+      this.save(c, {}, { feedback: { ...f, resumes: resumes + 1 } });
+      return false; // not progress: the next tick tries again
+    }
+    // Paused again for another reason meanwhile (the human, the usage limit): wait for that to clear.
+    if (resumed.status !== 'active') return false;
+    this.history(
+      c,
+      `PR ${c.pr.repo}#${c.pr.number}: session ${session.id}'s agent had exited before it fixed the ${this.feedbackLabel(c, f)}; resumed it with the feedback.`,
+    );
+    return this.save(c, {}, { feedback: { ...f, sentAt: this.iso(), resumes: resumes + 1 } });
   }
 
   private feedbackLabel(c: Ctx, f: Feedback): string {
