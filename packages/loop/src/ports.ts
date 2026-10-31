@@ -173,7 +173,7 @@ export interface Workspace {
  * The runner methods the loop uses (the server's one SessionRunner). It never starts sessions: the
  * router does, from the requests the loop creates.
  */
-export type LoopRunner = Pick<SessionRunner, 'deliverFile' | 'end' | 'stop' | 'pause'>;
+export type LoopRunner = Pick<SessionRunner, 'deliverFile' | 'end' | 'stop' | 'pause' | 'resume'>;
 
 /** The QuestionService method the loop uses, so questions reach every channel. */
 export type Asker = Pick<QuestionService, 'ask'>;

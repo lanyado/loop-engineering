@@ -24,6 +24,8 @@ export interface Feedback {
   sha: string;
   /** When it reached the builder session; null until it did (the session may be paused). */
   sentAt: string | null;
+  /** Times the builder was resumed with it because its agent had exited (see MAX_BUILDER_RESUMES). */
+  resumes?: number;
 }
 
 export type QuestionKind = 'approval' | 'escalation' | 'deploy_timeout' | 'revert_failed';

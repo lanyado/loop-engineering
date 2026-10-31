@@ -239,6 +239,72 @@ describe('review loop', () => {
     expect(h.launcher.jobs).toHaveLength(2);
   });
 
+  describe('a builder whose agent exited while it owes fixes', () => {
+    /** What the runner records when it finds a session's agent gone. */
+    const agentExits = async (h: ReturnType<typeof harness>, sessionId: number) => {
+      await h.tmux.kill(h.store.sessions.require(sessionId).tmuxTarget!);
+      h.store.sessions.update(sessionId, { status: 'paused', pauseReason: 'agent_exited', tmuxTarget: null });
+    };
+
+    it('is resumed with feedback it had already been sent, and the push is checked', async () => {
+      const h = harness();
+      h.launcher.on('tests', testsPass()).on('review', blocking('fix it'), clean());
+      const { session, number } = await h.builderWithPr();
+      await h.engine.tick();
+      expect(h.sent).toHaveLength(1);
+      await agentExits(h, session.id);
+      await h.engine.tick();
+      expect(h.store.sessions.require(session.id)).toMatchObject({ status: 'active' });
+      expect(h.sent).toHaveLength(2);
+      expect(h.sent[1]!.text).toMatch(/^New review feedback for PR #1 is in \.loop\/pr\d+-round1-review\.md/);
+      expect(h.sent[1]!.file).toMatch(/fix it/);
+      expect(loopState(h.pr()).feedback).toMatchObject({ resumes: 1 });
+      await h.engine.tick(); // alive now: nothing is sent again
+      expect(h.sent).toHaveLength(2);
+      h.github.push(SLUG, number);
+      await h.engine.tick();
+      expect(h.pr()).toMatchObject({ round: 2, outcome: 'merged' });
+    });
+
+    it('is resumed with feedback it never received', async () => {
+      const h = harness();
+      h.launcher.on('tests', testsPass()).on('review', blocking('fix it'));
+      const { session } = await h.builderWithPr();
+      await agentExits(h, session.id);
+      await h.engine.tick();
+      expect(h.sent).toHaveLength(1);
+      expect(h.store.sessions.require(session.id)).toMatchObject({ status: 'active' });
+      expect(loopState(h.pr()).feedback?.sentAt).not.toBeNull();
+    });
+
+    it('goes to the human once the agent keeps exiting', async () => {
+      const h = harness();
+      h.launcher.on('tests', testsPass()).on('review', blocking('fix it'));
+      const { session } = await h.builderWithPr();
+      await h.engine.tick();
+      for (let i = 0; i < 3; i++) {
+        await agentExits(h, session.id);
+        await h.engine.tick();
+        expect(h.pr().stage).toBe('review');
+      }
+      await agentExits(h, session.id);
+      await h.engine.tick();
+      expect(h.pr().stage).toBe('escalated');
+      expect(h.asked()[0]?.text).toMatch(/builder's agent exited 4 times/);
+    });
+
+    it('is left alone when the human paused it', async () => {
+      const h = harness();
+      h.launcher.on('tests', testsPass()).on('review', blocking('fix it'));
+      const { session } = await h.builderWithPr();
+      await h.engine.tick();
+      await h.runner.pause(session.id, 'manual');
+      await h.engine.tick();
+      expect(h.store.sessions.require(session.id)).toMatchObject({ status: 'paused', pauseReason: 'manual' });
+      expect(h.sent).toHaveLength(1);
+    });
+  });
+
   it('escalates at round 5 with the open comments; Continue 5 more resumes the loop', async () => {
     const h = harness();
     const no = blocking('still broken');

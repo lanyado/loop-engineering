@@ -318,6 +318,8 @@ const TAKE_OVER = 'Take over';
 const DEPLOY_OPTIONS = ['Keep waiting', 'Mark deployed', 'Revert'] as const;
 const REVERT_OPTIONS = ['Retry', "I'll handle it"] as const;
 const MAX_TRANSITIONS = 25;
+/** Times a builder whose agent exited is resumed for one feedback before the human is asked. */
+const MAX_BUILDER_RESUMES = 3;
 
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 const short = (sha: string | null | undefined) => (sha ?? '').slice(0, 7);
@@ -1166,12 +1168,14 @@ export class LoopEngine {
    * Delivers pending feedback to the builder session, then waits for a push past it. The items
    * (reviewer, tester and CI text: untrusted) go into .loop/<file> in the session's working folder
    * (runner.deliverFile); only a fixed sentence naming that file is typed into the agent.
+   * A builder whose agent exited (a crash, a closed window) would never push, before or after the
+   * feedback reached it: it is resumed with the feedback in its first prompt, at most
+   * MAX_BUILDER_RESUMES times per feedback, then the human is asked.
    */
   private async awaitFix(c: Ctx, gh: GhPr): Promise<boolean> {
     const f = c.s.feedback;
     if (!f) return false;
     if (gh.headRefOid !== f.sha) return this.restartChecks(c, `the builder pushed ${short(gh.headRefOid)}`);
-    if (f.sentAt) return false;
     const session = c.pr.sessionId === null ? undefined : this.deps.store.sessions.get(c.pr.sessionId);
     if (!session || session.status === 'ended') {
       return this.escalate(
@@ -1182,13 +1186,13 @@ export class LoopEngine {
       );
     }
     const name = `pr${c.pr.id}-round${c.pr.round}-${f.stage ?? f.kind}.md`;
+    const sentence = `New ${this.feedbackLabel(c, f)} for PR #${c.pr.number} is in .loop/${name}. Read it and address it.`;
+    if (session.status === 'paused' && session.pauseReason === 'agent_exited') {
+      return this.resumeBuilder(c, gh, f, session.id, name, sentence);
+    }
+    if (f.sentAt) return false;
     try {
-      await this.deps.runner.deliverFile(
-        session.id,
-        name,
-        this.feedbackFile(c, gh, f),
-        `New ${this.feedbackLabel(c, f)} for PR #${c.pr.number} is in .loop/${name}. Read it and address it.`,
-      );
+      await this.deps.runner.deliverFile(session.id, name, this.feedbackFile(c, gh, f), sentence);
     } catch (err) {
       if (!(err instanceof ValidationError)) throw err;
       this.warnOnce(
@@ -1198,6 +1202,47 @@ export class LoopEngine {
       return false;
     }
     return this.save(c, {}, { feedback: { ...f, sentAt: this.iso() } });
+  }
+
+  private async resumeBuilder(
+    c: Ctx,
+    gh: GhPr,
+    f: Feedback,
+    sessionId: number,
+    name: string,
+    sentence: string,
+  ): Promise<boolean> {
+    const resumes = f.resumes ?? 0;
+    if (resumes >= MAX_BUILDER_RESUMES) {
+      return this.escalate(
+        c,
+        `PR #${c.pr.number} needs fixes but its builder's agent exited ${resumes + 1} times`,
+        f.items,
+        false,
+      );
+    }
+    let resumed;
+    try {
+      resumed = await this.deps.runner.resume(sessionId, {
+        ifReason: 'agent_exited',
+        reason: `its agent exited while PR #${c.pr.number} waits for its fixes`,
+        deliver: { name, content: this.feedbackFile(c, gh, f), sentence },
+      });
+    } catch (err) {
+      if (!(err instanceof ValidationError)) throw err;
+      this.warnOnce(
+        `resume-${c.pr.id}-${f.sha}-${resumes}`,
+        `PR ${c.pr.repo}#${c.pr.number}: could not resume session ${sessionId} (${errorMessage(err)})`,
+      );
+      return false;
+    }
+    // Paused again for another reason meanwhile (the human, the usage limit): wait for that to clear.
+    if (resumed.status !== 'active') return false;
+    this.history(
+      c,
+      `PR ${c.pr.repo}#${c.pr.number}: session ${sessionId}'s agent had exited before it fixed the ${this.feedbackLabel(c, f)}; resumed it with the feedback.`,
+    );
+    return this.save(c, {}, { feedback: { ...f, sentAt: this.iso(), resumes: resumes + 1 } });
   }
 
   private feedbackLabel(c: Ctx, f: Feedback): string {

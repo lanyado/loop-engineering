@@ -21,6 +21,9 @@ import { shellQuote } from './launch.js';
 import { harness } from './test-support/harness.js';
 
 const REQUEST = { text: 'Add login page\n\nUse the existing auth API.' };
+/** The bottom of Claude's screen, with `input` in its input box. */
+const claudePane = (input: string) =>
+  ['─────── Add login page ─', `❯ ${input}`, '────────────────', '  ⏵⏵ auto mode on'].join('\n');
 const DIR = '/wt/shop/add-login-page-sfx1';
 const WT = `${DIR}/web`;
 const CONFIG = '/wt/.loop-runner/s1';
@@ -685,6 +688,47 @@ describe('sendToSession', () => {
     await expect(h.runner.sendToSession(s.id, 'hi')).rejects.toThrow(ValidationError);
     await h.runner.stop(s.id);
     await expect(h.runner.sendToSession(s.id, 'hi')).rejects.toThrow(/ended/);
+  });
+
+  it('presses Enter again while Claude still holds the typed text in its input box', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    const w = h.window(s.tmuxTarget);
+    w.output = claudePane('Review round 1: fix x');
+    // The second Enter submits it: the box empties and the message moves above it.
+    const send = h.tmux.sendKeys.bind(h.tmux);
+    vi.spyOn(h.tmux, 'sendKeys').mockImplementation(async (target, text, options) => {
+      await send(target, text, options);
+      if (text === '') w.output = `❯ Review round 1: fix x\n${claudePane('')}`;
+    });
+    await h.runner.sendToSession(s.id, 'Review round 1: fix x');
+    expect(w.keys).toBe('Review round 1: fix x\n\n');
+  });
+
+  it('does not press Enter again once Claude took the message', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    h.window(s.tmuxTarget).output = `❯ fix x\n${claudePane('')}`;
+    await h.runner.sendToSession(s.id, 'fix x');
+    expect(h.window(s.tmuxTarget).keys).toBe('fix x\n');
+  });
+
+  it('fails, so the caller keeps the message pending, when Claude never takes it', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    h.window(s.tmuxTarget).output = claudePane('fix x');
+    await expect(h.runner.sendToSession(s.id, 'fix x')).rejects.toThrow(/did not take the message/);
+    expect(h.window(s.tmuxTarget).keys).toBe('fix x\n\n\n\n');
+  });
+
+  it('resume with deliver hands the file to an agent that is already running', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    const sentence =
+      'New review feedback for PR #1 is in .loop/pr1-round1-review.md. Read it and address it.';
+    await h.runner.resume(s.id, { deliver: { name: 'pr1-round1-review.md', content: 'fix x', sentence } });
+    expect(h.fs.files.get(`${WT}/.loop/pr1-round1-review.md`)?.content).toBe('fix x');
+    expect(h.window(s.tmuxTarget).keys).toBe(`${sentence}\n`);
   });
 
   it('deliverFile writes .loop/<name> in the worktree (0600, git-excluded) and types the sentence', async () => {

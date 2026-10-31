@@ -40,6 +40,7 @@ export function harness(config: Partial<RunnerConfig> = {}): Harness {
         suffix: () => `sfx${++n}`,
       },
       log: (m) => logs.push(m),
+      sleep: () => Promise.resolve(),
     },
     {
       worktreesRoot: '/wt',

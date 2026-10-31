@@ -31,6 +31,7 @@ export interface TmuxDriver {
 }
 
 const TARGET_FORMAT = '#{session_name}:#{window_id}';
+const ENTER_GAP_MS = 300;
 
 /** True for tmux errors that only mean "nothing there": no server, session or window. */
 function isMissing(err: unknown): boolean {
@@ -94,7 +95,11 @@ export class RealTmuxDriver implements TmuxDriver {
 
   async sendKeys(target: string, text: string, options: { enter?: boolean } = {}): Promise<void> {
     if (text !== '') await this.tmux(['send-keys', '-t', target, '-l', text]);
-    if (options.enter ?? true) await this.tmux(['send-keys', '-t', target, 'Enter']);
+    if (!(options.enter ?? true)) return;
+    // An Enter right behind the text reaches a TUI in the same read and can count as part of a paste
+    // (a newline, not a submit); a short gap makes it a key press of its own.
+    if (text !== '') await new Promise((done) => setTimeout(done, ENTER_GAP_MS));
+    await this.tmux(['send-keys', '-t', target, 'Enter']);
   }
 
   async capture(target: string, lines = 50): Promise<string> {
