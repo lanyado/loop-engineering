@@ -329,12 +329,16 @@ describe('review loop', () => {
       // Stuck at a dialog: no input box, so nothing can be typed.
       h.tmux.windows.get(h.store.sessions.require(session.id).tmuxTarget!)!.output =
         ' Do you want to proceed?\n ❯ 1. Yes';
-      await h.engine.tick();
+      for (let i = 0; i < 25; i++) await h.engine.tick(); // ticks alone never escalate
       expect(h.pr().stage).toBe('review');
-      for (let i = 0; i < 19; i++) await h.engine.tick();
+      h.clock.advance(29 * 60_000);
+      await h.engine.tick();
+      expect(h.pr().stage).toBe('review'); // a dialog left over lunch is not yet a problem
+      h.clock.advance(60_000);
+      await h.engine.tick();
       expect(h.sent).toHaveLength(0);
       expect(h.pr().stage).toBe('escalated');
-      expect(h.asked()[0]?.text).toMatch(/does not take messages/);
+      expect(h.asked()[0]?.text).toMatch(/has not taken messages for 30 min/);
     });
 
     it('is left alone when the human paused it', async () => {

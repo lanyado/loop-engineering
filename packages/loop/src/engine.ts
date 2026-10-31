@@ -320,8 +320,8 @@ const REVERT_OPTIONS = ['Retry', "I'll handle it"] as const;
 const MAX_TRANSITIONS = 25;
 /** Times a builder whose agent exited is resumed for one feedback before the human is asked. */
 const MAX_BUILDER_RESUMES = 3;
-/** Ticks a running builder may fail to take one feedback (no input box, never submitted) before the human is asked. */
-const MAX_SEND_FAILURES = 20;
+/** How long a running builder may fail to take one feedback (no input box, never submitted) before the human is asked. */
+const SEND_FAILING_MS = 30 * MINUTE;
 const feedbackFrom = (f: Feedback): Pick<Feedback, 'kind' | 'stage'> => ({
   kind: f.kind,
   ...(f.stage ? { stage: f.stage } : {}),
@@ -1209,18 +1209,18 @@ export class LoopEngine {
       );
       // A paused builder waits for its resume; a running one that never takes the message goes to the human.
       if (session.status !== 'active') return false;
-      const sendFailures = (f.sendFailures ?? 0) + 1;
-      if (sendFailures >= MAX_SEND_FAILURES) {
+      const failingSince = f.failingSince ?? this.iso();
+      if (this.now() - Date.parse(failingSince) >= SEND_FAILING_MS) {
         return this.escalate(
           c,
-          `PR #${c.pr.number} needs fixes but its builder does not take messages (${errorMessage(err)})`,
+          `PR #${c.pr.number} needs fixes but its builder has not taken messages for ${SEND_FAILING_MS / MINUTE} min (${errorMessage(err)})`,
           f.items,
           false,
           {},
           feedbackFrom(f),
         );
       }
-      this.save(c, {}, { feedback: { ...f, sendFailures } });
+      if (!f.failingSince) this.save(c, {}, { feedback: { ...f, failingSince } });
       return false;
     }
     return this.save(c, {}, { feedback: { ...f, sentAt: this.iso() } });
