@@ -322,6 +322,15 @@ const MAX_TRANSITIONS = 25;
 const MAX_BUILDER_RESUMES = 3;
 /** How long a running builder may fail to take one feedback (no input box, never submitted) before the human is asked. */
 const SEND_FAILING_MS = 30 * MINUTE;
+/**
+ * An open PR whose loop state has not moved this long, while the loop or the builder (not the human)
+ * is to act, is sent to the human; asked again after twice the wait each time it stays quiet.
+ */
+const STALL_MS = 2 * 60 * MINUTE;
+/** The stall question defaults to Keep waiting after this. */
+const STALL_ANSWER_MS = 60 * MINUTE;
+const KEEP_WAITING = 'Keep waiting';
+const NUDGE = 'Nudge builder';
 const feedbackFrom = (f: Feedback): Pick<Feedback, 'kind' | 'stage'> => ({
   kind: f.kind,
   ...(f.stage ? { stage: f.stage } : {}),
@@ -480,7 +489,10 @@ export class LoopEngine {
     const prs = this.deps.store.pullRequests
       .list()
       .filter((p) => !loopState(p).done || (p.outcome === 'escalated' && !loopState(p).revertOf));
+    for (const p of prs) this.stallAnswer(p.id);
     await Promise.all(prs.map((p) => this.step(p.id)));
+    // After the steps, so a PR that can move now does; a step that hangs is caught here all the same.
+    for (const p of prs) this.watchStall(p.id);
   }
 
   /**
@@ -642,17 +654,8 @@ export class LoopEngine {
   private async advance(pr: PullRequest): Promise<boolean> {
     const s = loopState(pr);
     if (s.done && pr.outcome !== 'escalated') return false;
-    const project = this.deps.store.projects.require(pr.projectId); // fresh: auto-merge may have changed
-    if (project.kind === 'folder') return false; // never merges or cleans up anything for a folder
-    const repo = project.repos.find((r) => r.name === pr.repo);
-    if (!repo) {
-      this.warnOnce(
-        `repo-${pr.id}`,
-        `PR id ${pr.id}: repo ${pr.repo} is no longer in project ${project.name}`,
-      );
-      return false;
-    }
-    const c: Ctx = { pr, s, project, repo, ref: repoRef(repo), rigor: this.rigorOf(pr) };
+    const c = this.ctx(pr);
+    if (!c) return false;
     // Fail closed: while pipeline.json cannot be read, the loop does nothing (no merge, deploy watch,
     // revert or cleanup), since it cannot know what the user wants.
     const broken = this.pipeline(c).error;
@@ -666,6 +669,21 @@ export class LoopEngine {
     if (!this.cleanupDone(c)) return this.cleanupStep(c);
     if (pr.stage === 'deploying') return this.deployStep(c);
     return this.save(c, {}, { done: true });
+  }
+
+  /** The PR with its project and repo, read fresh (auto-merge may have changed); null for a folder project's or a removed repo's. */
+  private ctx(pr: PullRequest): Ctx | null {
+    const project = this.deps.store.projects.require(pr.projectId);
+    if (project.kind === 'folder') return null; // never merges or cleans up anything for a folder
+    const repo = project.repos.find((r) => r.name === pr.repo);
+    if (!repo) {
+      this.warnOnce(
+        `repo-${pr.id}`,
+        `PR id ${pr.id}: repo ${pr.repo} is no longer in project ${project.name}`,
+      );
+      return null;
+    }
+    return { pr, s: loopState(pr), project, repo, ref: repoRef(repo), rigor: this.rigorOf(pr) };
   }
 
   private async advanceOpen(c: Ctx): Promise<boolean> {
@@ -1136,6 +1154,117 @@ export class LoopEngine {
       retryAfter: undefined,
       limitWaits: undefined,
     });
+  }
+
+  // ---------------------------------------------------------------- stalls
+
+  /**
+   * The catch-all for a PR stuck in a way no step foresaw (a builder that went quiet, a hung step):
+   * an open PR whose loop state has not moved for STALL_MS, then twice as long each time it stays
+   * quiet, is put to the human, unless they are the one to act. Applies their answer to the latest
+   * such question.
+   */
+  private watchStall(prId: number): void {
+    const c = this.stallCtx(prId);
+    if (!c) return;
+    const since = c.s.progressAt ?? c.pr.updatedAt;
+    const stall = c.s.stall?.at === since ? c.s.stall : undefined;
+    const pending = stall && this.deps.store.questions.get(stall.questionId)?.status === 'pending';
+    if (pending || this.humansTurn(c)) return;
+    const asks = stall?.asks ?? 0;
+    const quiet = this.now() - Date.parse(since);
+    if (quiet < STALL_MS * 2 ** asks) return;
+    const options = c.s.feedback ? [KEEP_WAITING, NUDGE, TAKE_OVER] : [KEEP_WAITING, TAKE_OVER];
+    const why = this.waitingFor(c);
+    this.log(`PR ${c.pr.repo}#${c.pr.number} has not moved for ${duration(quiet)}: ${why}`);
+    const { question } = this.deps.questions.ask({
+      sessionId: c.pr.sessionId ?? this.loopSessionId(c.pr.projectId),
+      text: `PR #${c.pr.number} has not moved for ${duration(quiet)}: ${why}. Options ${options.join(' / ')}`,
+      context: clip(
+        [c.pr.url, c.s.lastError ? `Last error: ${c.s.lastError}` : ''].filter(Boolean).join('\n'),
+        2000,
+      ),
+      options,
+      recommendedOption: KEEP_WAITING,
+      timeoutMs: STALL_ANSWER_MS,
+    });
+    // Not a transition: the quiet spell goes on (save would end it).
+    const fresh = loopState(this.deps.store.pullRequests.require(c.pr.id));
+    this.deps.store.pullRequests.update(c.pr.id, {
+      loopState: patchState(fresh, {
+        progressAt: fresh.progressAt ?? since,
+        stall: { at: since, asks: asks + 1, questionId: question.id },
+      }),
+    });
+  }
+
+  /**
+   * Acts on the human's answer to the latest stall question, before the PR's step so the step sees it.
+   * Keep waiting changes nothing. An answer about an earlier quiet spell no longer applies.
+   */
+  private stallAnswer(prId: number): void {
+    const c = this.stallCtx(prId);
+    const q = c?.s.stall && this.deps.store.questions.get(c.s.stall.questionId);
+    if (!c || !q || q.status === 'pending' || q.deliveredAt) return;
+    const answer = this.consume(q, [KEEP_WAITING, NUDGE, TAKE_OVER]);
+    if (c.s.stall?.at !== (c.s.progressAt ?? c.pr.updatedAt)) return;
+    if (answer === TAKE_OVER) {
+      this.running.get(c.pr.id)?.controller.abort();
+      this.history(c, `PR ${c.pr.repo}#${c.pr.number}: the human took over after it stalled.`);
+      this.save(c, { outcome: 'escalated' }, { stall: undefined, question: undefined });
+    } else if (answer === NUDGE && c.s.feedback) {
+      // awaitFix sends it again: typed into a running builder, or the builder resumed with it.
+      this.history(
+        c,
+        `PR ${c.pr.repo}#${c.pr.number}: the human asked to send the builder its feedback again.`,
+      );
+      this.save(
+        c,
+        {},
+        { stall: undefined, feedback: { ...c.s.feedback, sentAt: null, failingSince: undefined } },
+      );
+    }
+  }
+
+  /** An open PR the stall alarm looks at. */
+  private stallCtx(prId: number): Ctx | null {
+    const pr = this.deps.store.pullRequests.get(prId);
+    if (!pr || pr.outcome !== null || loopState(pr).revertOf !== undefined) return null;
+    return this.ctx(pr);
+  }
+
+  /** The human is the one to act: the loop asked them something, or they paused the builder it waits for. */
+  private humansTurn(c: Ctx): boolean {
+    if (c.pr.stage === 'awaiting_approval' || c.pr.stage === 'escalated') return true;
+    if (c.s.question && this.deps.store.questions.get(c.s.question.id)?.status === 'pending') return true;
+    const session = this.builderOf(c);
+    return !!c.s.feedback && session?.status === 'paused' && session.pauseReason === 'manual';
+  }
+
+  /** What a quiet PR waits for, for the stall question. */
+  private waitingFor(c: Ctx): string {
+    const error = c.s.lastError ? ` (last error: ${clip(c.s.lastError, 200)})` : '';
+    if (c.s.heldFor) return `it is held: ${c.s.heldFor}`;
+    const job = this.running.get(c.pr.id);
+    if (job) return `its ${job.kind} job has not finished${error}`;
+    const f = c.s.feedback;
+    if (f) {
+      const session = this.builderOf(c);
+      const who = !session
+        ? 'its builder'
+        : `builder session ${session.id} (${session.status === 'paused' ? `paused: ${session.pauseReason}` : session.status})`;
+      const label = this.feedbackLabel(c, f);
+      return f.sentAt
+        ? `waiting for ${who} to push fixes for the ${label} it got ${duration(this.now() - Date.parse(f.sentAt))} ago${error}`
+        : `the ${label} has not reached ${who}${error}`;
+    }
+    const at = checkAt(c.pr.stage, c.s) ?? c.pr.stage;
+    if (this.busy.has(c.pr.id)) return `its ${at} step has not finished${error}`;
+    return `it is at ${at}${c.pr.stage === 'merge' ? ' (CI checks or the merge)' : ''}${error}`;
+  }
+
+  private builderOf(c: Ctx): Session | undefined {
+    return c.pr.sessionId === null ? undefined : this.deps.store.sessions.get(c.pr.sessionId);
   }
 
   // ---------------------------------------------------------------- builder feedback
@@ -2157,7 +2286,10 @@ export class LoopEngine {
     store.transaction(() => {
       if (Object.values(usage).some((v) => v)) store.metrics.record(c.pr.id, usage);
       const fresh = store.pullRequests.require(c.pr.id);
-      c.pr = store.pullRequests.update(c.pr.id, { ...patch, loopState: patchState(loopState(fresh), state) });
+      c.pr = store.pullRequests.update(c.pr.id, {
+        ...patch,
+        loopState: patchState(loopState(fresh), { ...state, progressAt: this.iso() }),
+      });
       c.s = loopState(c.pr);
     });
     return true;
@@ -2230,6 +2362,12 @@ const checkField = (check: string): Partial<LoopState> => ({
   check: isBuiltinCheck(check) ? undefined : check,
 });
 const checkAt = (stage: string, s: LoopState): string | undefined => (stage === 'check' ? s.check : stage);
+
+/** "2h 5m", "45m". */
+function duration(ms: number): string {
+  const m = Math.floor(ms / MINUTE);
+  return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`;
+}
 
 function deploySummary(status: DeployStatus, vercelProject: string): string {
   const parts = [`Vercel ${status.environment ?? vercelProject} deploy failed`];

@@ -1821,3 +1821,132 @@ describe('network outages', () => {
     expect(h.asked()[0]?.text).toMatch(/kept failing to reach the network for hours/);
   });
 });
+
+describe('a PR that stops moving', () => {
+  const HOUR = 60 * MINUTE;
+  /** A PR whose builder got review feedback and has not pushed. */
+  const waitingOnBuilder = async (reviews = [blocking('fix it'), clean()]) => {
+    const h = harness();
+    h.launcher.on('tests', testsPass()).on('review', ...reviews);
+    const built = await h.builderWithPr();
+    await h.engine.tick();
+    expect(h.sent).toHaveLength(1);
+    return { h, ...built };
+  };
+  const stallQuestions = (h: Harness) => h.asked().filter((q) => /has not moved/.test(q.text));
+
+  it('is put to the human after two quiet hours, on its builder, saying what it waits for', async () => {
+    const { h, session } = await waitingOnBuilder();
+    h.clock.advance(2 * HOUR - MINUTE);
+    await h.engine.tick();
+    expect(stallQuestions(h)).toHaveLength(0);
+    h.clock.advance(MINUTE);
+    await h.engine.tick();
+    const [q] = stallQuestions(h);
+    expect(q).toMatchObject({
+      sessionId: session.id,
+      options: ['Keep waiting', 'Nudge builder', 'Take over'],
+      recommendedOption: 'Keep waiting',
+    });
+    expect(q!.text).toMatch(
+      new RegExp(
+        `^PR #1 has not moved for 2h 0m: waiting for builder session ${session.id} \\(active\\) to push fixes for the review feedback it got 2h 0m ago`,
+      ),
+    );
+    await h.engine.tick();
+    expect(stallQuestions(h)).toHaveLength(1); // once per quiet spell, not per tick
+  });
+
+  it('asks again after twice the wait each time the human keeps waiting', async () => {
+    const { h } = await waitingOnBuilder();
+    h.clock.advance(2 * HOUR);
+    await h.engine.tick();
+    h.answer(stallQuestions(h)[0]!.id, 'Keep waiting');
+    h.clock.advance(HOUR + 59 * MINUTE);
+    await h.engine.tick();
+    expect(stallQuestions(h)).toHaveLength(1);
+    h.clock.advance(MINUTE); // 4 h quiet
+    await h.engine.tick();
+    expect(stallQuestions(h)).toHaveLength(2);
+    // Unanswered, it defaults to Keep waiting: the next one comes at 8 h.
+    h.clock.advance(3 * HOUR);
+    h.questions.expireDue();
+    await h.engine.tick();
+    expect(stallQuestions(h)).toHaveLength(2);
+    h.clock.advance(HOUR);
+    await h.engine.tick();
+    expect(stallQuestions(h)).toHaveLength(3);
+    expect(h.pr().stage).toBe('review');
+  });
+
+  it('Nudge builder sends the feedback again and starts the clock over', async () => {
+    const { h, number } = await waitingOnBuilder();
+    h.clock.advance(2 * HOUR);
+    await h.engine.tick();
+    h.answer(stallQuestions(h)[0]!.id, 'Nudge builder');
+    await h.engine.tick();
+    expect(h.sent).toHaveLength(2);
+    expect(h.sent[1]!.text).toMatch(/^New review feedback for PR #1/);
+    h.clock.advance(HOUR);
+    await h.engine.tick();
+    expect(stallQuestions(h)).toHaveLength(1);
+    h.github.push(SLUG, number);
+    await h.engine.tick();
+    expect(h.pr()).toMatchObject({ outcome: 'merged' });
+  });
+
+  it('Take over hands the PR to the human', async () => {
+    const { h } = await waitingOnBuilder();
+    h.clock.advance(2 * HOUR);
+    await h.engine.tick();
+    h.answer(stallQuestions(h)[0]!.id, 'Take over');
+    await h.engine.tick();
+    expect(h.pr().outcome).toBe('escalated');
+  });
+
+  it('a PR that moves again makes the open question moot', async () => {
+    const { h, number } = await waitingOnBuilder([blocking('fix it'), blocking('and this')]);
+    h.clock.advance(2 * HOUR);
+    await h.engine.tick();
+    h.github.push(SLUG, number); // round 2 feedback goes out
+    await h.engine.tick();
+    expect(h.sent).toHaveLength(2);
+    h.answer(stallQuestions(h)[0]!.id, 'Take over');
+    await h.engine.tick();
+    expect(h.pr()).toMatchObject({ outcome: null, round: 2 });
+    h.clock.advance(2 * HOUR); // a new quiet spell asks from the start
+    await h.engine.tick();
+    expect(stallQuestions(h)).toHaveLength(2);
+  });
+
+  it('never asks while the human is the one to act', async () => {
+    const h = harness({ autoMerge: false });
+    h.launcher.on('tests', testsPass()).on('review', clean());
+    await h.builderWithPr();
+    await h.engine.tick();
+    expect(h.pr().stage).toBe('awaiting_approval');
+    h.clock.advance(24 * HOUR);
+    await h.engine.tick();
+    expect(stallQuestions(h)).toHaveLength(0);
+
+    const { h: h2, session } = await waitingOnBuilder();
+    await h2.runner.pause(session.id, 'manual');
+    h2.clock.advance(24 * HOUR);
+    await h2.engine.tick();
+    expect(stallQuestions(h2)).toHaveLength(0);
+  });
+
+  it('catches a step that hangs', async () => {
+    const h = harness();
+    await h.builderWithPr();
+    let release!: (err: Error) => void;
+    const getPr = vi.spyOn(h.github, 'getPr').mockReturnValue(new Promise((_, reject) => (release = reject)));
+    void h.engine.tick(); // its step never ends
+    await vi.waitFor(() => expect(getPr).toHaveBeenCalled());
+    h.clock.advance(2 * HOUR);
+    await h.engine.tick();
+    expect(stallQuestions(h)[0]).toMatchObject({ options: ['Keep waiting', 'Take over'] });
+    expect(stallQuestions(h)[0]!.text).toMatch(/: its tests step has not finished/);
+    release(new Error('gone'));
+  });
+});
