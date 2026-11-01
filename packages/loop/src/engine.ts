@@ -1074,6 +1074,8 @@ export class LoopEngine {
     }
     const ci = await this.ciGate(c, gh);
     if (ci !== 'pass') return ci === 'sent';
+    // The human may have taken it over (a stall's Take over) while CI was read.
+    if (this.deps.store.pullRequests.require(c.pr.id).outcome !== null) return false;
     try {
       await this.deps.github.mergeSquash(c.ref, c.pr.number, head);
     } catch (err) {
@@ -1282,10 +1284,10 @@ export class LoopEngine {
     if (c.s.question && this.deps.store.questions.get(c.s.question.id)?.status === 'pending') return true;
     const session = this.builderOf(c);
     if (!session) return false;
-    const stallId = c.s.stall?.questionId;
+    // The builder's own ask_human questions; the loop's questions about its PRs (this one's stall, another's approval) do not count.
     const asking = this.deps.store.questions
       .list({ sessionId: session.id, status: 'pending' })
-      .some((q) => q.id !== stallId);
+      .some((q) => q.origin === 'agent');
     return asking || (!!c.s.feedback && session.status === 'paused' && session.pauseReason === 'manual');
   }
 

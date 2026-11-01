@@ -1976,6 +1976,7 @@ describe('a PR that stops moving', () => {
   it('never asks while the builder waits for the human to answer it', async () => {
     const { h, session } = await waitingOnBuilder();
     h.questions.ask({
+      origin: 'agent',
       sessionId: session.id,
       text: 'Which API?',
       options: ['A', 'B'],
@@ -1985,6 +1986,20 @@ describe('a PR that stops moving', () => {
     h.clock.advance(24 * HOUR);
     await h.engine.tick();
     expect(stallQuestions(h)).toHaveLength(0);
+  });
+
+  it("still asks while the loop's own question about another PR of the builder is open", async () => {
+    const { h, session } = await waitingOnBuilder();
+    h.questions.ask({
+      sessionId: session.id,
+      text: 'Merge web#2?',
+      options: ['Merge', 'Hold'],
+      recommendedOption: 'Hold',
+      timeoutMs: 48 * HOUR,
+    });
+    h.clock.advance(2 * HOUR);
+    await h.engine.tick();
+    expect(stallQuestions(h)).toHaveLength(1);
   });
 
   it('does not count an outage as quiet time', async () => {
