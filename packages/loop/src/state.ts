@@ -115,6 +115,13 @@ export type LoopState = {
    * only once `done` is set, when the loop itself no longer touches the row.
    */
   guardian?: { runId: number; status: string; critical: boolean; summary: string; questionId?: number };
+  /** When the loop last saved a transition for this PR; the stall alarm counts from here. */
+  progressAt?: string;
+  /**
+   * The stall alarm for the quiet spell that began at `at` (a progressAt): how many times the human
+   * was asked, and the latest question. A later progressAt makes it stale.
+   */
+  stall?: { at: string; asks: number; questionId: number };
   /** Nothing left to do for this PR. */
   done?: boolean;
 };
