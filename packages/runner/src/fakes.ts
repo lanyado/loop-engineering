@@ -232,6 +232,21 @@ export class MemoryFs implements Fs {
       : Promise.reject(new Error(`ENOENT: ${path}`));
   }
 
+  size(path: string): Promise<number> {
+    return this.readFile(path).then((content) => Buffer.byteLength(content));
+  }
+
+  async readFrom(path: string, offset: number): Promise<string> {
+    const bytes = Buffer.from(await this.readFile(path));
+    return bytes.subarray(offset).toString('utf8');
+  }
+
+  /** Appends to `path` (created if missing), like an agent writing its conversation file. */
+  append(path: string, content: string): void {
+    const file = this.files.get(path);
+    this.files.set(path, { ...file, content: (file?.content ?? '') + content });
+  }
+
   async realpath(path: string): Promise<string> {
     if (!(await this.exists(path))) throw new Error(`ENOENT: ${path}`);
     return this.realpaths.get(path) ?? path;
