@@ -1850,7 +1850,7 @@ describe('a PR that stops moving', () => {
     });
     expect(q!.text).toMatch(
       new RegExp(
-        `^PR #1 has not moved for 2h 0m: waiting for builder session ${session.id} \\(active\\) to push fixes for the review feedback it got 2h 0m ago`,
+        `^PR web#1 has not moved for 2h 0m: waiting for builder session ${session.id} \\(active\\) to push fixes for the review feedback it got 2h 0m ago`,
       ),
     );
     await h.engine.tick();
@@ -1948,5 +1948,70 @@ describe('a PR that stops moving', () => {
     expect(stallQuestions(h)[0]).toMatchObject({ options: ['Keep waiting', 'Take over'] });
     expect(stallQuestions(h)[0]!.text).toMatch(/: its tests step has not finished/);
     release(new Error('gone'));
+  });
+
+  it('Take over while a job runs stops it without counting a failed attempt', async () => {
+    const h = harness();
+    let started!: () => void;
+    const running = new Promise<void>((resolve) => (started = resolve));
+    h.launcher.on('tests', (_job: AgentJob, signal?: AbortSignal) => {
+      started();
+      return new Promise<AgentJobResult>((_, reject) =>
+        signal?.addEventListener('abort', () => reject(new Error('killed'))),
+      );
+    });
+    await h.builderWithPr();
+    void h.engine.tick();
+    await running;
+    h.clock.advance(2 * HOUR);
+    await h.engine.tick();
+    h.answer(stallQuestions(h)[0]!.id, 'Take over');
+    await h.engine.tick();
+    await vi.waitFor(() => expect(h.engine.status().busy).toEqual([]));
+    expect(h.pr().outcome).toBe('escalated');
+    expect(loopState(h.pr())).not.toHaveProperty('lastError');
+    expect(loopState(h.pr()).attempts ?? 0).toBe(0);
+  });
+
+  it('never asks while the builder waits for the human to answer it', async () => {
+    const { h, session } = await waitingOnBuilder();
+    h.questions.ask({
+      sessionId: session.id,
+      text: 'Which API?',
+      options: ['A', 'B'],
+      recommendedOption: 'A',
+      timeoutMs: 48 * HOUR,
+    });
+    h.clock.advance(24 * HOUR);
+    await h.engine.tick();
+    expect(stallQuestions(h)).toHaveLength(0);
+  });
+
+  it('does not count an outage as quiet time', async () => {
+    const { h } = await waitingOnBuilder();
+    h.clock.advance(HOUR);
+    const down = new Error('could not resolve host: api.github.com');
+    const ping = vi.spyOn(h.github, 'ping').mockRejectedValue(down);
+    const getPr = vi.spyOn(h.github, 'getPr').mockRejectedValue(down);
+    await h.engine.tick();
+    expect(h.engine.status().offlineSince).not.toBeNull();
+    h.clock.advance(90 * MINUTE);
+    await h.engine.tick();
+    ping.mockRestore();
+    getPr.mockRestore();
+    await h.engine.tick(); // back online, 2h 30m after the feedback went out
+    expect(stallQuestions(h)).toHaveLength(0);
+    h.clock.advance(2 * HOUR);
+    await h.engine.tick();
+    expect(stallQuestions(h)[0]!.text).toMatch(/has not moved for 4h 30m/);
+  });
+
+  it('offers no nudge while the builder is paused at its usage limit', async () => {
+    const { h, session } = await waitingOnBuilder();
+    await h.runner.pause(session.id, 'usage_limit');
+    h.clock.advance(2 * HOUR);
+    await h.engine.tick();
+    expect(stallQuestions(h)[0]).toMatchObject({ options: ['Keep waiting', 'Take over'] });
+    expect(stallQuestions(h)[0]!.text).toMatch(/\(paused: usage_limit\)/);
   });
 });

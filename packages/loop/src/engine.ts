@@ -414,6 +414,8 @@ export class LoopEngine {
   /** OpenCode models that hit a limit, and until when later jobs skip them. */
   private readonly modelRest = new Map<string, number>();
   private discovering: Promise<void> | null = null;
+  /** Since when the loop has been running and online: time before that (an outage, a restart) is not a PR's quiet time. */
+  private watchingSince: number | null = null;
 
   constructor(
     private readonly deps: LoopDeps,
@@ -479,20 +481,27 @@ export class LoopEngine {
   /** Discovers new PRs and advances every PR in the loop. Resolves when this tick's steps are done. */
   async tick(): Promise<void> {
     // Offline: one probe and nothing else, so no PR retries (or logs) while GitHub is unreachable.
-    if (!(await this.net.check())) return this.askIfOfflineTooLong();
+    if (!(await this.net.check())) {
+      this.watchingSince = null;
+      return this.askIfOfflineTooLong();
+    }
+    this.watchingSince ??= this.now();
     await this.discover().catch((err: unknown) => {
       if (isNetworkError(err)) this.net.markOffline();
       else this.log(`discovery failed: ${errorMessage(err)}`);
     });
-    if (this.net.offlineSince) return;
+    if (this.net.offlineSince) {
+      this.watchingSince = null;
+      return;
+    }
     // A PR the human took over stays watched: when they merge or close it, the loop cleans up.
     const prs = this.deps.store.pullRequests
       .list()
       .filter((p) => !loopState(p).done || (p.outcome === 'escalated' && !loopState(p).revertOf));
-    for (const p of prs) this.stallAnswer(p.id);
+    for (const p of prs) this.stallSafely(p, () => this.stallAnswer(p.id));
     await Promise.all(prs.map((p) => this.step(p.id)));
     // After the steps, so a PR that can move now does; a step that hangs is caught here all the same.
-    for (const p of prs) this.watchStall(p.id);
+    for (const p of prs) this.stallSafely(p, () => this.watchStall(p.id));
   }
 
   /**
@@ -1172,14 +1181,18 @@ export class LoopEngine {
     const pending = stall && this.deps.store.questions.get(stall.questionId)?.status === 'pending';
     if (pending || this.humansTurn(c)) return;
     const asks = stall?.asks ?? 0;
+    const counted = this.now() - Math.max(Date.parse(since), this.watchingSince ?? this.now());
+    if (counted < STALL_MS * 2 ** asks) return;
     const quiet = this.now() - Date.parse(since);
-    if (quiet < STALL_MS * 2 ** asks) return;
-    const options = c.s.feedback ? [KEEP_WAITING, NUDGE, TAKE_OVER] : [KEEP_WAITING, TAKE_OVER];
+    const options = this.nudges(c) ? [KEEP_WAITING, NUDGE, TAKE_OVER] : [KEEP_WAITING, TAKE_OVER];
     const why = this.waitingFor(c);
     this.log(`PR ${c.pr.repo}#${c.pr.number} has not moved for ${duration(quiet)}: ${why}`);
     const { question } = this.deps.questions.ask({
       sessionId: c.pr.sessionId ?? this.loopSessionId(c.pr.projectId),
-      text: `PR #${c.pr.number} has not moved for ${duration(quiet)}: ${why}. Options ${options.join(' / ')}`,
+      text: clip(
+        `PR ${c.pr.repo}#${c.pr.number} has not moved for ${duration(quiet)}: ${why}. Options ${options.join(' / ')}`,
+        2000,
+      ),
       context: clip(
         [c.pr.url, c.s.lastError ? `Last error: ${c.s.lastError}` : ''].filter(Boolean).join('\n'),
         2000,
@@ -1207,12 +1220,17 @@ export class LoopEngine {
     const q = c?.s.stall && this.deps.store.questions.get(c.s.stall.questionId);
     if (!c || !q || q.status === 'pending' || q.deliveredAt) return;
     const answer = this.consume(q, [KEEP_WAITING, NUDGE, TAKE_OVER]);
-    if (c.s.stall?.at !== (c.s.progressAt ?? c.pr.updatedAt)) return;
+    if (c.s.stall?.at !== (c.s.progressAt ?? c.pr.updatedAt)) {
+      if (answer !== KEEP_WAITING)
+        this.log(`PR ${c.pr.repo}#${c.pr.number}: "${answer}" came after it moved again; nothing done`);
+      return;
+    }
     if (answer === TAKE_OVER) {
-      this.running.get(c.pr.id)?.controller.abort();
+      // A job still running ends without counting as a failed attempt; the step then finds the PR taken over.
+      this.running.get(c.pr.id)?.controller.abort(new TakenOver());
       this.history(c, `PR ${c.pr.repo}#${c.pr.number}: the human took over after it stalled.`);
       this.save(c, { outcome: 'escalated' }, { stall: undefined, question: undefined });
-    } else if (answer === NUDGE && c.s.feedback) {
+    } else if (answer === NUDGE && this.nudges(c) && c.s.feedback) {
       // awaitFix sends it again: typed into a running builder, or the builder resumed with it.
       this.history(
         c,
@@ -1226,6 +1244,28 @@ export class LoopEngine {
     }
   }
 
+  /** A stall's work is per PR: one that throws (a store error, a refused question) is logged, never halts the tick. */
+  private stallSafely(pr: PullRequest, work: () => void): void {
+    try {
+      work();
+    } catch (err) {
+      this.warnOnce(
+        `stall-${pr.id}-${errorMessage(err)}`,
+        `PR ${pr.repo}#${pr.number}: stall check failed: ${errorMessage(err)}`,
+      );
+    }
+  }
+
+  /** Sending the feedback again can help: it reached a builder that is running or whose agent exited, with no push. */
+  private nudges(c: Ctx): boolean {
+    const session = this.builderOf(c);
+    return (
+      !!c.s.feedback?.sentAt &&
+      (session?.status === 'active' ||
+        (session?.status === 'paused' && session.pauseReason === 'agent_exited'))
+    );
+  }
+
   /** An open PR the stall alarm looks at. */
   private stallCtx(prId: number): Ctx | null {
     const pr = this.deps.store.pullRequests.get(prId);
@@ -1233,20 +1273,28 @@ export class LoopEngine {
     return this.ctx(pr);
   }
 
-  /** The human is the one to act: the loop asked them something, or they paused the builder it waits for. */
+  /**
+   * The human is the one to act: the loop asked them something, the builder waits for their answer
+   * (ask_human), or they paused the builder it waits for.
+   */
   private humansTurn(c: Ctx): boolean {
     if (c.pr.stage === 'awaiting_approval' || c.pr.stage === 'escalated') return true;
     if (c.s.question && this.deps.store.questions.get(c.s.question.id)?.status === 'pending') return true;
     const session = this.builderOf(c);
-    return !!c.s.feedback && session?.status === 'paused' && session.pauseReason === 'manual';
+    if (!session) return false;
+    const stallId = c.s.stall?.questionId;
+    const asking = this.deps.store.questions
+      .list({ sessionId: session.id, status: 'pending' })
+      .some((q) => q.id !== stallId);
+    return asking || (!!c.s.feedback && session.status === 'paused' && session.pauseReason === 'manual');
   }
 
   /** What a quiet PR waits for, for the stall question. */
   private waitingFor(c: Ctx): string {
     const error = c.s.lastError ? ` (last error: ${clip(c.s.lastError, 200)})` : '';
-    if (c.s.heldFor) return `it is held: ${c.s.heldFor}`;
+    if (c.s.heldFor) return `it is held: ${clip(c.s.heldFor, 500)}`;
     const job = this.running.get(c.pr.id);
-    if (job) return `its ${job.kind} job has not finished${error}`;
+    if (job) return `its ${job.kind} job has not finished (queued or running)${error}`;
     const f = c.s.feedback;
     if (f) {
       const session = this.builderOf(c);
@@ -1911,7 +1959,7 @@ export class LoopEngine {
         }
       }
     } catch (err) {
-      if (this.stopped) return { ok: false, progressed: false };
+      if (this.stopped || err instanceof TakenOver) return { ok: false, progressed: false };
       // The human skipped the check while its job ran (pokePr): no attempt spent; the PR moves on now.
       if (err instanceof CheckSkipped)
         return { ok: false, progressed: this.save(c, {}, FRESH_ATTEMPTS, usage) };
@@ -1970,7 +2018,8 @@ export class LoopEngine {
           'abort',
           () =>
             reject(
-              controller.signal.reason instanceof CheckSkipped
+              controller.signal.reason instanceof CheckSkipped ||
+                controller.signal.reason instanceof TakenOver
                 ? controller.signal.reason
                 : new Error(`the ${job.kind} job timed out or was stopped`),
             ),
@@ -2322,6 +2371,13 @@ export class LoopEngine {
 
 /** An agent job for a PR (the Guardian's runs elsewhere). */
 type PrJob = AgentJob & { kind: PrJobKind };
+
+/** Why a stall's Take over stopped a job. Not a failed attempt. */
+class TakenOver extends Error {
+  constructor() {
+    super('the human took the PR over');
+  }
+}
 
 /** Why pokePr stopped a job: the human skipped its check. Not a failed attempt. */
 class CheckSkipped extends Error {
