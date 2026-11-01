@@ -42,6 +42,7 @@ import { sessionInstructions } from './instructions.js';
 import { renderLaunchScript, shellQuote } from './launch.js';
 import { inputBoxHasText, inputBoxHolds, inputBoxText } from './input-box.js';
 import { sanitizeLine } from './sanitize.js';
+import { transcriptHas } from './transcript.js';
 import { detectTrustPrompt, TRUST_TAIL_LINES } from './trust-prompt.js';
 import { DEFAULT_TAIL_LINES, detectUsageLimit, USAGE_LIMIT_PATTERNS } from './usage-limit.js';
 
@@ -184,6 +185,8 @@ export class SessionRunner {
   private readonly ids: { uuid(): string; suffix(): string };
   private readonly log: (message: string) => void;
   private readonly claudeProjectsDir: string;
+  /** Conversation id -> its file, once found (Claude does not move it). */
+  private readonly conversationFiles = new Map<string, string>();
   private readonly onClaudeLimit: 'opencode' | 'wait';
   private readonly planner: ((project: Project) => string) | undefined;
   /** Per-session promise chains: start, pause, resume, fallback and reconcile never interleave. */
@@ -551,17 +554,36 @@ export class SessionRunner {
     // and make sure the message leaves the box.
     const target = s.tmuxTarget;
     const pane = await this.waitForInputBox(s);
+    // Where Claude's conversation file ends now: a record of this message can only come after it.
+    const before = await this.conversationFile(s.agentSessionId);
+    const from = before ? await this.deps.fs.size(before).catch(() => 0) : 0;
     await this.deps.tmux.sendKeys(target, inputBoxHasText(pane, line) ? '' : line);
+    let shownTaken = false;
     for (let attempt = 0; attempt <= SUBMIT_RETRIES; attempt++) {
       await this.sleep(SUBMIT_CHECK_MS);
+      // Claude recorded it: taken, whatever the screen looks like.
+      const file = await this.conversationFile(s.agentSessionId);
+      const added = file ? await this.deps.fs.readFrom(file, file === before ? from : 0).catch(() => '') : '';
+      if (transcriptHas(added, line)) return s;
       const after = await this.deps.tmux.capture(target);
-      // Taken: the box is still drawn (Claude keeps it while it works) and no longer holds the text.
-      if (inputBoxText(after) !== null && !inputBoxHolds(after, line)) return s;
+      const box = inputBoxText(after) !== null;
+      // The screen says taken: the box is still drawn (Claude keeps it while it works) and no longer
+      // holds the text. Enough without a conversation file; with one, its record is waited for.
+      if (box && !inputBoxHolds(after, line)) {
+        if (!file) return s;
+        shownTaken = true;
+        continue;
+      }
       // Claude took the Enter typed with the text as part of a paste: press it on its own. With no
       // box in sight nothing is pressed (it could answer a dialog); the next check looks again.
-      if (inputBoxText(after) !== null && attempt < SUBMIT_RETRIES) {
-        await this.deps.tmux.sendKeys(target, '', { enter: true });
-      }
+      if (box && attempt < SUBMIT_RETRIES) await this.deps.tmux.sendKeys(target, '', { enter: true });
+    }
+    // Typing it again could send it twice: the screen is believed, and the mismatch logged.
+    if (shownTaken) {
+      this.log(
+        `session ${s.id}: the message left the input box but its conversation file has no record of it`,
+      );
+      return s;
     }
     throw new ValidationError(`the agent of session ${s.id} did not take the message`);
   }
@@ -983,11 +1005,24 @@ export class SessionRunner {
 
   /** Whether Claude saved conversation `id` (any project folder: the cwd encoding is Claude's). */
   private async conversationSaved(id: string): Promise<boolean> {
+    return (await this.conversationFile(id)) !== null;
+  }
+
+  /** The Claude conversation file of `id`, once Claude wrote it (a new conversation has none before its first message). */
+  private async conversationFile(id: string | null): Promise<string | null> {
+    if (!id) return null;
     const { fs } = this.deps;
+    const known = this.conversationFiles.get(id);
+    if (known && (await fs.exists(known))) return known;
     const dirs = await fs.list(this.claudeProjectsDir).catch(() => [] as string[]);
-    for (const dir of dirs)
-      if (await fs.exists(join(this.claudeProjectsDir, dir, `${id}.jsonl`))) return true;
-    return false;
+    for (const dir of dirs) {
+      const path = join(this.claudeProjectsDir, dir, `${id}.jsonl`);
+      if (await fs.exists(path)) {
+        this.conversationFiles.set(id, path);
+        return path;
+      }
+    }
+    return null;
   }
 
   /** Where the session's agent runs: the project folder, or its worktree(s). */

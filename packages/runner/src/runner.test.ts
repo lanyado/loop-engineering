@@ -760,6 +760,73 @@ describe('sendToSession', () => {
     expect(w.keys).toBe('fix x\n');
   });
 
+  describe("with Claude's conversation file", () => {
+    const file = (id: string | null) => `/claude/projects/-wt-shop-x/${String(id)}.jsonl`;
+    const userEntry = (text: string) =>
+      `${JSON.stringify({ type: 'user', message: { role: 'user', content: text } })}\n`;
+    const enqueued = (text: string) =>
+      `${JSON.stringify({ type: 'queue-operation', operation: 'enqueue', content: text })}\n`;
+    /** Claude records what it takes on Enter; its screen keeps showing the text (a box it draws differently). */
+    const claudeRecords = (h: ReturnType<typeof harness>, target: string | null, entry = userEntry) => {
+      const w = h.window(target);
+      const send = h.tmux.sendKeys.bind(h.tmux);
+      let typed = '';
+      vi.spyOn(h.tmux, 'sendKeys').mockImplementation(async (t, text, options) => {
+        await send(t, text, options);
+        if (text !== '') typed = text;
+        w.output = claudePane(typed);
+        if (options?.enter ?? true)
+          h.fs.append(file(h.store.sessions.require(1).agentSessionId), entry(typed));
+      });
+      return w;
+    };
+
+    it('counts a message Claude recorded as taken, whatever its screen shows', async () => {
+      const h = harness();
+      const s = await h.runner.startSession(h.shop.id, REQUEST);
+      await h.saveConversation(s.agentSessionId);
+      const w = claudeRecords(h, s.tmuxTarget);
+      await h.runner.sendToSession(s.id, 'fix x');
+      expect(w.keys).toBe('fix x\n'); // no second Enter, no retry by the caller
+    });
+
+    it('counts a message queued while Claude is busy', async () => {
+      const h = harness();
+      const s = await h.runner.startSession(h.shop.id, REQUEST);
+      await h.saveConversation(s.agentSessionId);
+      const w = claudeRecords(h, s.tmuxTarget, enqueued);
+      await h.runner.sendToSession(s.id, 'fix x');
+      expect(w.keys).toBe('fix x\n');
+    });
+
+    it('finds the file a new conversation writes with its first message', async () => {
+      const h = harness();
+      const s = await h.runner.startSession(h.shop.id, REQUEST);
+      const w = claudeRecords(h, s.tmuxTarget);
+      await h.runner.sendToSession(s.id, 'fix x');
+      expect(w.keys).toBe('fix x\n');
+    });
+
+    it('does not count the same text recorded before it was typed', async () => {
+      const h = harness();
+      const s = await h.runner.startSession(h.shop.id, REQUEST);
+      await h.fs.writeFile(file(s.agentSessionId), userEntry('fix x'));
+      const w = claudeTakes(h, s.tmuxTarget, 99);
+      await expect(h.runner.sendToSession(s.id, 'fix x')).rejects.toThrow(/did not take the message/);
+      expect(w.keys).toBe('fix x\n\n\n\n');
+    });
+
+    it('believes a screen that shows it taken when the file never records it, and logs that', async () => {
+      const h = harness();
+      const s = await h.runner.startSession(h.shop.id, REQUEST);
+      await h.saveConversation(s.agentSessionId);
+      const w = claudeTakes(h, s.tmuxTarget);
+      await h.runner.sendToSession(s.id, 'fix x');
+      expect(w.keys).toBe('fix x\n'); // never typed twice
+      expect(h.logs.join('\n')).toMatch(/left the input box but its conversation file has no record of it/);
+    });
+  });
+
   it('refuses text too long for the input box check (it belongs in a file)', async () => {
     const h = harness();
     const s = await h.runner.startSession(h.shop.id, REQUEST);

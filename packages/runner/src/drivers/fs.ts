@@ -15,6 +15,10 @@ export interface Fs {
   remove(path: string): Promise<void>;
   /** Names of the entries in a folder. */
   list(path: string): Promise<string[]>;
+  /** Size in bytes; rejects when missing. */
+  size(path: string): Promise<number>;
+  /** The file from byte `offset` on (all of it when it is shorter than that: it was replaced). */
+  readFrom(path: string, offset: number): Promise<string>;
   /** The on-disk spelling of an existing path: symlinks resolved, the filesystem's letter case. */
   realpath(path: string): Promise<string>;
   /**
@@ -55,6 +59,19 @@ export const nodeFs: Fs = {
     await fsp.rm(path, { recursive: true, force: true });
   },
   list: (path) => fsp.readdir(path),
+  size: async (path) => (await fsp.stat(path)).size,
+  async readFrom(path, offset) {
+    const handle = await fsp.open(path, 'r');
+    try {
+      const { size } = await handle.stat();
+      const start = offset <= size ? offset : 0;
+      const buffer = Buffer.alloc(size - start);
+      await handle.read(buffer, 0, buffer.length, start);
+      return buffer.toString('utf8');
+    } finally {
+      await handle.close();
+    }
+  },
   // The native call returns the case the filesystem stores (the JS one keeps the typed case).
   realpath: promisify(realpathCb.native),
   async writeFileNoFollow(dir, name, content, mode) {
