@@ -187,6 +187,8 @@ export class SessionRunner {
   private readonly claudeProjectsDir: string;
   /** Conversation id -> its file, once found (Claude does not move it). */
   private readonly conversationFiles = new Map<string, string>();
+  /** Conversations whose file did not record a message the screen showed taken (logged once). */
+  private readonly unrecorded = new Set<string>();
   private readonly onClaudeLimit: 'opencode' | 'wait';
   private readonly planner: ((project: Project) => string) | undefined;
   /** Per-session promise chains: start, pause, resume, fallback and reconcile never interleave. */
@@ -554,16 +556,19 @@ export class SessionRunner {
     // and make sure the message leaves the box.
     const target = s.tmuxTarget;
     const pane = await this.waitForInputBox(s);
-    // Where Claude's conversation file ends now: a record of this message can only come after it.
+    // Where Claude's conversation file ends now: a record of this message can only come after it. A
+    // conversation with no file yet gets one with this message. A file that cannot be measured, or
+    // turns up elsewhere, could hold an earlier send of the same line: only the screen decides then.
     const before = await this.conversationFile(s.agentSessionId);
-    const from = before ? await this.deps.fs.size(before).catch(() => 0) : 0;
+    const from = before ? await this.deps.fs.size(before).catch(() => null) : 0;
     await this.deps.tmux.sendKeys(target, inputBoxHasText(pane, line) ? '' : line);
     let shownTaken = false;
     for (let attempt = 0; attempt <= SUBMIT_RETRIES; attempt++) {
       await this.sleep(SUBMIT_CHECK_MS);
       // Claude recorded it: taken, whatever the screen looks like.
-      const file = await this.conversationFile(s.agentSessionId);
-      const added = file ? await this.deps.fs.readFrom(file, file === before ? from : 0).catch(() => '') : '';
+      const found = from === null ? null : await this.conversationFile(s.agentSessionId);
+      const file = found && (before === null || found === before) ? found : null;
+      const added = file ? await this.deps.fs.readFrom(file, from ?? 0).catch(() => '') : '';
       if (transcriptHas(added, line)) return s;
       const after = await this.deps.tmux.capture(target);
       const box = inputBoxText(after) !== null;
@@ -580,9 +585,14 @@ export class SessionRunner {
     }
     // Typing it again could send it twice: the screen is believed, and the mismatch logged.
     if (shownTaken) {
-      this.log(
-        `session ${s.id}: the message left the input box but its conversation file has no record of it`,
-      );
+      // Once per conversation: a file Claude stopped writing (a /clear moves it on) would say so every send.
+      const key = s.agentSessionId ?? '';
+      if (!this.unrecorded.has(key)) {
+        this.unrecorded.add(key);
+        this.log(
+          `session ${s.id}: the message left the input box but its conversation file has no record of it`,
+        );
+      }
       return s;
     }
     throw new ValidationError(`the agent of session ${s.id} did not take the message`);

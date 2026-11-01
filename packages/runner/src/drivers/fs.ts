@@ -17,7 +17,7 @@ export interface Fs {
   list(path: string): Promise<string[]>;
   /** Size in bytes; rejects when missing. */
   size(path: string): Promise<number>;
-  /** The file from byte `offset` on (all of it when it is shorter than that: it was replaced). */
+  /** The file from byte `offset` on; empty when it is not that long. */
   readFrom(path: string, offset: number): Promise<string>;
   /** The on-disk spelling of an existing path: symlinks resolved, the filesystem's letter case. */
   realpath(path: string): Promise<string>;
@@ -64,10 +64,9 @@ export const nodeFs: Fs = {
     const handle = await fsp.open(path, 'r');
     try {
       const { size } = await handle.stat();
-      const start = offset <= size ? offset : 0;
-      const buffer = Buffer.alloc(size - start);
-      await handle.read(buffer, 0, buffer.length, start);
-      return buffer.toString('utf8');
+      const buffer = Buffer.alloc(Math.max(0, size - offset));
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, offset);
+      return buffer.subarray(0, bytesRead).toString('utf8');
     } finally {
       await handle.close();
     }

@@ -238,7 +238,7 @@ export class MemoryFs implements Fs {
 
   async readFrom(path: string, offset: number): Promise<string> {
     const bytes = Buffer.from(await this.readFile(path));
-    return bytes.subarray(offset <= bytes.length ? offset : 0).toString('utf8');
+    return bytes.subarray(offset).toString('utf8');
   }
 
   /** Appends to `path` (created if missing), like an agent writing its conversation file. */

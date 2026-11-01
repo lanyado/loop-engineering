@@ -816,6 +816,32 @@ describe('sendToSession', () => {
       expect(w.keys).toBe('fix x\n\n\n\n');
     });
 
+    it('waits for the record of a message the screen already shows taken', async () => {
+      const h = harness();
+      const s = await h.runner.startSession(h.shop.id, REQUEST);
+      await h.saveConversation(s.agentSessionId);
+      const w = claudeTakes(h, s.tmuxTarget);
+      let checks = 0;
+      const readFrom = h.fs.readFrom.bind(h.fs);
+      vi.spyOn(h.fs, 'readFrom').mockImplementation(async (path, offset) => {
+        if (++checks === 2) h.fs.append(path, userEntry('fix x'));
+        return readFrom(path, offset);
+      });
+      await h.runner.sendToSession(s.id, 'fix x');
+      expect(w.keys).toBe('fix x\n');
+      expect(h.logs.join('\n')).not.toMatch(/no record of it/);
+    });
+
+    it('leaves it to the screen when the file cannot be measured (an earlier send could be in it)', async () => {
+      const h = harness();
+      const s = await h.runner.startSession(h.shop.id, REQUEST);
+      await h.fs.writeFile(file(s.agentSessionId), userEntry('fix x'));
+      vi.spyOn(h.fs, 'size').mockRejectedValue(new Error('EIO'));
+      const w = claudeTakes(h, s.tmuxTarget, 99);
+      await expect(h.runner.sendToSession(s.id, 'fix x')).rejects.toThrow(/did not take the message/);
+      expect(w.keys).toBe('fix x\n\n\n\n');
+    });
+
     it('believes a screen that shows it taken when the file never records it, and logs that', async () => {
       const h = harness();
       const s = await h.runner.startSession(h.shop.id, REQUEST);
