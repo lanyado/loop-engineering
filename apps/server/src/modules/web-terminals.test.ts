@@ -1,5 +1,11 @@
-import { describe, expect, it } from 'vitest';
-import { ttydArgs, WebTerminals, type TtydLauncher, type WebTerminalSpec } from './web-terminals.js';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  terminalPorts,
+  ttydArgs,
+  WebTerminals,
+  type TtydLauncher,
+  type WebTerminalSpec,
+} from './web-terminals.js';
 
 function fake() {
   const started: { spec: WebTerminalSpec; port: number; basePath: string }[] = [];
@@ -100,6 +106,52 @@ describe('WebTerminals overlap', () => {
     terminals.stopAll();
     await expect(terminals.url(spec('a'))).rejects.toThrow('stopping');
     expect(started).toHaveLength(0);
+  });
+});
+
+describe('terminalPorts', () => {
+  const always = () => Promise.resolve(true);
+
+  it('moves through the range and wraps, so simultaneous terminals get different ports', async () => {
+    const pick = terminalPorts('3800-3801', always);
+    expect(await pick()).toBe(3800);
+    expect(await pick()).toBe(3801);
+    expect(await pick()).toBe(3800);
+  });
+
+  it('skips a busy port and fails when the whole range is busy', async () => {
+    expect(await terminalPorts('3800-3801', (p) => Promise.resolve(p === 3801))()).toBe(3801);
+    await expect(terminalPorts('3800-3801', () => Promise.resolve(false))()).rejects.toThrow(
+      /no free terminal port/,
+    );
+  });
+
+  it('refuses a malformed or privileged range', () => {
+    for (const bad of ['3800', 'a-b', '3829-3800', '80-90', '3800-70000']) {
+      expect(() => terminalPorts(bad, always)).toThrow(/WEB_TERMINAL_PORTS/);
+    }
+  });
+
+  it('two WebTerminals share the range, so they never get the same port', async () => {
+    vi.resetModules();
+    vi.stubEnv('WEB_TERMINAL_PORTS', '38100-38109');
+    try {
+      const fresh = await import('./web-terminals.js');
+      const seen: number[] = [];
+      const launch: TtydLauncher = (_spec, port) => {
+        seen.push(port);
+        return Promise.resolve({ stop() {}, exited: new Promise<void>(() => {}) });
+      };
+      const [a, b] = [new fresh.WebTerminals(launch), new fresh.WebTerminals(launch)];
+      await Promise.all([a.url(spec('a')), b.url(spec('b'))]);
+      expect(new Set(seen).size).toBe(2);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('with no range, uses any free port', async () => {
+    expect(await terminalPorts('')()).toBeGreaterThan(0);
   });
 });
 
