@@ -36,6 +36,40 @@ const freePort = () =>
     });
   });
 
+const isFree = (port: number) =>
+  new Promise<boolean>((resolve) => {
+    const probe = createServer();
+    probe.once('error', () => resolve(false));
+    probe.listen(port, '127.0.0.1', () => probe.close(() => resolve(true)));
+  });
+
+/**
+ * The ports terminals may use, from WEB_TERMINAL_PORTS ("3800-3829"). Empty: any free port. A fixed
+ * range is what lets an SSH tunnel carry them when the dashboard is opened from another machine.
+ * Each call moves on through the range, so two terminals starting together don't pick the same port.
+ */
+export function terminalPorts(
+  range: string | undefined,
+  free: (port: number) => Promise<boolean> = isFree,
+): () => Promise<number> {
+  if (!range?.trim()) return freePort;
+  const match = /^(\d+)-(\d+)$/.exec(range.trim());
+  const first = Number(match?.[1]);
+  const last = Number(match?.[2]);
+  if (!match || first < 1024 || last > 65535 || first > last) {
+    throw new Error(`WEB_TERMINAL_PORTS must look like 3800-3829, got "${range}"`);
+  }
+  const size = last - first + 1;
+  let next = 0;
+  return async () => {
+    for (let tried = 0; tried < size; tried++) {
+      const port = first + (next++ % size);
+      if (await free(port)) return port;
+    }
+    throw new Error(`no free terminal port in ${range}`);
+  };
+}
+
 const accepts = (port: number) =>
   new Promise<boolean>((resolve) => {
     const socket = createConnection({ port, host: '127.0.0.1' });
@@ -104,7 +138,7 @@ export class WebTerminals {
 
   constructor(
     private readonly launch: TtydLauncher = ttydLauncher,
-    private readonly pickPort: () => Promise<number> = freePort,
+    private readonly pickPort: () => Promise<number> = terminalPorts(process.env.WEB_TERMINAL_PORTS),
   ) {}
 
   /**
