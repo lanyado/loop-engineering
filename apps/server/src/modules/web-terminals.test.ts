@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   terminalPorts,
   ttydArgs,
@@ -129,6 +129,24 @@ describe('terminalPorts', () => {
   it('refuses a malformed or privileged range', () => {
     for (const bad of ['3800', 'a-b', '3829-3800', '80-90', '3800-70000']) {
       expect(() => terminalPorts(bad, always)).toThrow(/WEB_TERMINAL_PORTS/);
+    }
+  });
+
+  it('two WebTerminals share the range, so they never get the same port', async () => {
+    vi.resetModules();
+    vi.stubEnv('WEB_TERMINAL_PORTS', '38100-38109');
+    try {
+      const fresh = await import('./web-terminals.js');
+      const seen: number[] = [];
+      const launch: TtydLauncher = (_spec, port) => {
+        seen.push(port);
+        return Promise.resolve({ stop() {}, exited: new Promise<void>(() => {}) });
+      };
+      const [a, b] = [new fresh.WebTerminals(launch), new fresh.WebTerminals(launch)];
+      await Promise.all([a.url(spec('a')), b.url(spec('b'))]);
+      expect(new Set(seen).size).toBe(2);
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 

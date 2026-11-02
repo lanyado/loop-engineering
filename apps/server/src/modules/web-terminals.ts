@@ -70,6 +70,12 @@ export function terminalPorts(
   };
 }
 
+// The server has more than one WebTerminals (sessions, PR stages), and they share the range: with a
+// picker each, two terminals starting together would both be handed the range's first port. Built on
+// first use, so a mistyped range fails that terminal with its message rather than the whole server.
+let sharedPick: (() => Promise<number>) | null = null;
+const pickSharedPort = () => (sharedPick ??= terminalPorts(process.env.WEB_TERMINAL_PORTS))();
+
 const accepts = (port: number) =>
   new Promise<boolean>((resolve) => {
     const socket = createConnection({ port, host: '127.0.0.1' });
@@ -138,7 +144,7 @@ export class WebTerminals {
 
   constructor(
     private readonly launch: TtydLauncher = ttydLauncher,
-    private readonly pickPort: () => Promise<number> = terminalPorts(process.env.WEB_TERMINAL_PORTS),
+    private readonly pickPort: () => Promise<number> = pickSharedPort,
   ) {}
 
   /**
