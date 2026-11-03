@@ -36,6 +36,55 @@ describe('inputBoxText', () => {
   });
 });
 
+describe('a title as wide as the pane', () => {
+  // Taken from live panes: the title fills the rule, so no "─" comes before it (or any, in Hebrew).
+  const wide = (title: string, ...box: string[]) =>
+    [
+      '✻ Worked for 37m 44s · done 2:55 PM',
+      '❯ Read the file .loop/request-3.md',
+      '  and handle that request.',
+      title,
+      ...box,
+      '────────────────────────────────────────',
+      '',
+      '  ⏵⏵ auto mode on (shift+tab to cycle) · PR #14',
+    ].join('\n');
+  const hebrew = ' במשחק החושן: להחליף את המנורה שברקע במנורת הרמב"ם, כלומר קני ';
+  const english = " From the owner. The files the requester attached to the email have now reach… ─";
+
+  it('still shows the box, empty or holding text', () => {
+    expect(inputBoxText(wide(hebrew, '❯ '))).toBe('');
+    expect(inputBoxText(wide(english, '❯ '))).toBe('');
+    expect(inputBoxText(wide(english, '❯ Read the file', '  now'))).toBe('Read the file now');
+    expect(inputBoxHolds(wide(hebrew, `❯ ${SENTENCE}`), SENTENCE)).toBe(true);
+  });
+
+  it('does not read a dialog or a message already sent as the box', () => {
+    expect(inputBoxText(wide(english, '❯ 1. Yes', '  2. No'))).toBeNull();
+    // Nothing but a sent message above the rule, with no title line over it.
+    expect(inputBoxText(['', '❯ Old message', '────────────', '  status'].join('\n'))).toBeNull();
+    expect(inputBoxText(['❯ Older', '❯ Old message', '────────────', '  status'].join('\n'))).toBeNull();
+  });
+
+  it('does not read the dialog that shows such a title under its choices as the box', () => {
+    const dialog = [
+      '────────────────────────────────────────',
+      ' Read outside the working directories',
+      ' Read(/home/work/incoming/a.png)',
+      ' Auto mode and the sandbox read outside the working directories without asking.',
+      ' Yes or No answers for this read; the rest is for later reads.',
+      ' Allow this read outside the working directories?',
+      ' ❯ 1. Yes, and keep allowing any reads outside the working directories',
+      '   2. No, and block reads outside the working directories from now on',
+      '   3. No, and ask again next time',
+      '   4. Yes, but ask again next time',
+      ' Esc to cancel · Tab to amend',
+      english,
+    ].join('\n');
+    expect(inputBoxText(dialog)).toBeNull();
+  });
+});
+
 describe('inputBoxHolds', () => {
   it('is true while the typed sentence sits in the box, wrapped or not', () => {
     expect(inputBoxHolds(holding(SENTENCE), SENTENCE)).toBe(true);
