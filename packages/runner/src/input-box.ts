@@ -39,7 +39,13 @@ export function inputBoxText(pane: string): string | null {
   let box = top === undefined ? [] : lines.slice(top + 1, bottom);
   if (box.length === 0 || box.length > MAX_BOX_LINES || !PROMPT.test(box[0]!)) {
     // No top rule to be seen: the prompt nearest the closing rule, under a line that can be the title.
-    const start = bottom - 1 - lines.slice(0, bottom).reverse().findIndex((l) => PROMPT.test(l));
+    const start =
+      bottom -
+      1 -
+      lines
+        .slice(0, bottom)
+        .reverse()
+        .findIndex((l) => PROMPT.test(l));
     const title = lines[start - 1];
     if (start < 1 || bottom - start > MAX_BOX_LINES || !PROMPT.test(lines[start] ?? '')) return null;
     if (MENU_CHOICE.test(lines[start]!) || !title?.trim() || PROMPT.test(title)) return null;
