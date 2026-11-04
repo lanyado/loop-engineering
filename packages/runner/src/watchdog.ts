@@ -1,5 +1,5 @@
 import type { PullRequest, Session, Store } from '@loop-engineering/core';
-import { inputBoxHolds, inputBoxText } from './input-box.js';
+import { inputBoxHasText, inputBoxText } from './input-box.js';
 import type { SessionRunner } from './runner.js';
 import { detectTrustPrompt } from './trust-prompt.js';
 
@@ -40,22 +40,31 @@ const REFUSAL = 'Permission watchdog: refused';
 const REFUSAL_ALERTED = 'Permission watchdog alert';
 const STUCK_ALERTED = 'Screen watchdog alert';
 
-const NUDGE =
-  'Automatic check: you have been idle with work that is not delivered, and nobody watches this terminal. ' +
+const DELIVER =
   'Commit what belongs to your task, merge the latest default branch, push and open the pull request. Git and ' +
   'network errors usually pass: wait and retry them. Do not delete files you did not create: if something does ' +
   'not belong to the task, leave it and say so.';
-const FIX =
-  'Automatic check: your pull request is waiting for your answer to the feedback you were sent, you have been idle, ' +
-  'and nobody watches this terminal. Fix what it asks, commit and push. Git and network errors usually pass: wait ' +
-  'and retry them. Do not delete files you did not create.';
+const ANSWER =
+  'Fix what the feedback you were sent asks, commit and push. Git and network errors usually pass: wait and retry ' +
+  'them. Do not delete files you did not create.';
+const IDLE = 'Automatic check: you have been idle, and nobody watches this terminal.';
 const HUNG =
   'Automatic check: you have been waiting at your prompt with a background run for a long time, and nobody watches ' +
-  'this terminal. It may have hung. Check its output, stop runs you started that have hung, rerun them under ' +
-  '`timeout`, and continue with your task.';
+  'this terminal. It may have hung: check its output, and stop and rerun under `timeout` any run you started that ' +
+  'has hung. Then:';
+/** What an idle agent is told, by whether a shell runs and whether its next move is to deliver or to answer feedback. */
+const REMINDERS = {
+  deliver: { idle: `${IDLE} Your work is not delivered. ${DELIVER}`, shell: `${HUNG} ${DELIVER}` },
+  fix: {
+    idle: `${IDLE} Your pull request is waiting for your answer. ${ANSWER}`,
+    shell: `${HUNG} ${ANSWER}`,
+  },
+};
 const REFUSED =
   'Automatic check: a permission question waited and was refused, because nobody can approve it here. ' +
   'Find another way to do this inside your working folder.';
+/** Left in the box when a send timed out, these count as an empty box: the next send finishes them. */
+const OUR_MESSAGES = [REFUSED, ...Object.values(REMINDERS).flatMap((r) => [r.idle, r.shell])];
 
 /** Claude's spinner with the time so far, or the hint to interrupt it. A tool's own "⎿ Running… (2m)" is not it. */
 const WORKING = /esc to interrupt|^\s*[^\s\w⎿]\s+\S.*…\s*\(\d+[hms]/im;
@@ -78,7 +87,7 @@ export function detectPermissionPrompt(pane: string): string | null {
     .map((l) => l.trim())
     .filter((l) => l !== '')
     .slice(-MENU_TAIL_LINES);
-  const footer = lines.findLastIndex((l) => /\besc to (?:cancel|exit)\b/i.test(l));
+  const footer = lines.findLastIndex((l) => /\besc to cancel\b/i.test(l));
   // One line may follow it: the session title Claude can draw at the right.
   if (footer < 0 || footer < lines.length - 2 || WORKING.test(lines[footer + 1] ?? '')) return null;
   let last = footer - 1;
@@ -106,7 +115,7 @@ export function runningShell(pane: string): boolean {
 
 /** An idle agent's box can take `message`: it is empty, or holds that message from a send that timed out. */
 function canTake(pane: string, message: string): boolean {
-  return !agentBusy(pane) && (inputBoxText(pane) === '' || inputBoxHolds(pane, message));
+  return !agentBusy(pane) && (inputBoxText(pane) === '' || inputBoxHasText(pane, message));
 }
 
 /**
@@ -193,8 +202,9 @@ export class SessionWatchdog {
     }
     const now = this.options.now();
     const seen = this.prompts.get(s.id);
-    if (!seen || seen.text !== text) {
-      this.prompts.set(s.id, { text, since: now });
+    const key = text.replace(/\d/g, ''); // a timer ticking above the menu is not a new question
+    if (!seen || seen.text !== key) {
+      this.prompts.set(s.id, { text: key, since: now });
       return true;
     }
     if (now - seen.since < PROMPT_MS) return true;
@@ -229,7 +239,7 @@ export class SessionWatchdog {
     const seen = this.quiet.get(s.id);
     // Waiting at an empty box with a conversation that stopped growing: anything else is not idle. A
     // text of ours left in the box when sending timed out counts as empty: the next send finishes it.
-    if (!seen || seen.activity !== activity || ![NUDGE, FIX, HUNG].some((m) => canTake(pane, m))) {
+    if (!seen || seen.activity !== activity || ![...OUR_MESSAGES].some((m) => canTake(pane, m))) {
       this.quiet.set(s.id, { activity, since: now, looked: 0 });
       return;
     }
@@ -242,7 +252,7 @@ export class SessionWatchdog {
     const turn = this.agentsTurn(s);
     if (!turn || (turn === 'deliver' && !(await this.runner.hasUndeliveredWork(s.id)))) return;
     if (nudges < NUDGE_AFTER_MS.length) {
-      await this.runner.sendToSession(s.id, shell ? HUNG : turn === 'fix' ? FIX : NUDGE);
+      await this.runner.sendToSession(s.id, REMINDERS[turn][shell ? 'shell' : 'idle']);
       this.note(
         s,
         `${NUDGED} ${nudges + 1}: idle ${Math.round((now - seen.since) / MINUTE)} minutes, ${turn === 'fix' ? 'owing an answer to PR feedback' : 'with undelivered work'}.`,

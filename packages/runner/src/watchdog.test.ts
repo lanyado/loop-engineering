@@ -100,6 +100,12 @@ describe('reading the pane', () => {
     expect(detectPermissionPrompt(`${AUTO_DIALOG}\nline one\nline two\nline three`)).toBeNull();
   });
 
+  it('does not touch a menu whose Esc would exit Claude (F2)', () => {
+    expect(
+      detectPermissionPrompt(AUTO_DIALOG.replace('Esc to cancel · Tab to amend', 'Esc to exit')),
+    ).toBeNull();
+  });
+
   it('leaves the folder-trust dialog to its own handling', () => {
     expect(detectPermissionPrompt(TRUST)).toBeNull();
   });
@@ -144,6 +150,34 @@ describe('a permission question', () => {
       .list({ sessionId: id })
       .find((e) => e.text.startsWith('Permission watchdog'));
     expect(entry?.text).toContain('Read(/etc/hostname)');
+  });
+
+  it('keeps its two minutes when only a timer above the menu changes', async () => {
+    const { h, target, clock } = await setup();
+    const press = h.tmux.pressEscape.bind(h.tmux);
+    h.tmux.pressEscape = async (t) => {
+      await press(t);
+      h.tmux.print(t, IDLE_CLAUDE_PANE);
+    };
+    const monitor = new UsageLimitMonitor(h.runner, h.store, { now: () => clock.now });
+    h.tmux.print(target, `  ⎿  Running… (3m 2s)\n${AUTO_DIALOG}`);
+    await monitor.checkOnce();
+    clock.now += 2 * MINUTE;
+    h.tmux.print(target, `  ⎿  Running… (5m 2s)\n${AUTO_DIALOG}`);
+    await monitor.checkOnce();
+    expect(h.window(target).keys).toContain('<Esc>');
+  });
+
+  it('only gets the one-hour alert at a menu whose Esc would exit Claude (F2)', async () => {
+    const { h, target, clock } = await setup();
+    h.tmux.print(target, AUTO_DIALOG.replace('Esc to cancel · Tab to amend', 'Esc to exit'));
+    const onAlert = vi.fn();
+    const monitor = new UsageLimitMonitor(h.runner, h.store, { now: () => clock.now, onAlert });
+    await monitor.checkOnce();
+    clock.now += 60 * MINUTE;
+    await monitor.checkOnce();
+    expect(onAlert).toHaveBeenCalledTimes(1);
+    expect(h.window(target).keys).toBe('');
   });
 
   it('never presses anything at the folder-trust dialog', async () => {
@@ -475,6 +509,46 @@ describe('an idle agent with undelivered work', () => {
     expect(nudges(h, id)).toBe(1);
   });
 
+  it("leaves a person's pasted draft in the box alone (F1)", async () => {
+    const { h, id, path, target, clock } = await setup();
+    h.git.statuses.set(path, ' M src/a.ts');
+    h.tmux.print(target, IDLE_CLAUDE_PANE.replace('❯ ', '❯ [Pasted text #1 +4 lines]'));
+    const monitor = new UsageLimitMonitor(h.runner, h.store, { now: () => clock.now });
+    await monitor.checkOnce();
+    clock.now += 500 * MINUTE;
+    await monitor.checkOnce();
+    expect(nudges(h, id)).toBe(0);
+    expect(h.window(target).keys).toBe('');
+  });
+
+  it('does not take leftover refusal text for a person typing, after a restart (F3)', async () => {
+    const { h, id, path, target, clock } = await setup();
+    h.git.statuses.set(path, ' M src/a.ts');
+    const refused =
+      'Automatic check: a permission question waited and was refused, because nobody can approve it here. ' +
+      'Find another way to do this inside your working folder.';
+    h.tmux.print(target, IDLE_CLAUDE_PANE.replace('❯ ', `❯ ${refused}`));
+    const monitor = new UsageLimitMonitor(h.runner, h.store, { now: () => clock.now });
+    await monitor.checkOnce();
+    clock.now += 30 * MINUTE;
+    await monitor.checkOnce();
+    expect(nudges(h, id)).toBe(1);
+  });
+
+  it('tells a builder with a hung run or a long-lived server what is still due', async () => {
+    const { h, path, target, clock } = await setup();
+    h.git.statuses.set(path, ' M src/a.ts');
+    h.tmux.print(target, `${IDLE_CLAUDE_PANE} · 1 shell`);
+    const monitor = new UsageLimitMonitor(h.runner, h.store, { now: () => clock.now });
+    await monitor.checkOnce();
+    clock.now += 45 * MINUTE;
+    await monitor.checkOnce();
+    const keys = h.window(target).keys;
+    expect(keys).toContain('may have hung');
+    expect(keys).toContain('open the pull request');
+    expect(keys.length).toBeLessThanOrEqual(800); // over this the send path refuses it
+  });
+
   it('tells it not to delete what it did not create', async () => {
     const { h, path, target, clock } = await setup();
     h.git.statuses.set(path, '?? notes.txt');
@@ -537,7 +611,11 @@ describe('an idle agent with undelivered work', () => {
       clock.now += MINUTE;
       await monitor.checkOnce();
       expect(nudges(h, id)).toBe(1);
-      expect(h.window(target).keys).toContain('may have hung');
+      const keys = h.window(target).keys;
+      expect(keys).toContain('may have hung');
+      expect(keys).toContain('feedback');
+      expect(keys).not.toContain('open the pull request');
+      expect(keys.length).toBeLessThanOrEqual(800);
     });
 
     it('needs nothing undelivered to remind about feedback: the fix is what is missing', async () => {
