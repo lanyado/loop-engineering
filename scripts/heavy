@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Runs a heavy command (a browser suite, a full QA run) once a machine-wide slot is free, so builders
+# and loop jobs don't all run browsers at once. Waits instead of failing, and exits with the command's
+# code. Put a timeout inside it, so waiting doesn't count: heavy timeout 600 npm test
+#   LOOP_HEAVY_SLOTS  runs at once (default 3)
+#   LOOP_HEAVY_DIR    lock folder (default /tmp/loop-heavy-<uid>)
+set -u
+if [ $# -eq 0 ]; then
+  echo 'usage: heavy <command> [args...]' >&2
+  exit 2
+fi
+# Already inside a slot (a nested call, a loop job), or no flock (macOS): just run it.
+if [ -n "${LOOP_HEAVY_HELD:-}" ] || ! command -v flock >/dev/null 2>&1; then
+  exec "$@"
+fi
+slots=${LOOP_HEAVY_SLOTS:-3}
+case $slots in
+  '' | *[!0-9]* | 0) slots=3 ;;
+esac
+dir=${LOOP_HEAVY_DIR:-/tmp/loop-heavy-$(id -u)}
+mkdir -p "$dir"
+said=
+while :; do
+  for i in $(seq 1 "$slots"); do
+    exec 9>"$dir/slot-$i"
+    if flock -n 9; then
+      break 2
+    fi
+    exec 9>&-
+  done
+  if [ -z "$said" ]; then
+    echo "heavy: all $slots slots are busy, waiting: $*" >&2
+    said=1
+  fi
+  sleep "${LOOP_HEAVY_POLL_SECONDS:-5}"
+done
+# This script holds the lock. The command doesn't get its descriptor, so a server it leaves behind
+# can't keep the slot. The lock goes with this process, however it ends.
+export LOOP_HEAVY_HELD=1
+"$@" 9>&- <&0 &
+child=$!
+trap 'kill -TERM "$child" 2>/dev/null' INT TERM HUP
+while :; do
+  wait "$child"
+  code=$?
+  kill -0 "$child" 2>/dev/null || break
+done
+exit "$code"

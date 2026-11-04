@@ -22,6 +22,11 @@ describe('isNetworkError', () => {
     'HTTP 504: Gateway Timeout',
     'fatal: unable to access "https://github.com/me/web.git/": The requested URL returned error: 503',
     'error: RPC failed; HTTP 502 curl 22 The requested URL returned error: 502',
+    'git@github.com: Permission denied (publickey).',
+    'fatal: Could not read from remote repository.',
+    'Connection closed by 140.82.112.4 port 22',
+    'kex_exchange_identification: Connection closed by remote host',
+    'ssh: connect to host github.com port 22: Connection timed out',
   ])('matches %s', (text) => {
     expect(isNetworkError(text)).toBe(true);
     expect(isNetworkError(new Error(text))).toBe(true);
@@ -38,7 +43,6 @@ describe('isNetworkError', () => {
     'GraphQL: Pull request is not mergeable: the merge commit cannot be cleanly created',
     'CONFLICT (content): Merge conflict in src/app.ts',
     'could not revert: merge conflict',
-    'Permission denied (publickey).',
     'remote: Repository not found.',
     'error: failed to push some refs to github.com:me/web.git (rejected, non-fast-forward)',
     'FAIL src/cart.test.ts: AssertionError: expected 200 to be 502',
@@ -46,6 +50,10 @@ describe('isNetworkError', () => {
     'no decision block in its answer',
     'the review job timed out or was stopped',
     'The tests job for PR #4 failed 3 times',
+    ' ! [rejected]        loop/x -> loop/x (non-fast-forward)',
+    'error: failed to push some refs to github.com:me/web.git',
+    'remote: Permission to me/web.git denied to some-bot.',
+    'remote: error: GH006: Protected branch update failed for refs/heads/main.',
   ])('does not match %s', (text) => {
     expect(isNetworkError(text)).toBe(false);
     expect(isNetworkError(new Error(text))).toBe(false);

@@ -106,6 +106,19 @@ export function createServer(options: CreateServerOptions): LoopServer {
           retryClaudeLimitMs: 30 * 60_000,
           onLimitResumed: (session) =>
             log(`[runner] session ${session.id} resumed on Claude after its usage limit`),
+          log,
+          onIdleAlert: (session) => {
+            try {
+              questions.ask({
+                sessionId: session.id,
+                text: `Session ${session.id} ("${session.title}") is idle with work that is not delivered, and three automatic reminders did not help. Open it to see why.`,
+                options: ['Acknowledge'],
+                recommendedOption: 'Acknowledge',
+              });
+            } catch (error) {
+              log(`[runner] idle alert (session ${session.id}): ${String(error)}`);
+            }
+          },
           // Nobody watches the tmux window, so a session stuck at Claude's trust dialog is asked about.
           onTrustPrompt: (session, folder) => {
             try {

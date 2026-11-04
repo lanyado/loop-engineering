@@ -22,6 +22,8 @@ export interface TmuxDriver {
   newWindow(spec: NewWindow): Promise<string>;
   /** Types `text` literally, then presses Enter unless `enter` is false. */
   sendKeys(target: string, text: string, options?: { enter?: boolean }): Promise<void>;
+  /** Presses Esc: the one key that cancels a dialog without choosing any of its options. */
+  pressEscape(target: string): Promise<void>;
   /** The last `lines` lines of the pane, wrapped lines joined. */
   capture(target: string, lines?: number): Promise<string>;
   /** Kills the window. A window that is already gone is not an error. */
@@ -91,6 +93,10 @@ export class RealTmuxDriver implements TmuxDriver {
       }
     }
     return (await this.tmux(['new-window', '-t', `=${spec.session}:`, ...common])).trim();
+  }
+
+  async pressEscape(target: string): Promise<void> {
+    await this.tmux(['send-keys', '-t', target, 'Escape']);
   }
 
   async sendKeys(target: string, text: string, options: { enter?: boolean } = {}): Promise<void> {

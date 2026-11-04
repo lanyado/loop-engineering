@@ -22,6 +22,7 @@ import {
 } from '@loop-engineering/core';
 import { detectUsageLimit, USAGE_LIMIT_PATTERNS } from '@loop-engineering/runner';
 import { repoRef } from './gh.js';
+import type { HeavySlots } from './heavy.js';
 import type {
   AgentJob,
   AgentJobResult,
@@ -116,9 +117,11 @@ const EFFORT_REJECTED =
  * An error that says the network or GitHub is unreachable, not that the work failed. Auth errors, 404s,
  * merge conflicts and failing tests never match: those are real failures and keep counting as attempts.
  * GitHub's gateway errors are matched as gh ("HTTP 502: Bad Gateway") and git ("returned error: 503") print them.
+ * Git over SSH prints the same outage as a refused key or a closed connection, so those count too: a key
+ * that is really gone still reaches the human, once NETWORK_WAITS_MAX runs out. A refused push never matches.
  */
 const NETWORK_ERROR =
-  /could not resolve host|error connecting to|operation timed out|connection (?:reset by peer|refused)|network is unreachable|tls handshake timeout|\b(?:ENOTFOUND|ECONNRESET|ECONNREFUSED|ENETUNREACH|ETIMEDOUT|EAI_AGAIN)\b|(?:HTTP|returned error:?) 50[234]\b|bad gateway|service unavailable|gateway time-?out/i;
+  /could not resolve host|error connecting to|operation timed out|connection (?:reset by peer|refused)|network is unreachable|tls handshake timeout|\b(?:ENOTFOUND|ECONNRESET|ECONNREFUSED|ENETUNREACH|ETIMEDOUT|EAI_AGAIN)\b|(?:HTTP|returned error:?) 50[234]\b|bad gateway|service unavailable|gateway time-?out|permission denied \(publickey\)|could not read from remote repository|connection closed by|kex_exchange_identification|ssh: connect to host/i;
 
 export function isNetworkError(err: unknown): boolean {
   return NETWORK_ERROR.test(typeof err === 'string' ? err : errorMessage(err));
@@ -128,6 +131,11 @@ export function isNetworkError(err: unknown): boolean {
 const NETWORK_WAITS_MIN = [1, 2, 5, 10, 15];
 /** Consecutive waits (about 6 hours) of one PR whose step keeps failing while GitHub itself answers. */
 const NETWORK_WAITS_MAX = 28;
+/** An automatic Continue of an infrastructure escalation nobody answered, per PR. Then the default is Take over. */
+const MAX_AUTO_CONTINUES = 2;
+/** A job killed at its timeout gets twice the time on its next try, this many times. */
+const MAX_TIMEOUT_DOUBLINGS = 2;
+const JOB_TIMED_OUT = /job timed out or was stopped/;
 /** How long a model that hit a limit is skipped by later jobs. */
 const MODEL_REST_MS = 15 * MINUTE;
 /** Waits when every model is limited: they don't count as failed attempts. Then the human is asked. */
@@ -144,6 +152,8 @@ export interface LoopConfig {
   qaTimeoutMs: number;
   /** Failed attempts of one step (job crash, invalid verdict, merge or revert refused) before asking the human. */
   maxAttempts: number;
+  /** After a job's attempts run out: one more try after each of these waits, then the human is asked. */
+  jobRetryWaitsMin: number[];
   tickIntervalMs: number;
   /** Model for jobs on Claude. Default: Settings.sessionModel. On OpenCode: Settings.fallbackModel. */
   jobModel: string | null;
@@ -181,6 +191,7 @@ export const DEFAULT_LOOP_CONFIG: LoopConfig = {
   jobTimeoutMs: 30 * MINUTE,
   qaTimeoutMs: 15 * MINUTE,
   maxAttempts: 3,
+  jobRetryWaitsMin: [15, 30, 60, 90],
   tickIntervalMs: 30_000,
   jobModel: null,
   stageProviders: {
@@ -270,6 +281,8 @@ export interface LoopDeps {
    * Default: the built-in stages in their built-in order.
    */
   stages?: StageSource;
+  /** The machine-wide limit on heavy runs, shared with the builders. Default: no limit. */
+  heavySlots?: HeavySlots;
   log?: (message: string) => void;
 }
 
@@ -461,6 +474,25 @@ export class LoopEngine {
     this.timers.setTimeout(() => {
       void this.tick().catch((err: unknown) => this.log(`tick failed: ${errorMessage(err)}`));
     }, 0);
+  }
+
+  /** Puts a PR that was sent to the human, or taken over by them, back in the loop at its first check. */
+  async retry(prId: number): Promise<PullRequest> {
+    const { store, github } = this.deps;
+    const pr = store.pullRequests.require(prId);
+    const out = pr.outcome === 'escalated' || (pr.outcome === null && pr.stage === 'escalated');
+    if (!out || loopState(pr).revertOf !== undefined) {
+      throw new ValidationError(`PR ${pr.repo}#${pr.number} is not out of the loop (stage ${pr.stage})`);
+    }
+    const c = this.ctx(pr);
+    if (!c) throw new ValidationError(`PR ${pr.repo}#${pr.number} is not in a git project of this loop`);
+    const gh = await github.getPr(c.ref, pr.number);
+    if (gh.state !== 'OPEN')
+      throw new ValidationError(`PR ${pr.repo}#${pr.number} is ${gh.state.toLowerCase()}`);
+    this.history(c, `PR ${pr.repo}#${pr.number} was returned to the loop.`);
+    this.backToFirstCheck(c, gh.headRefOid, { outcome: null }, { done: false, stall: undefined });
+    this.pokePr(prId);
+    return store.pullRequests.require(prId);
   }
 
   /**
@@ -1134,11 +1166,14 @@ export class LoopEngine {
     const options = [`Continue ${more} more`, TAKE_OVER, 'Close'];
     const q = this.pendingQuestion(c, 'escalation');
     if (!q) {
+      // The recommended option is what an unanswered question defaults to. An infrastructure failure
+      // usually passes, while Take over leaves the PR out of the loop until someone notices.
+      const retries = e.infra && (c.s.autoContinues ?? 0) < MAX_AUTO_CONTINUES;
       return this.ask(c, 'escalation', gh.headRefOid, {
         text: `${e.reason}: options Continue ${more} more / Take over / Close`,
         context: clip([gh.url, ...e.items.map((i, n) => `${n + 1}. ${i}`)].join('\n'), 2000),
         options,
-        recommendedOption: TAKE_OVER,
+        recommendedOption: retries ? options[0]! : TAKE_OVER,
       });
     }
     if (q.status === 'pending') return false;
@@ -1148,23 +1183,43 @@ export class LoopEngine {
       this.history(c, `PR ${c.pr.repo}#${c.pr.number}: the human took over (${e.reason}).`);
       return this.save(c, { outcome: 'escalated' }, { question: undefined });
     }
+    if (q.answeredVia !== 'timeout') return this.backToFirstCheck(c, gh.headRefOid);
+    this.history(
+      c,
+      `PR ${c.pr.repo}#${c.pr.number}: nobody answered, so the loop tries again (${e.reason}).`,
+    );
+    return this.backToFirstCheck(c, gh.headRefOid, {}, { autoContinues: (c.s.autoContinues ?? 0) + 1 });
+  }
+
+  /** Continue, or a retry after a take-over: the first check again, with room for more rounds. */
+  private backToFirstCheck(
+    c: Ctx,
+    sha: string,
+    patch: PullRequestPatch = {},
+    state: Partial<LoopState> = {},
+  ): boolean {
+    const e = c.s.escalation;
     // Review comments and test failures go back to the builder; an infrastructure error does not.
     const feedback: Feedback | undefined =
-      !e.infra && e.items.length > 0
-        ? { kind: 'review', ...e.from, items: e.items, sha: gh.headRefOid, sentAt: null }
+      e && !e.infra && e.items.length > 0
+        ? { kind: 'review', ...e.from, items: e.items, sha, sentAt: null }
         : undefined;
     const first = this.firstCheck(c);
-    return this.save(c, first.stage, {
-      ...first.state,
-      maxRounds: Math.max(c.pr.round, this.maxRounds(c)) + more,
-      escalation: undefined,
-      question: undefined,
-      feedback,
-      attempts: 0,
-      lastError: undefined,
-      retryAfter: undefined,
-      limitWaits: undefined,
-    });
+    return this.save(
+      c,
+      { ...first.stage, ...patch },
+      {
+        ...first.state,
+        ...FRESH_ATTEMPTS,
+        maxRounds: Math.max(c.pr.round, this.maxRounds(c)) + this.config.maxRounds,
+        escalation: undefined,
+        question: undefined,
+        feedback,
+        retryAfter: undefined,
+        limitWaits: undefined,
+        ...state,
+      },
+    );
   }
 
   // ---------------------------------------------------------------- stalls
@@ -1891,7 +1946,7 @@ export class LoopEngine {
     const failed = (err: unknown): JobOutcome<T> =>
       this.skippedJob(c, kind, usage) ?? {
         ok: false,
-        progressed: this.failure(c, `${kind} job`, err, usage),
+        progressed: this.jobFailure(c, `${kind} job`, err, usage),
       };
     const add = (r: AgentJobResult) => {
       usage.costUsd += r.costUsd;
@@ -1979,7 +2034,9 @@ export class LoopEngine {
       const why = result.isError ? `error: ${clip(result.text, 500)}` : 'no decision block in its answer';
       return failed(new Error(why));
     }
-    if (c.s.networkWaits) this.save(c, {}, { networkWaits: undefined });
+    if (c.s.networkWaits || c.s.jobRetryWaits || c.s.jobTimeouts) {
+      this.save(c, {}, { networkWaits: undefined, jobRetryWaits: undefined, jobTimeouts: undefined });
+    }
     if (out.pushed?.status === 'rejected') {
       this.log(`PR ${c.pr.repo}#${c.pr.number}: the tester's tests were not pushed (${out.pushed.reason})`);
     }
@@ -1999,6 +2056,7 @@ export class LoopEngine {
     const mine = { kind: job.kind, controller };
     this.running.set(c.pr.id, mine);
     let release: (() => void) | null = null;
+    let slot: (() => void) | undefined;
     let path: string | null = null;
     let timer: TimerHandle | null = null;
     try {
@@ -2006,6 +2064,10 @@ export class LoopEngine {
       this.controllers.add(controller);
       if (this.stopped) throw new Error('the loop is stopping');
       controller.signal.throwIfAborted();
+      // Before the timeout starts, so waiting for a slot is never job time.
+      if (job.kind === 'tests' || job.rights.playwright) {
+        slot = await this.deps.heavySlots?.acquire(controller.signal);
+      }
       // A checkout owned by the loop at the exact head, never the builder's worktree.
       path = await workspace.checkout({
         repo: c.repo,
@@ -2032,7 +2094,8 @@ export class LoopEngine {
       const timeout = browser
         ? Math.min(this.config.qaTimeoutMs, this.config.jobTimeoutMs)
         : this.config.jobTimeoutMs;
-      timer = this.timers.setTimeout(() => controller.abort(), timeout);
+      const longer = 2 ** Math.min(c.s.jobTimeouts ?? 0, MAX_TIMEOUT_DOUBLINGS);
+      timer = this.timers.setTimeout(() => controller.abort(), timeout * longer);
       // Raced, so a launcher that ignores the signal cannot hold the PR past the timeout.
       const logFile = this.config.logsDir ? jobLogFile(this.config.logsDir, c.pr.id, job.kind) : undefined;
       const run = launcher.run({ ...job, cwd: path, ...(logFile ? { logFile } : {}) }, controller.signal);
@@ -2044,6 +2107,7 @@ export class LoopEngine {
       this.controllers.delete(controller);
       if (this.running.get(c.pr.id) === mine) this.running.delete(c.pr.id);
       if (path) await workspace.remove(c.repo, path).catch(() => undefined);
+      slot?.();
       release?.();
     }
   }
@@ -2257,6 +2321,40 @@ export class LoopEngine {
     return false;
   }
 
+  /**
+   * A job that ended without a result. That says little about the PR's code, and the usual causes pass
+   * (a loaded machine, a GitHub problem), so once its attempts run out it is tried once per
+   * jobRetryWaitsMin before the human is asked. A timed-out job also gets longer on its next try.
+   */
+  private jobFailure(c: Ctx, what: string, err: unknown, usage: MetricsDelta): boolean {
+    const message = errorMessage(err);
+    const extra: Partial<LoopState> = JOB_TIMED_OUT.test(message)
+      ? { jobTimeouts: (c.s.jobTimeouts ?? 0) + 1 }
+      : {};
+    const attempts = (c.s.attempts ?? 0) + 1;
+    const waits = c.s.jobRetryWaits ?? 0;
+    const minutes = this.config.jobRetryWaitsMin[waits];
+    if (isNetworkError(message) || attempts < this.config.maxAttempts || minutes === undefined) {
+      return this.failure(c, what, err, usage, true, extra);
+    }
+    this.log(
+      `PR ${c.pr.repo}#${c.pr.number}: ${what} failed ${attempts} times, trying again in ${minutes} min: ${message}`,
+    );
+    this.save(
+      c,
+      {},
+      {
+        ...extra,
+        attempts: attempts - 1, // the next failure comes straight back here
+        lastError: message,
+        jobRetryWaits: waits + 1,
+        retryAfter: new Date(this.now() + minutes * MINUTE).toISOString(),
+      },
+      usage,
+    );
+    return false;
+  }
+
   // ---------------------------------------------------------------- helpers
 
   /** The rigor of the PR's session as stored now (standard without a session). */
@@ -2400,7 +2498,12 @@ const FEEDBACK_LABEL: Record<Exclude<FeedbackKind, 'check'>, string> = {
  * A check starting over: no failed attempts and no error from another job. Model-limit and network
  * backoffs stay: they belong to the provider and the network, not to the check.
  */
-const FRESH_ATTEMPTS: Partial<LoopState> = { attempts: 0, lastError: undefined };
+const FRESH_ATTEMPTS: Partial<LoopState> = {
+  attempts: 0,
+  lastError: undefined,
+  jobRetryWaits: undefined,
+  jobTimeouts: undefined,
+};
 
 /** The PR stages a check runs in; advanceOpen picks which check from the pipeline. */
 const atCheck = (stage: string) => isBuiltinCheck(stage) || stage === 'check';

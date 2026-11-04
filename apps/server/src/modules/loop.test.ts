@@ -212,11 +212,37 @@ describe('loop server module', () => {
     await server.close();
   });
 
+  it('POST /prs/:id/retry answers for a running engine, behind the dashboard token', async () => {
+    const { store, runner, github, timers, module, api, project } = await boot();
+    const session = await runner.startSession(project.id, { text: 'Add a pay page' });
+    github.open('me/web', { branch: session.branch });
+    timers.advance(0);
+    const pr = await vi.waitFor(() => {
+      const row = store.pullRequests.list()[0];
+      expect(row?.stage).toBe('awaiting_approval');
+      expect(module.engine()?.status().busy).toEqual([]);
+      return row!;
+    });
+    expect((await api('/prs/999/retry', { method: 'POST' })).status).toBe(404);
+    expect((await api(`/prs/${pr.id}/retry`, { method: 'POST' })).status).toBe(400); // still in the loop
+    store.pullRequests.update(pr.id, { stage: 'escalated', outcome: 'escalated' });
+    const res = await api(`/prs/${pr.id}/retry`, { method: 'POST' });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { pullRequest: { outcome: unknown } }).pullRequest.outcome).toBeNull();
+  });
+
   it('answers 503 on the status route until the engine runs', async () => {
     const store = openStore();
     const module = loopModule({ createEngine: () => null as unknown as LoopEngine, log: () => undefined });
     const server = createServer({ config: serverConfig, store, modules: [module] });
     cleanup.push(() => store.close());
+    const missing = await server.app.request('/api/prs/999/retry', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${DASHBOARD}` },
+    });
+    expect(missing.status).toBe(503);
+    const anonymous = await server.app.request('/api/prs/999/retry', { method: 'POST' });
+    expect(anonymous.status).toBe(401);
     const res = await server.app.request('/api/loop/status', {
       headers: { Authorization: `Bearer ${DASHBOARD}` },
     });
@@ -248,6 +274,7 @@ describe('loopModuleFromEnv', () => {
     expect(loopConfigFromEnv({})).toEqual({
       maxConcurrentJobs: 4,
       jobTimeoutMs: 30 * 60_000,
+      qaTimeoutMs: 15 * 60_000,
       maxRounds: 5,
       tickIntervalMs: 30_000,
       jobModel: null,

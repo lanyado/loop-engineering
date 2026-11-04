@@ -50,6 +50,7 @@ export {
 } from './run-command.js';
 export { sanitizeLine } from './sanitize.js';
 export { UsageLimitMonitor, type MonitorOptions, type MonitorPass } from './monitor.js';
+export { SessionWatchdog, type WatchdogOptions } from './watchdog.js';
 export {
   DEFAULT_MCP_TOOL_TIMEOUT_MS,
   DEFAULT_TMUX_SESSION,

@@ -12,6 +12,7 @@ import {
   jobLogFile,
   LoopEngine,
   ProductionGuardian,
+  ScriptHeavySlots,
   type GuardianConfig,
   type LoopConfig,
   type LoopDeps,
@@ -70,6 +71,13 @@ export function loopModule(options: LoopModuleOptions): LoopModule {
         const limit = Math.min(Number(c.req.query('limit')) || 50, 200);
         const runs = ctx.store.guardianRuns.list(projectId ? { projectId: Number(projectId) } : {}, limit);
         return c.json({ runs: runs.reverse() });
+      });
+      // A PR sent to the human, or taken over, back in the loop from its first check.
+      api.post('/prs/:id/retry', async (c) => {
+        if (!engine) return c.json({ error: 'the PR loop is not running' }, 503);
+        const id = Number(c.req.param('id'));
+        if (!Number.isInteger(id)) return c.json({ error: 'no such PR' }, 404);
+        return c.json({ pullRequest: await engine.retry(id) });
       });
       // A read-only ttyd page following a stage's job log, for the dashboard to embed.
       api.post('/prs/:id/web-terminal', async (c) => {
@@ -171,6 +179,7 @@ export function loopConfigFromEnv(env: NodeJS.ProcessEnv): Partial<LoopConfig> {
   const config: Partial<LoopConfig> = {
     maxConcurrentJobs: positiveInt(env, 'LOOP_MAX_JOBS', 4, problems),
     jobTimeoutMs: positiveInt(env, 'LOOP_JOB_TIMEOUT_MINUTES', 30, problems) * 60_000,
+    qaTimeoutMs: positiveInt(env, 'LOOP_QA_TIMEOUT_MINUTES', 15, problems) * 60_000,
     maxRounds: positiveInt(env, 'LOOP_MAX_ROUNDS', 5, problems),
     tickIntervalMs: positiveInt(env, 'LOOP_TICK_SECONDS', 30, problems) * 1000,
     jobModel: env.LOOP_JOB_MODEL?.trim() || null,
@@ -248,9 +257,11 @@ export function loopModuleFromEnv(env: NodeJS.ProcessEnv, deps: Partial<LoopDeps
           runner: ctx.runner,
           questions: ctx.questions,
           github: new GhCli(),
-          launcher: new CliAgentLauncher(),
+          // A job's heavy runs are covered by the slot the engine holds for it: scripts/heavy passes them through.
+          launcher: new CliAgentLauncher({ extraEnv: { LOOP_HEAVY_HELD: '1' } }),
           deployments: new GhDeployments(),
           workspace: new GitWorkspace(jobsRoot),
+          heavySlots: new ScriptHeavySlots(),
           timers: ctx.timers,
           // The one place the loop records a request: the server's RequestService (request.created).
           createRequest: (input) => ctx.requests.create({ ...input, source: 'dashboard' }),
