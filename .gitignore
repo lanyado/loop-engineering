@@ -19,4 +19,3 @@ data/stages/
 
 # Private add-ins: never part of this repository (docs/reference.md, "Local add-ins").
 /local/
-.media-tmp/

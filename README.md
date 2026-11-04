@@ -10,13 +10,13 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](tsconfig.base.json)
 [![Runs locally](https://img.shields.io/badge/runs-on%20your%20machine-8b5cf6)](SECURITY.md)
 
-[Quick start](#quick-start) · [Features](#features) · [Settings](#settings) · [Reference](docs/reference.md) · [Security](SECURITY.md)
+[Quick start](#quick-start) · [Features](#features) · [See it work](#see-it-work) · [Settings](#settings) · [Reference](docs/reference.md) · [Security](SECURITY.md)
 
 <br />
 
-<img src="docs/media/pipeline.gif" alt="The dashboard: every task is a live pipeline from planner to deploy, with a rigor dial from Fast to Thorough" width="860" />
+<img src="docs/media/pipeline.gif" alt="One task from prompt to production: a prompt with an attached design starts a session, then the Planner, Builder, Tests, Code review, QA, Approval, Merge, Deploy and Guardian nodes light up in turn" width="860" />
 
-<sub>The dashboard, shown with its built-in demo data.</sub>
+<sub>One task, from prompt to production. The real dashboard and server, with a scripted sample run compressed into seconds.</sub>
 
 </div>
 
@@ -25,19 +25,51 @@
 ## Features
 
 - **Background sessions.** Each task runs the Claude Code CLI in tmux, in its own git worktree. When Claude hits its usage limit, the session can move to a free OpenCode model.
+- **Planned before it's built.** A Planner reads the code, asks what's unclear, and picks the rigor level and the model for each agent. You can override any of it.
 - **Questions, not interruptions.** The agent asks through the dashboard as one-tap options with a default answer. If you don't reply in time, the default wins.
 - **A PR loop that closes the job.** Optional. Tests, code review by a separate agent, QA, merge and deploy for every PR a session opens. Failures go back to the agent, and a failed deploy is reverted (repos with a Vercel project set).
-- **A pipeline you can see.** Every project is a live pipeline, with your Claude 5-hour and weekly limits beside it.
-- **Rigor dial.** One control from **Fast** to **Thorough** trades safety against time and money.
-- **Yours to edit.** Reorder, remove or add stages and rewrite their prompts, all from the dashboard.
+- **Nothing stalls in silence.** A PR that stops moving for 2 hours comes to you, whatever the cause. Messages to an agent are checked against its own conversation file, and a builder whose agent exited is resumed with the feedback it missed.
+- **Every agent, one click away.** Live terminals sit under each pipeline, with your Claude 5-hour and weekly limits in the top bar.
+- **Screenshots in the prompt.** Attach, paste or drop files when you start a session or message one.
+- **Yours to edit.** Reorder, remove or add stages and rewrite their prompts from the dashboard, shared or per project.
 
-### Answer from the dashboard
+The pipeline runs left to right: **Planner → Builder → Tests → Code review → QA → Approval → Merge → Deploy → Guardian**.
 
-<img src="docs/media/questions.gif" alt="A pull request waiting for approval, with one-tap Merge and Hold options and a free-text answer" width="860" />
+## See it work
+
+These clips show the real dashboard and server, with real clicks. No agents run in them: the work and the terminal output are sample data, played by [`scripts/capture-readme-media.mjs`](scripts/capture-readme-media.mjs).
+
+### Answer without leaving the board
+
+An agent's question appears on the node that asked it. When a PR stops moving, the same kind of card asks you what to do.
+
+<img src="docs/media/questions.gif" alt="Opening a builder's question, reading its context and answering with one tap, then a stall alarm asks whether to keep waiting, nudge the builder or take over" width="860" />
+
+### Watch any agent work
+
+The Builder's terminal is live and takes your typing. Each check follows its own log.
+
+<img src="docs/media/terminals.gif" alt="Opening the Terminals panel under a pipeline and switching between the Builder, Tests, Code review and QA tabs" width="860" />
+
+### Decide how much care a task gets
+
+Move the rigor dial, change the model on any node, or skip one check for one PR.
+
+<img src="docs/media/controls.gif" alt="Clicking the rigor levels, choosing a different model for QA, and skipping QA for one pull request" width="860" />
 
 ### Shape the pipeline
 
-<img src="docs/media/editor.gif" alt="Editing the dashboard: removing a top bar item and adding it back" width="860" />
+Drag stages, remove them, or write a new one, for all projects or just one.
+
+<img src="docs/media/editor.gif" alt="The pipeline editor: choosing a project's tab, dragging QA to the front, removing and restoring Tests, and adding a Security review stage" width="860" />
+
+### Light or dark
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/board-dark.png" />
+  <source media="(prefers-color-scheme: light)" srcset="docs/media/board-light.png" />
+  <img src="docs/media/board-dark.png" alt="The board with a session waiting for approval, in the theme your system uses" width="860" />
+</picture>
 
 > [!WARNING]
 > Everything runs on your machine, reachable only from it, and it starts agents with write access to your repos. It is a personal project, built mostly by the agents it runs, and developed on macOS. Read [SECURITY.md](SECURITY.md) first.
@@ -46,9 +78,9 @@
 
 - macOS (Linux is untested), Node 20.19+, git and tmux
 - [Claude Code](https://docs.claude.com/en/docs/claude-code), installed and logged in (run `claude` once)
-- Optional: [`gh`](https://cli.github.com) for the PR loop, [OpenCode](https://opencode.ai) for the free fallback, and `jq` for the usage meters
+- Optional: [`gh`](https://cli.github.com) for the PR loop, [OpenCode](https://opencode.ai) for the free fallback, `jq` for the usage meters, and [`ttyd`](https://github.com/tsl0922/ttyd) for the terminals under each pipeline
 
-`npm run setup` checks all of these and tells you what's missing.
+`npm run setup` checks all of these except `ttyd` and tells you what's missing. Without `ttyd`, opening a terminal shows the command to install it.
 
 ## Quick start
 
@@ -90,6 +122,7 @@ These are the `.env` values you're most likely to change. Everything else has a 
 | `WORKTREES_ROOT`                | Where session worktrees go (setup sets `~/loop-worktrees`)                            |
 | `CLAUDE_LIMIT=opencode`         | At Claude's usage limit, switch to OpenCode instead of waiting                        |
 | `SERVER_PORT`, `DASHBOARD_PORT` | Ports, 8787 and 3737 by default (change `SERVER_URL` along with `SERVER_PORT`)        |
+| `WEB_TERMINAL_PORTS`            | A port range for the terminals, such as `3800-3829`, to carry them over an SSH tunnel |
 
 `npm run setup` never overwrites a value you've set, so it's safe to run again after an update.
 
@@ -118,6 +151,7 @@ printf '%s' "$input" | /path/to/loop-engineering/scripts/capture-claude-usage.sh
 | `npm run setup`                                 | Check tools, build, create or complete `.env`                           |
 | `npm start`                                     | Run the server and the dashboard (Ctrl-C stops both)                    |
 | `npm run add-project -- <path>`                 | Register a project (`--name`, `--branch`, `--folder`, `--outside-home`) |
+| `npm run loop -- init <path>`                   | Give a project its own pipeline (`loop init` after `npm link`)          |
 | `npm run build`                                 | Rebuild after pulling changes                                           |
 | `npm test`, `npm run typecheck`, `npm run lint` | The checks CI runs                                                      |
 | `npm run dev -w @loop-engineering/dashboard`    | Dashboard in development mode (`SERVER_URL=` for demo data)             |
