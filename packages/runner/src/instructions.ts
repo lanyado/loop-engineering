@@ -56,6 +56,7 @@ const SHARED_MACHINE = [
   `- Run every browser suite and full QA through the machine-wide limit: \`${HEAVY_SCRIPT} <command>\`. It ` +
     'waits for a free slot and returns the exit code. Start it in the background, because the wait can be long, ' +
     'and put any timeout inside it: `heavy timeout 600 npm test`. Quick unit tests do not need it.',
+  '- Run long tests under `timeout`, and do not wait on a run whose output has gone quiet: check it, stop it if it has hung, and rerun it.',
   "- `node_modules` in your worktree may be a symlink to the main checkout's: use it as it is.",
   '- A permission question in this terminal is refused after two minutes, because nobody can approve it. ' +
     'If a tool refuses a path outside your folder, find another way inside your folder.',

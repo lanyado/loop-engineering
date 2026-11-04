@@ -1,5 +1,5 @@
-import { execFile, spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { execFile, spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -58,10 +58,10 @@ describe.skipIf(!hasFlock)('scripts/heavy', () => {
 
   it('frees the slot when the command ends, even if it left a server behind', async () => {
     // A background process that outlives the command must not keep the lock.
-    await run('sh', '-c', 'sleep 2 >/dev/null 2>&1 &');
+    await run('sh', '-c', 'sleep 6 >/dev/null 2>&1 &');
     const started = Date.now();
     expect((await run('true')).code).toBe(0);
-    expect(Date.now() - started).toBeLessThan(1500);
+    expect(Date.now() - started).toBeLessThan(4000);
   });
 
   it('stops a command at the time limit, TERM then KILL, and frees its slot (B1)', async () => {
@@ -82,6 +82,69 @@ describe.skipIf(!hasFlock)('scripts/heavy', () => {
     expect(out).toMatchObject({ code: 3, stdout: 'ran\n' });
     expect(out.stderr).toMatch(/without a limit/);
   }, 10_000);
+
+  it('returns as soon as the command ends: nothing of its own holds the output open', async () => {
+    const started = Date.now();
+    expect((await run('true')).code).toBe(0);
+    expect(Date.now() - started).toBeLessThan(700);
+  });
+
+  it('keeps the engine slot past the time limit: the job timer bounds it', async () => {
+    vi.stubEnv('LOOP_HEAVY_MAX_SECONDS', '1');
+    const release = await new ScriptHeavySlots().acquire(new AbortController().signal);
+    await new Promise((r) => setTimeout(r, 2500));
+    let done = false;
+    const next = run('true').then(() => (done = true));
+    await new Promise((r) => setTimeout(r, 300));
+    expect(done).toBe(false);
+    release();
+    await next;
+    expect(done).toBe(true);
+  }, 10_000);
+
+  it('a killed heavy takes its command along, as one process group', async () => {
+    const pidFile = join(dir, 'pid');
+    const child = spawn('setsid', [HEAVY_SCRIPT, 'sh', '-c', `echo $$ > ${pidFile}; exec sleep 30`], {
+      stdio: 'ignore',
+    });
+    await vi.waitFor(() => expect(existsSync(pidFile) && readFileSync(pidFile, 'utf8').trim()).toBeTruthy(), {
+      timeout: 3000,
+    });
+    const pid = Number(readFileSync(pidFile, 'utf8').trim());
+    process.kill(-child.pid!, 'SIGKILL');
+    await vi.waitFor(
+      () => {
+        let alive = true;
+        try {
+          process.kill(pid, 0);
+        } catch {
+          alive = false;
+        }
+        expect(alive).toBe(false);
+      },
+      { timeout: 3000 },
+    );
+  }, 10_000);
+
+  it.skipIf(spawnSync('sh', ['-c', 'command -v tmux']).status !== 0)(
+    'a command can read a real terminal',
+    async () => {
+      const socket = `heavy-tty-${process.pid}`;
+      const out = join(dir, 'typed');
+      const tmux = (...args: string[]) => spawnSync('tmux', ['-L', socket, ...args]);
+      tmux('new-session', '-d', '-s', 't', `${HEAVY_SCRIPT} sh -c 'read x; echo "$x" > ${out}'`);
+      try {
+        await new Promise((r) => setTimeout(r, 500));
+        tmux('send-keys', '-t', 't', 'hello', 'Enter');
+        await vi.waitFor(() => expect(existsSync(out) && readFileSync(out, 'utf8').trim()).toBe('hello'), {
+          timeout: 3000,
+        });
+      } finally {
+        tmux('kill-server');
+      }
+    },
+    10_000,
+  );
 
   it('runs nested calls straight away, inside the slot it already has', async () => {
     const out = await run(HEAVY_SCRIPT, 'sh', '-c', 'echo nested');

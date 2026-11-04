@@ -22,6 +22,8 @@ export class ScriptHeavySlots implements HeavySlots {
       // Inherited, a job's own LOOP_HEAVY_HELD would skip the wait.
       const env = { ...process.env };
       delete env.LOOP_HEAVY_HELD;
+      // The engine's job timer bounds this slot, and a long job must not lose it halfway.
+      env.LOOP_HEAVY_MAX_SECONDS = String(30 * 24 * 60 * 60);
       const child = spawn(this.script, ['sh', '-c', HOLD], { stdio: ['pipe', 'pipe', 'ignore'], env });
       const onAbort = () => {
         child.kill();

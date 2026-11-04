@@ -46,18 +46,22 @@ while :; do
   sleep "${LOOP_HEAVY_POLL_SECONDS:-5}"
 done
 # This script holds the lock. The command doesn't get its descriptor, so a server it leaves behind
-# can't keep the slot. The lock goes with this process, however it ends.
+# can't keep the slot. The lock goes with this process, however it ends. The command stays in this
+# script's process group, so it can read a terminal and a kill of the group reaches it too.
 export LOOP_HEAVY_HELD=1
-# Its own process group, so a stop also reaches the browsers it started.
-set -m
+SECONDS=0
 "$@" 9>&- <&0 &
 child=$!
-set +m
-kill_group() {
-  kill "-$1" -- "-$child" 2>/dev/null || kill "-$1" "$child" 2>/dev/null
+# The command and everything it started: a stop must also reach its browsers.
+tree() {
+  local p
+  for p in $(pgrep -P "$1" 2>/dev/null); do
+    tree "$p"
+    echo "$p"
+  done
 }
-# TERM, then KILL after the grace period. Ends by itself soon after the command does.
-stop_after() {
+# False once the command has ended.
+wait_for() {
   local waited=0
   while [ "$waited" -lt "$1" ]; do
     sleep 1
@@ -66,21 +70,24 @@ stop_after() {
   done
   return 0
 }
+stop_all() {
+  local pids
+  pids="$(tree "$child") $child"
+  # shellcheck disable=SC2086
+  kill -TERM $pids 2>/dev/null
+  wait_for "$grace"
+  # shellcheck disable=SC2086
+  kill -KILL $pids 2>/dev/null
+}
+# Holds no output open, so it never delays whoever reads this script's output.
 (
-  stop_after "$max" || exit 0
-  echo "heavy: over the limit of ${max}s, stopping: $*" >&2
-  kill_group TERM
-  stop_after "$grace" || exit 0
-  kill_group KILL
-) 9>&- </dev/null >/dev/null &
+  wait_for "$max" && stop_all
+) 9>&- </dev/null >/dev/null 2>&1 &
 stopping=
 on_signal() {
-  kill_group TERM
   if [ -z "$stopping" ]; then
     stopping=1
-    (
-      stop_after "$grace" && kill_group KILL
-    ) 9>&- </dev/null >/dev/null 2>&1 &
+    stop_all 9>&- </dev/null >/dev/null 2>&1 &
   fi
 }
 trap on_signal INT TERM HUP
@@ -89,4 +96,7 @@ while :; do
   code=$?
   kill -0 "$child" 2>/dev/null || break
 done
+if [ "$SECONDS" -ge "$max" ]; then
+  echo "heavy: over the limit of ${max}s, stopped: $*" >&2
+fi
 exit "$code"

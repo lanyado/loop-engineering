@@ -181,6 +181,8 @@ export const pullRequestSchema = z.object({
       mergedHeadSha: z.string().optional().catch(undefined),
       /** The PR's round budget (5, plus 5 per "Continue"); older data has none. */
       maxRounds: z.number().optional().catch(undefined),
+      /** The PR this one reverts: the loop drives it, and it can't be taken over. */
+      revertOf: z.number().optional(),
       /** Checks the human skipped for this PR. */
       skip: z.array(z.string()).optional().catch(undefined),
       feedback: z

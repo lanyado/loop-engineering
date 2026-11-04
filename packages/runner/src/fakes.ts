@@ -2,7 +2,7 @@
 import type { Fs } from './drivers/fs.js';
 import type { GitDriver } from './drivers/git.js';
 import type { NewWindow, TmuxDriver, TmuxWindow } from './drivers/tmux.js';
-import { inputBoxText } from './input-box.js';
+import { inputBoxText, plainPane } from './input-box.js';
 
 /** The bottom of an idle Claude Code screen: an empty input box. New fake windows start with it. */
 export const IDLE_CLAUDE_PANE = ['────────────────', '❯ ', '────────────────', '  ? for shortcuts'].join(
@@ -38,7 +38,7 @@ export class FakeTmuxDriver implements TmuxDriver {
     if (text === '' || !enter) {
       const lines = w.output.split('\n');
       const box = lines.findLastIndex((l) => /^\s*❯/.test(l));
-      if (box >= 0 && inputBoxText(w.output) !== null) {
+      if (box >= 0 && inputBoxText(plainPane(w.output)) !== null) {
         lines[box] = `❯ ${text}`;
         w.output = lines.join('\n');
       }
@@ -53,7 +53,9 @@ export class FakeTmuxDriver implements TmuxDriver {
 
   capture(target: string): Promise<string> {
     const w = this.windows.get(target);
-    return w ? Promise.resolve(w.output) : Promise.reject(new Error(`can't find window: ${target}`));
+    return w
+      ? Promise.resolve(plainPane(w.output))
+      : Promise.reject(new Error(`can't find window: ${target}`));
   }
 
   kill(target: string): Promise<void> {

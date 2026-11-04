@@ -1233,7 +1233,12 @@ export class LoopEngine {
     const answer = this.consume(q, options) ?? TAKE_OVER;
     if (answer === 'Close') return this.close(c, 'the human chose Close after escalation');
     if (answer === TAKE_OVER) {
-      this.history(c, `PR ${c.pr.repo}#${c.pr.number}: the human took over (${e.reason}).`);
+      this.history(
+        c,
+        q.answeredVia === 'timeout'
+          ? `PR ${c.pr.repo}#${c.pr.number}: nobody answered, so it left the loop (${e.reason}).`
+          : `PR ${c.pr.repo}#${c.pr.number}: the human took over (${e.reason}).`,
+      );
       return this.save(c, { outcome: 'escalated' }, { question: undefined });
     }
     if (q.answeredVia !== 'timeout') return this.backToFirstCheck(c, gh.headRefOid);
@@ -2382,7 +2387,7 @@ export class LoopEngine {
     if (mayEscalate && attempts >= this.config.maxAttempts) {
       return this.escalate(
         c,
-        `The ${what} for PR #${c.pr.number} failed ${attempts} times`,
+        `The ${what} for PR #${c.pr.number} failed ${attempts + (c.s.jobRetryWaits ?? 0)} times`,
         [clip(message, 500)],
         true,
         usage,

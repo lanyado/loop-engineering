@@ -1,5 +1,6 @@
 // Real tmux + git + filesystem, with fake agent scripts standing in for `claude` and `opencode`.
 // Uses its own tmux server (-L loop-test) and a temp dir under the OS temp folder; both are removed after.
+import { inputBoxText } from './input-box.js';
 import { execFile, execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -233,6 +234,28 @@ describe.skipIf(!hasTmux())('runner with real tmux (fake agents)', () => {
       await mkdir(join(folder, 'sub'), { recursive: true });
       await writeFile(join(folder, 'resume.md'), '# Resume\n');
       await writeFile(join(folder, 'sub', 'draft.txt'), 'draft\n');
+      const ghost = new RealTmuxDriver({ socketName: SOCKET });
+      const ghostAgent = join(root, 'fake-ghost.sh');
+      await writeFile(
+        ghostAgent,
+        [
+          '#!/bin/sh',
+          "printf '────────────\\n❯ \\033[2mtry again\\033[22m\\n────────────\\n'",
+          'exec sleep 30',
+          '',
+        ].join('\n'),
+        { mode: 0o755 },
+      );
+      const ghostWindow = await ghost.newWindow({
+        session: 'ghost',
+        name: 'ghost',
+        cwd: root,
+        command: ghostAgent,
+      });
+      await waitFor('the dim suggestion', async () => (await ghost.capture(ghostWindow)).includes('────'));
+      expect(inputBoxText(await ghost.capture(ghostWindow))).toBe('');
+      await ghost.kill(ghostWindow);
+
       const cwdOut = join(root, 'folder-agent-cwd.txt');
       const fakeClaude = join(root, 'fake-claude-folder.sh');
       await writeFile(

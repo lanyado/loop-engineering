@@ -21,6 +21,50 @@ const PROMPT = [
   '                  A follow up by email',
 ].join('\n');
 
+/** Claude Code 2.1.318 in auto mode, Read outside the folder, 120 wide: a real capture. */
+const AUTO_DIALOG = [
+  ' Read outside the working directories',
+  '╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌',
+  ' Read(/etc/hostname)',
+  '╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌',
+  ' Auto mode and the sandbox read outside the working directories without asking. Yes or No answers for this read; the ',
+  ' rest is for later reads. Block: the file tools refuse reads outside the working directories in every project. The ',
+  ' Allow this read outside the working directories?',
+  ' ❯ 1. Yes, and keep allowing any reads outside the working directories',
+  '   2. No, and block reads outside the working directories from now on',
+  '   3. No, and ask again next time',
+  '   4. Yes, but ask again next time',
+  ' Esc to cancel · Tab to amend',
+  '',
+].join('\n');
+
+/** The same dialog as it wraps in the 80-wide pane of a tmux server with no client. */
+const AUTO_DIALOG_80 = [
+  ' Allow this read outside the working',
+  ' directories?',
+  ' ❯ 1. Yes, and keep allowing any reads outside the',
+  '      working directories',
+  '   2. No, and block reads outside the working',
+  '      directories from now on',
+  '   3. No, and ask again next time',
+  '   4. Yes, but ask again next time',
+  ' Esc to cancel · Tab to amend',
+].join('\n');
+
+/** Claude Code's folder-trust dialog: a real capture. It has its own handling and must never get Esc. */
+const TRUST = [
+  '─'.repeat(40),
+  ' Accessing workspace:',
+  ' /home/work/project',
+  ' Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source',
+  " project, or work from your team). If not, take a moment to review what's in this folder first.",
+  " Claude Code'll be able to read, edit, and execute files here.",
+  ' Security guide',
+  ' ❯ No, exit',
+  '   Yes, I trust this folder',
+  ' Enter to confirm · Esc to cancel',
+].join('\n');
+
 describe('reading the pane', () => {
   it('finds the permission menu, not the same words in a summary', () => {
     expect(detectPermissionPrompt(PROMPT)).toContain('resolves through a symlink');
@@ -33,7 +77,31 @@ describe('reading the pane', () => {
     // A summary or tool output quoting the whole menu, with the live box under it.
     expect(detectPermissionPrompt(`${PROMPT}\n${IDLE_CLAUDE_PANE}`)).toBeNull();
     expect(detectPermissionPrompt(`${PROMPT}\n✢ Bunning… (24m 36s · ↓ 66.8k tokens)`)).toBeNull();
-    expect(detectPermissionPrompt(`esc to interrupt\n${PROMPT}`)).toBeNull();
+  });
+
+  it('finds the real auto-mode dialog, at any width, whatever the question says', () => {
+    expect(detectPermissionPrompt(AUTO_DIALOG)).toContain('Allow this read outside the working directories?');
+    expect(detectPermissionPrompt(AUTO_DIALOG)).toContain('Read(/etc/hostname)');
+    expect(detectPermissionPrompt(AUTO_DIALOG_80)).toContain('directories?');
+  });
+
+  it('finds a menu under an old line that looks like work', () => {
+    expect(detectPermissionPrompt(`  ⎿  Running… (2m 3s)\nesc to interrupt\n${AUTO_DIALOG}`)).not.toBeNull();
+  });
+
+  it('wants the question, the numbered menu and the footer at the bottom of the pane', () => {
+    expect(
+      detectPermissionPrompt(
+        AUTO_DIALOG.replace('Allow this read outside the working directories?', 'Some text.'),
+      ),
+    ).toBeNull();
+    expect(detectPermissionPrompt(AUTO_DIALOG.replace(' Esc to cancel · Tab to amend', ''))).toBeNull();
+    expect(detectPermissionPrompt(AUTO_DIALOG.replace('❯ 1. Yes', '  1. Yes'))).toBeNull();
+    expect(detectPermissionPrompt(`${AUTO_DIALOG}\nline one\nline two\nline three`)).toBeNull();
+  });
+
+  it('leaves the folder-trust dialog to its own handling', () => {
+    expect(detectPermissionPrompt(TRUST)).toBeNull();
   });
 
   it('tells a working agent from a finished one, and a running shell from a past one', () => {
@@ -59,6 +127,124 @@ async function setup(): Promise<{
 }
 
 describe('a permission question', () => {
+  it('in the real auto-mode dialog is refused with Esc and nothing else', async () => {
+    const { h, id, target, clock } = await setup();
+    const press = h.tmux.pressEscape.bind(h.tmux);
+    h.tmux.pressEscape = async (t) => {
+      await press(t);
+      h.tmux.print(t, IDLE_CLAUDE_PANE);
+    };
+    h.tmux.print(target, AUTO_DIALOG);
+    const monitor = new UsageLimitMonitor(h.runner, h.store, { now: () => clock.now });
+    await monitor.checkOnce();
+    clock.now += 2 * MINUTE;
+    await monitor.checkOnce();
+    expect(h.window(target).keys.startsWith('<Esc>Automatic check: a permission question')).toBe(true);
+    const entry = h.store.history
+      .list({ sessionId: id })
+      .find((e) => e.text.startsWith('Permission watchdog'));
+    expect(entry?.text).toContain('Read(/etc/hostname)');
+  });
+
+  it('never presses anything at the folder-trust dialog', async () => {
+    const { h, target, clock } = await setup();
+    h.tmux.print(target, TRUST);
+    const onAlert = vi.fn();
+    const monitor = new UsageLimitMonitor(h.runner, h.store, {
+      now: () => clock.now,
+      onAlert,
+      onTrustPrompt: () => undefined,
+    });
+    await monitor.checkOnce();
+    clock.now += 600 * MINUTE;
+    await monitor.checkOnce();
+    expect(h.window(target).keys).toBe('');
+    expect(onAlert).not.toHaveBeenCalled();
+  });
+
+  it('alerts once when a screen that is no input box stays up for an hour', async () => {
+    const { h, id, target, clock } = await setup();
+    const pr = h.store.pullRequests.create({
+      projectId: h.shop.id,
+      repo: 'web',
+      number: 1,
+      url: 'u',
+      sessionId: id,
+    });
+    h.store.pullRequests.update(pr.id, { outcome: 'escalated' }); // so nothing refuses this menu
+    h.tmux.print(target, AUTO_DIALOG);
+    const onAlert = vi.fn();
+    const monitor = new UsageLimitMonitor(h.runner, h.store, { now: () => clock.now, onAlert });
+    await monitor.checkOnce();
+    clock.now += 59 * MINUTE;
+    await monitor.checkOnce();
+    expect(onAlert).not.toHaveBeenCalled();
+    clock.now += MINUTE;
+    await monitor.checkOnce();
+    clock.now += 600 * MINUTE;
+    await monitor.checkOnce();
+    expect(onAlert).toHaveBeenCalledTimes(1);
+    expect(h.window(target).keys).toBe('');
+  });
+
+  it('alerts about a dialog it does not know, and presses nothing', async () => {
+    const { h, target, clock } = await setup();
+    h.tmux.print(target, ' Something new\n Press any key to continue');
+    const onAlert = vi.fn();
+    const monitor = new UsageLimitMonitor(h.runner, h.store, { now: () => clock.now, onAlert });
+    await monitor.checkOnce();
+    clock.now += 60 * MINUTE;
+    await monitor.checkOnce();
+    expect(onAlert).toHaveBeenCalledTimes(1);
+    expect(h.window(target).keys).toBe('');
+  });
+
+  it('sends the explanation when typed text of it was left in the box (N-A)', async () => {
+    const { h, target, clock } = await setup();
+    const press = h.tmux.pressEscape.bind(h.tmux);
+    h.tmux.pressEscape = async (t) => {
+      await press(t);
+      h.tmux.print(t, IDLE_CLAUDE_PANE);
+    };
+    h.tmux.print(target, AUTO_DIALOG);
+    const monitor = new UsageLimitMonitor(h.runner, h.store, {
+      now: () => clock.now,
+      onError: () => undefined,
+    });
+    await monitor.checkOnce();
+    clock.now += 2 * MINUTE;
+    const send = vi.spyOn(h.runner, 'sendToSession').mockImplementationOnce(async (_id, text) => {
+      await h.tmux.sendKeys(target, text, { enter: false }); // typed, and then it timed out under load
+      throw new Error('did not take the message');
+    });
+    await monitor.checkOnce();
+    await monitor.checkOnce();
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(h.window(target).output).not.toContain('Automatic check'); // sent this time, and the box emptied
+  });
+
+  it('lets the idle reminders run when an owed explanation cannot be sent (N-A)', async () => {
+    const { h, id, path, target, clock } = await setup();
+    h.git.statuses.set(path, ' M src/a.ts');
+    const press = h.tmux.pressEscape.bind(h.tmux);
+    h.tmux.pressEscape = async (t) => {
+      await press(t);
+      h.tmux.print(t, IDLE_CLAUDE_PANE.replace('❯ ', '❯ text someone else left in the box'));
+    };
+    h.tmux.print(target, AUTO_DIALOG);
+    const monitor = new UsageLimitMonitor(h.runner, h.store, {
+      now: () => clock.now,
+      onError: () => undefined,
+    });
+    await monitor.checkOnce();
+    clock.now += 2 * MINUTE;
+    await monitor.checkOnce();
+    // The box holds another text: no explanation. It empties, and the owed one goes out.
+    h.tmux.print(target, IDLE_CLAUDE_PANE);
+    await monitor.checkOnce();
+    expect(h.window(target).keys).toContain('Automatic check: a permission question');
+    expect(id).toBeGreaterThan(0);
+  });
   it('is refused after two minutes and never approved, and the agent hears why', async () => {
     const { h, id, target, clock } = await setup();
     const press = h.tmux.pressEscape.bind(h.tmux);
@@ -252,6 +438,55 @@ describe('an idle agent with undelivered work', () => {
     expect(h.store.history.count({ sessionId: id, kind: 'decision', prefix: 'Idle watchdog nudge' })).toBe(1);
   });
 
+  it('counts a dim suggestion in the box as an empty box, so reminders keep coming', async () => {
+    const { h, id, path, target, clock } = await setup();
+    h.git.statuses.set(path, ' M src/a.ts');
+    const monitor = new UsageLimitMonitor(h.runner, h.store, { now: () => clock.now });
+    const withGhost = (text: string) => IDLE_CLAUDE_PANE.replace('❯ ', `❯\u00a0\u001b[2m${text}\u001b[22m`);
+    h.tmux.print(target, withGhost('open the pull request'));
+    await monitor.checkOnce();
+    clock.now += 30 * MINUTE;
+    await monitor.checkOnce();
+    expect(nudges(h, id)).toBe(1);
+    h.tmux.print(target, withGhost('try again'));
+    await monitor.checkOnce();
+    clock.now += 120 * MINUTE;
+    await monitor.checkOnce();
+    expect(nudges(h, id)).toBe(2);
+  });
+
+  it('asks about a text of its own left in the box, and sends it (a timeout under load)', async () => {
+    const { h, id, path, target, clock } = await setup();
+    h.git.statuses.set(path, ' M src/a.ts');
+    const monitor = new UsageLimitMonitor(h.runner, h.store, {
+      now: () => clock.now,
+      onError: () => undefined,
+    });
+    await monitor.checkOnce();
+    clock.now += 30 * MINUTE;
+    vi.spyOn(h.runner, 'sendToSession').mockImplementationOnce(async (_id, text) => {
+      await h.tmux.sendKeys(target, text, { enter: false });
+      throw new Error('did not take the message');
+    });
+    await monitor.checkOnce();
+    expect(nudges(h, id)).toBe(0);
+    clock.now += 6 * MINUTE;
+    await monitor.checkOnce();
+    expect(nudges(h, id)).toBe(1);
+  });
+
+  it('tells it not to delete what it did not create', async () => {
+    const { h, path, target, clock } = await setup();
+    h.git.statuses.set(path, '?? notes.txt');
+    const monitor = new UsageLimitMonitor(h.runner, h.store, { now: () => clock.now });
+    await monitor.checkOnce();
+    clock.now += 30 * MINUTE;
+    await monitor.checkOnce();
+    const keys = h.window(target).keys;
+    expect(keys).toContain('Do not delete');
+    expect(keys).not.toMatch(/remove the leftover/);
+  });
+
   it('counts commits its default branch lacks, not a linked node_modules', async () => {
     const { h, id, path, clock } = await setup();
     h.git.statuses.set(path, '?? node_modules');
@@ -312,7 +547,7 @@ describe('an idle agent with undelivered work', () => {
     expect(h.window(h.store.sessions.require(id).tmuxTarget).keys).toBe('');
   });
 
-  it('is not idle while it works, or before two hours with a background shell', async () => {
+  it('is not idle while it works, or before 45 minutes with a background shell', async () => {
     const { h, id, path, target, clock } = await setup();
     h.git.statuses.set(path, ' M src/a.ts');
     const monitor = new UsageLimitMonitor(h.runner, h.store, { now: () => clock.now });
@@ -324,12 +559,25 @@ describe('an idle agent with undelivered work', () => {
 
     h.tmux.print(target, `${IDLE_CLAUDE_PANE} · 1 shell`);
     await monitor.checkOnce();
-    clock.now += 119 * MINUTE;
+    clock.now += 44 * MINUTE;
     await monitor.checkOnce();
     expect(nudges(h, id)).toBe(0);
     clock.now += MINUTE;
     await monitor.checkOnce();
     expect(nudges(h, id)).toBe(1);
+    expect(h.window(target).keys).toContain('may have hung');
+    expect(h.window(target).keys).toContain('timeout');
+
+    // A server that keeps "1 shell" showing doesn't mute it, and the same limits apply.
+    clock.now += 120 * MINUTE;
+    await monitor.checkOnce();
+    expect(nudges(h, id)).toBe(2);
+    clock.now += 360 * MINUTE;
+    await monitor.checkOnce();
+    expect(nudges(h, id)).toBe(3);
+    clock.now += 720 * MINUTE;
+    await monitor.checkOnce();
+    expect(nudges(h, id)).toBe(3);
   });
 
   it('starts over when the conversation grows', async () => {

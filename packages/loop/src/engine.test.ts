@@ -1655,6 +1655,8 @@ describe('failures that pass', () => {
     await h.engine.tick();
     expect(h.launcher.kinds().filter((k) => k === 'review')).toHaveLength(5);
     expect(h.pr().stage).toBe('escalated');
+    await h.engine.tick();
+    expect(h.asked()[0]?.text).toContain('failed 5 times'); // every try, not the last run of attempts
   });
 
   it('a job that works after a wait carries on, with nothing left of the failures', async () => {
@@ -1687,6 +1689,9 @@ describe('failures that pass', () => {
     h.questions.expireDue();
     await h.engine.tick();
     expect(h.pr().outcome).toBe('escalated');
+    const notes = h.store.history.list({ sessionId: h.pr().sessionId! }).map((e) => e.text);
+    expect(notes.some((t) => /nobody answered, so it left the loop/.test(t))).toBe(true);
+    expect(notes.some((t) => /the human took over/.test(t))).toBe(false);
   });
 
   it('a Take over clicked by the human still takes over, and counts no automatic Continue', async () => {

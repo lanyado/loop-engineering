@@ -780,6 +780,58 @@ describe('sendToSession', () => {
     expect(w.keys).toBe('fix x'); // typed, and no Enter at all
   });
 
+  it('types into a box with a dim suggestion as into an empty one', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    const w = h.window(s.tmuxTarget);
+    w.output = claudePane('\u001b[2mtry again\u001b[22m');
+    await h.runner.sendToSession(s.id, 'fix x');
+    expect(w.keys).toBe('fix x\n');
+  });
+
+  it('sends a long text when the box shows only its end', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    const w = h.window(s.tmuxTarget);
+    const text = Array.from({ length: 75 }, (_, i) => `word${i}`).join(' ');
+    const send = h.tmux.sendKeys.bind(h.tmux);
+    vi.spyOn(h.tmux, 'sendKeys').mockImplementation(async (t, typed, options) => {
+      await send(t, typed, options);
+      w.output = typed ? claudePane(text.slice(-200)) : claudePane('');
+    });
+    await h.runner.sendToSession(s.id, text);
+    expect(w.keys).toBe(`${text}\n`);
+  });
+
+  it('measures the conversation file first, and looks at the screen just before typing', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    await h.saveConversation(s.agentSessionId);
+    claudeTakes(h, s.tmuxTarget);
+    const order: string[] = [];
+    const size = h.fs.size.bind(h.fs);
+    vi.spyOn(h.fs, 'size').mockImplementation((p) => {
+      order.push('measure');
+      return size(p);
+    });
+    const capture = h.tmux.capture.bind(h.tmux);
+    vi.spyOn(h.tmux, 'capture').mockImplementation((t) => {
+      order.push('capture');
+      return capture(t);
+    });
+    const typing = vi.spyOn(h.tmux, 'sendKeys');
+    typing.mockClear();
+    const call = typing.getMockImplementation()!;
+    typing.mockImplementation(async (t, text, options) => {
+      if (text) order.push('type');
+      await call(t, text, options);
+    });
+    await h.runner.sendToSession(s.id, 'fix x');
+    const typedAt = order.indexOf('type');
+    expect(order.slice(0, typedAt).at(-1)).toBe('capture');
+    expect(order.indexOf('measure')).toBeLessThan(order.indexOf('capture'));
+  });
+
   it('types without Enter first, then presses it only once the box holds the text', async () => {
     const h = harness();
     const s = await h.runner.startSession(h.shop.id, REQUEST);

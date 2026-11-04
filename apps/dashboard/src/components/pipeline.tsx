@@ -535,14 +535,16 @@ function LaneView({
             <span className="muted lane-metrics" data-testid="pr-metrics">
               {formatPrMetrics(pr.metrics)}
             </span>
-            {!edit && (pr.outcome === null || pr.outcome === 'escalated') && (
-              <PrLoopButton
-                prId={pr.id}
-                pr={`${pr.repo}#${pr.number}`}
-                action={pr.outcome === null && pr.stage !== 'escalated' ? 'take-over' : 'retry'}
-                readOnly={readOnly}
-              />
-            )}
+            {!edit &&
+              pr.loopState.revertOf === undefined &&
+              (pr.outcome === null || pr.outcome === 'escalated') && (
+                <PrLoopButton
+                  prId={pr.id}
+                  pr={`${pr.repo}#${pr.number}`}
+                  action={pr.outcome === null && pr.stage !== 'escalated' ? 'take-over' : 'retry'}
+                  readOnly={readOnly}
+                />
+              )}
           </>
         )}
       </span>

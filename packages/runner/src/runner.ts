@@ -556,12 +556,13 @@ export class SessionRunner {
     // Claude: type only into its input box (not a dialog, not a screen still starting), never twice,
     // and make sure the message leaves the box.
     const target = s.tmuxTarget;
-    const pane = await this.waitForInputBox(s);
     // Where Claude's conversation file ends now: a record of this message can only come after it. A
     // conversation with no file yet gets one with this message. A file that cannot be measured, or
     // turns up elsewhere, could hold an earlier send of the same line: only the screen decides then.
     const before = await this.conversationFile(s.agentSessionId);
     const from = before ? await this.deps.fs.size(before).catch(() => null) : 0;
+    // Last, so as little time as possible passes between seeing the box and typing into it.
+    const pane = await this.waitForInputBox(s);
     if (!inputBoxHasText(pane, line)) await this.deps.tmux.sendKeys(target, line, { enter: false });
     // Enter only into the box that holds the text: in a dialog that opened meanwhile, it would choose
     // the selected option, which can be an approval.
