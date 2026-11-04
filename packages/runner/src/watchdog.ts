@@ -1,4 +1,4 @@
-import type { Session, Store } from '@loop-engineering/core';
+import type { PullRequest, Session, Store } from '@loop-engineering/core';
 import { inputBoxHolds, inputBoxText } from './input-box.js';
 import type { SessionRunner } from './runner.js';
 import { detectTrustPrompt } from './trust-prompt.js';
@@ -45,6 +45,10 @@ const NUDGE =
   'Commit what belongs to your task, merge the latest default branch, push and open the pull request. Git and ' +
   'network errors usually pass: wait and retry them. Do not delete files you did not create: if something does ' +
   'not belong to the task, leave it and say so.';
+const FIX =
+  'Automatic check: your pull request is waiting for your answer to the feedback you were sent, you have been idle, ' +
+  'and nobody watches this terminal. Fix what it asks, commit and push. Git and network errors usually pass: wait ' +
+  'and retry them. Do not delete files you did not create.';
 const HUNG =
   'Automatic check: you have been waiting at your prompt with a background run for a long time, and nobody watches ' +
   'this terminal. It may have hung. Check its output, stop runs you started that have hung, rerun them under ' +
@@ -103,6 +107,15 @@ export function runningShell(pane: string): boolean {
 /** An idle agent's box can take `message`: it is empty, or holds that message from a send that timed out. */
 function canTake(pane: string, message: string): boolean {
   return !agentBusy(pane) && (inputBoxText(pane) === '' || inputBoxHolds(pane, message));
+}
+
+/**
+ * Feedback reached the builder, and no push has answered it: the loop drops it on the next push, and
+ * runs no job for the PR meanwhile. A PR with the human has had its feedback dropped when it got there.
+ */
+function owesAnswer(pr: PullRequest): boolean {
+  const feedback = pr.loopState.feedback as { sentAt?: unknown } | undefined;
+  return pr.outcome === null && pr.stage !== 'escalated' && !!feedback?.sentAt;
 }
 
 export interface WatchdogOptions {
@@ -216,24 +229,23 @@ export class SessionWatchdog {
     const seen = this.quiet.get(s.id);
     // Waiting at an empty box with a conversation that stopped growing: anything else is not idle. A
     // text of ours left in the box when sending timed out counts as empty: the next send finishes it.
-    const shell = runningShell(pane);
-    const message = shell ? HUNG : NUDGE;
-    const open = canTake(pane, message) || canTake(pane, shell ? NUDGE : HUNG);
-    if (!seen || seen.activity !== activity || !open) {
+    if (!seen || seen.activity !== activity || ![NUDGE, FIX, HUNG].some((m) => canTake(pane, m))) {
       this.quiet.set(s.id, { activity, since: now, looked: 0 });
       return;
     }
     const nudges = this.entries(s, NUDGED);
     const after = NUDGE_AFTER_MS[Math.min(nudges, NUDGE_AFTER_MS.length - 1)]!;
+    const shell = runningShell(pane);
     const limit = shell ? Math.max(after, SHELL_IDLE_MS) : after;
     if (now - seen.since < limit || now - seen.looked < RECHECK_MS) return;
     seen.looked = now;
-    if (!this.waitsForNobody(s) || !(await this.runner.hasUndeliveredWork(s.id))) return;
+    const turn = this.agentsTurn(s);
+    if (!turn || (turn === 'deliver' && !(await this.runner.hasUndeliveredWork(s.id)))) return;
     if (nudges < NUDGE_AFTER_MS.length) {
-      await this.runner.sendToSession(s.id, message);
+      await this.runner.sendToSession(s.id, shell ? HUNG : turn === 'fix' ? FIX : NUDGE);
       this.note(
         s,
-        `${NUDGED} ${nudges + 1}: idle ${Math.round((now - seen.since) / MINUTE)} minutes with undelivered work.`,
+        `${NUDGED} ${nudges + 1}: idle ${Math.round((now - seen.since) / MINUTE)} minutes, ${turn === 'fix' ? 'owing an answer to PR feedback' : 'with undelivered work'}.`,
       );
     } else if (this.entries(s, ALERTED) === 0) {
       this.note(s, `${ALERTED}: still idle with undelivered work after ${nudges} nudges.`);
@@ -244,12 +256,19 @@ export class SessionWatchdog {
     }
   }
 
-  /** No question waits for an answer, no PR is in the loop or with the human, and this is a git project. */
-  private waitsForNobody(s: Session): boolean {
+  /**
+   * Whether the next move is this agent's: to deliver, with no PR yet, or to fix, with a PR waiting
+   * for its answer to feedback. Null while a question waits for a person, a person has a PR of the
+   * session, or a PR waits for the loop's own jobs. Folder projects deliver nothing.
+   */
+  private agentsTurn(s: Session): 'deliver' | 'fix' | null {
     const { store } = this;
-    if (store.projects.require(s.projectId).kind === 'folder') return false;
-    if (store.questions.list({ sessionId: s.id, status: 'pending' }).length > 0) return false;
-    return !this.prs(s).some((p) => p.outcome === null || p.outcome === 'escalated');
+    if (store.projects.require(s.projectId).kind === 'folder') return null;
+    if (store.questions.list({ sessionId: s.id, status: 'pending' }).length > 0) return null;
+    const prs = this.prs(s);
+    if (prs.some((p) => p.outcome === 'escalated')) return null;
+    if (prs.some(owesAnswer)) return 'fix';
+    return prs.some((p) => p.outcome === null) ? null : 'deliver';
   }
 
   private prs(s: Session) {

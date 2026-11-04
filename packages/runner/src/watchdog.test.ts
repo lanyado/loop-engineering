@@ -487,6 +487,111 @@ describe('an idle agent with undelivered work', () => {
     expect(keys).not.toMatch(/remove the leftover/);
   });
 
+  describe('with a PR in the loop', () => {
+    const FEEDBACK = { kind: 'review', items: ['fix x'], sha: 'abc', sentAt: '2026-10-18T09:00:00.000Z' };
+    const withPr = (h: Harness, id: number, loopState: Record<string, unknown>, number = 1) => {
+      const pr = h.store.pullRequests.create({
+        projectId: h.shop.id,
+        repo: 'web',
+        number,
+        url: 'u',
+        sessionId: id,
+      });
+      return h.store.pullRequests.update(pr.id, { loopState });
+    };
+
+    it('reminds a builder that owes an answer to feedback, with the same gaps and cap', async () => {
+      const { h, id, target, clock } = await setup();
+      withPr(h, id, { feedback: FEEDBACK });
+      const onAlert = vi.fn();
+      const monitor = new UsageLimitMonitor(h.runner, h.store, { now: () => clock.now, onAlert });
+      await monitor.checkOnce();
+      clock.now += 29 * MINUTE;
+      await monitor.checkOnce();
+      expect(nudges(h, id)).toBe(0);
+      clock.now += MINUTE;
+      await monitor.checkOnce();
+      expect(nudges(h, id)).toBe(1);
+      expect(h.window(target).keys).toContain('feedback');
+      expect(h.window(target).keys).not.toContain('open the pull request');
+      for (const minutes of [120, 360]) {
+        clock.now += minutes * MINUTE;
+        await monitor.checkOnce();
+      }
+      expect(nudges(h, id)).toBe(3);
+      clock.now += 360 * MINUTE;
+      await monitor.checkOnce();
+      expect(nudges(h, id)).toBe(3);
+      expect(onAlert).toHaveBeenCalledTimes(1);
+    });
+
+    it('reminds it after 45 minutes when a background run may have hung (s23, s34)', async () => {
+      const { h, id, target, clock } = await setup();
+      withPr(h, id, { feedback: FEEDBACK });
+      h.tmux.print(target, `${IDLE_CLAUDE_PANE} · 1 shell`);
+      const monitor = new UsageLimitMonitor(h.runner, h.store, { now: () => clock.now });
+      await monitor.checkOnce();
+      clock.now += 44 * MINUTE;
+      await monitor.checkOnce();
+      expect(nudges(h, id)).toBe(0);
+      clock.now += MINUTE;
+      await monitor.checkOnce();
+      expect(nudges(h, id)).toBe(1);
+      expect(h.window(target).keys).toContain('may have hung');
+    });
+
+    it('needs nothing undelivered to remind about feedback: the fix is what is missing', async () => {
+      const { h, id, path, clock } = await setup();
+      h.git.statuses.set(path, '');
+      withPr(h, id, { feedback: FEEDBACK });
+      const monitor = new UsageLimitMonitor(h.runner, h.store, { now: () => clock.now });
+      await monitor.checkOnce();
+      clock.now += 30 * MINUTE;
+      await monitor.checkOnce();
+      expect(nudges(h, id)).toBe(1);
+    });
+
+    it.each([
+      ['the loop is running its checks', (h: Harness, id: number) => withPr(h, id, {})],
+      [
+        'the feedback has not reached the builder yet',
+        (h: Harness, id: number) => withPr(h, id, { feedback: { ...FEEDBACK, sentAt: null } }),
+      ],
+      [
+        'a human was asked about it',
+        (h: Harness, id: number) => {
+          withPr(h, id, { feedback: FEEDBACK });
+          h.store.questions.create({ sessionId: id, text: 'q', options: ['a'], recommendedOption: 'a' });
+        },
+      ],
+      [
+        'it was escalated to a human',
+        (h: Harness, id: number) => {
+          const pr = withPr(h, id, {});
+          h.store.pullRequests.update(pr.id, { stage: 'escalated' });
+        },
+      ],
+      [
+        'a human took over a PR of the session',
+        (h: Harness, id: number) => {
+          withPr(h, id, { feedback: FEEDBACK }, 1);
+          const pr = withPr(h, id, {}, 2);
+          h.store.pullRequests.update(pr.id, { outcome: 'escalated' });
+        },
+      ],
+    ])('leaves it alone while %s', async (_name, arrange) => {
+      const { h, id, path, target, clock } = await setup();
+      h.git.statuses.set(path, ' M src/a.ts');
+      arrange(h, id);
+      const monitor = new UsageLimitMonitor(h.runner, h.store, { now: () => clock.now });
+      await monitor.checkOnce();
+      clock.now += 500 * MINUTE;
+      await monitor.checkOnce();
+      expect(nudges(h, id)).toBe(0);
+      expect(h.window(target).keys).toBe('');
+    });
+  });
+
   it('counts commits its default branch lacks, not a linked node_modules', async () => {
     const { h, id, path, clock } = await setup();
     h.git.statuses.set(path, '?? node_modules');
