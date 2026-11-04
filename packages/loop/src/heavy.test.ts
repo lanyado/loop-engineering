@@ -64,6 +64,25 @@ describe.skipIf(!hasFlock)('scripts/heavy', () => {
     expect(Date.now() - started).toBeLessThan(1500);
   });
 
+  it('stops a command at the time limit, TERM then KILL, and frees its slot (B1)', async () => {
+    vi.stubEnv('LOOP_HEAVY_MAX_SECONDS', '1');
+    vi.stubEnv('LOOP_HEAVY_GRACE_SECONDS', '1');
+    const started = Date.now();
+    const out = await run('sh', '-c', 'trap "" TERM; sleep 60 & wait; sleep 60');
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(out.code).not.toBe(0);
+    expect(out.stderr).toMatch(/over the limit/);
+    vi.stubEnv('LOOP_HEAVY_MAX_SECONDS', '');
+    expect((await run('true')).code).toBe(0);
+  }, 20_000);
+
+  it('runs the command without a limit when the lock folder cannot be used (B1)', async () => {
+    vi.stubEnv('LOOP_HEAVY_DIR', '/proc/no-such-folder/heavy');
+    const out = await run('sh', '-c', 'echo ran; exit 3');
+    expect(out).toMatchObject({ code: 3, stdout: 'ran\n' });
+    expect(out.stderr).toMatch(/without a limit/);
+  }, 10_000);
+
   it('runs nested calls straight away, inside the slot it already has', async () => {
     const out = await run(HEAVY_SCRIPT, 'sh', '-c', 'echo nested');
     expect(out).toMatchObject({ code: 0, stdout: 'nested\n' });

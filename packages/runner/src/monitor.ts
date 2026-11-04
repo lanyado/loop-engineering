@@ -31,8 +31,8 @@ export interface MonitorOptions {
    * (session id + tmux window), not on every pass.
    */
   onTrustPrompt?: (session: Session, folder: string) => void;
-  /** A session still idle with undelivered work after every nudge. */
-  onIdleAlert?: (session: Session) => void;
+  /** The watchdog's reminders or refusals did not help, and a person should look. */
+  onAlert?: (session: Session, message: string) => void;
   /** What the watchdog did: nudged an idle agent or refused a permission question. */
   log?: (message: string) => void;
 }
@@ -94,7 +94,7 @@ export class UsageLimitMonitor {
   ) {
     this.watchdog = new SessionWatchdog(runner, store, {
       now: options.now ?? Date.now,
-      ...(options.onIdleAlert ? { onIdleAlert: options.onIdleAlert } : {}),
+      ...(options.onAlert ? { onAlert: options.onAlert } : {}),
       ...(options.log ? { log: options.log } : {}),
     });
   }

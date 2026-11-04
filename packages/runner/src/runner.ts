@@ -562,7 +562,13 @@ export class SessionRunner {
     // turns up elsewhere, could hold an earlier send of the same line: only the screen decides then.
     const before = await this.conversationFile(s.agentSessionId);
     const from = before ? await this.deps.fs.size(before).catch(() => null) : 0;
-    await this.deps.tmux.sendKeys(target, inputBoxHasText(pane, line) ? '' : line);
+    if (!inputBoxHasText(pane, line)) await this.deps.tmux.sendKeys(target, line, { enter: false });
+    // Enter only into the box that holds the text: in a dialog that opened meanwhile, it would choose
+    // the selected option, which can be an approval.
+    if (!(await this.boxHolds(target, line))) {
+      throw new ValidationError(`the agent of session ${s.id} did not take the message`);
+    }
+    await this.deps.tmux.sendKeys(target, '', { enter: true });
     let shownTaken = false;
     for (let attempt = 0; attempt <= SUBMIT_RETRIES; attempt++) {
       await this.sleep(SUBMIT_CHECK_MS);
@@ -597,6 +603,15 @@ export class SessionRunner {
       return s;
     }
     throw new ValidationError(`the agent of session ${s.id} did not take the message`);
+  }
+
+  /** Whether Claude's box shows the text just typed, allowing it a moment to draw it. */
+  private async boxHolds(target: string, line: string): Promise<boolean> {
+    for (let attempt = 0; attempt <= SUBMIT_RETRIES; attempt++) {
+      if (inputBoxHolds(await this.deps.tmux.capture(target), line)) return true;
+      await this.sleep(SUBMIT_CHECK_MS);
+    }
+    return false;
   }
 
   /**

@@ -1,3 +1,4 @@
+import type { FakeClock } from '@loop-engineering/core';
 import { describe, expect, it, vi } from 'vitest';
 import { IDLE_CLAUDE_PANE } from './fakes.js';
 import { UsageLimitMonitor } from './monitor.js';
@@ -26,6 +27,13 @@ describe('reading the pane', () => {
     expect(detectPermissionPrompt(PROMPT)).toContain('Do you want to proceed?');
     expect(detectPermissionPrompt('The dialog said: Do you want to proceed?\n❯ \n')).toBeNull();
     expect(detectPermissionPrompt(IDLE_CLAUDE_PANE)).toBeNull();
+  });
+
+  it('never sees a prompt in a pane that shows the input box or a working agent (B3)', () => {
+    // A summary or tool output quoting the whole menu, with the live box under it.
+    expect(detectPermissionPrompt(`${PROMPT}\n${IDLE_CLAUDE_PANE}`)).toBeNull();
+    expect(detectPermissionPrompt(`${PROMPT}\n✢ Bunning… (24m 36s · ↓ 66.8k tokens)`)).toBeNull();
+    expect(detectPermissionPrompt(`esc to interrupt\n${PROMPT}`)).toBeNull();
   });
 
   it('tells a working agent from a finished one, and a running shell from a past one', () => {
@@ -79,6 +87,98 @@ describe('a permission question', () => {
     expect(entry?.text).toContain('resolves through a symlink');
   });
 
+  it('keeps being refused after three, with no more paid turns and one alert (B2)', async () => {
+    const { h, id, target, clock } = await setup();
+    const press = h.tmux.pressEscape.bind(h.tmux);
+    h.tmux.pressEscape = async (t) => {
+      await press(t);
+      h.tmux.print(t, IDLE_CLAUDE_PANE);
+    };
+    const onAlert = vi.fn();
+    const monitor = new UsageLimitMonitor(h.runner, h.store, { now: () => clock.now, onAlert });
+    for (let cycle = 0; cycle < 25; cycle++) {
+      h.tmux.print(target, PROMPT); // the agent tried again
+      await monitor.checkOnce();
+      clock.now += 2 * MINUTE;
+      await monitor.checkOnce();
+    }
+    const keys = h.window(target).keys;
+    expect(keys.split('<Esc>')).toHaveLength(26); // every menu closed, so none can block the session
+    expect(keys.split('Automatic check: a permission question')).toHaveLength(4);
+    expect(onAlert).toHaveBeenCalledTimes(1);
+    expect(onAlert.mock.calls[0]?.[1]).toMatch(/permission/);
+    expect(
+      h.store.history.count({ sessionId: id, kind: 'decision', prefix: 'Permission watchdog: refused' }),
+    ).toBe(25);
+  });
+
+  it('counts refusals per task: a new task starts again', async () => {
+    const { h, id, target, clock } = await setup();
+    const press = h.tmux.pressEscape.bind(h.tmux);
+    h.tmux.pressEscape = async (t) => {
+      await press(t);
+      h.tmux.print(t, IDLE_CLAUDE_PANE);
+    };
+    const monitor = new UsageLimitMonitor(h.runner, h.store, { now: () => clock.now });
+    for (let cycle = 0; cycle < 5; cycle++) {
+      h.tmux.print(target, PROMPT);
+      await monitor.checkOnce();
+      clock.now += 2 * MINUTE;
+      await monitor.checkOnce();
+    }
+    const storeClock = h.store.clock as FakeClock;
+    storeClock.advance(1000);
+    h.store.requests.create({ projectId: h.shop.id, sessionId: id, text: 'next task', source: 'dashboard' });
+    storeClock.advance(1000);
+    h.tmux.print(target, PROMPT);
+    h.window(target).keys = '';
+    await monitor.checkOnce();
+    clock.now += 2 * MINUTE;
+    await monitor.checkOnce();
+    expect(h.window(target).keys).toContain('Automatic check: a permission question');
+  });
+
+  it('sends the explanation again when sending it failed (N7)', async () => {
+    const { h, target, clock } = await setup();
+    const press = h.tmux.pressEscape.bind(h.tmux);
+    h.tmux.pressEscape = async (t) => {
+      await press(t);
+      h.tmux.print(t, IDLE_CLAUDE_PANE);
+    };
+    h.tmux.print(target, PROMPT);
+    const onError = vi.fn();
+    const monitor = new UsageLimitMonitor(h.runner, h.store, { now: () => clock.now, onError });
+    await monitor.checkOnce();
+    clock.now += 2 * MINUTE;
+    vi.spyOn(h.runner, 'sendToSession').mockRejectedValueOnce(new Error('no input box'));
+    await monitor.checkOnce();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(h.window(target).keys).toBe('<Esc>');
+    await monitor.checkOnce();
+    expect(h.window(target).keys).toContain('Automatic check: a permission question');
+    const again = h.window(target).keys;
+    await monitor.checkOnce();
+    expect(h.window(target).keys).toBe(again); // once
+  });
+
+  it('is left to the human whose PR it took over (N9)', async () => {
+    const { h, id, target, clock } = await setup();
+    const pr = h.store.pullRequests.create({
+      projectId: h.shop.id,
+      repo: 'web',
+      number: 1,
+      url: 'u',
+      sessionId: id,
+    });
+    h.store.pullRequests.update(pr.id, { outcome: 'escalated' });
+    h.tmux.print(target, PROMPT);
+    const monitor = new UsageLimitMonitor(h.runner, h.store, { now: () => clock.now });
+    await monitor.checkOnce();
+    clock.now += 60 * MINUTE;
+    await monitor.checkOnce();
+    expect(h.window(target).keys).toBe('');
+  });
+
   it('that goes away by itself is left alone', async () => {
     const { h, target, clock } = await setup();
     h.tmux.print(target, PROMPT);
@@ -103,8 +203,8 @@ describe('an idle agent with undelivered work', () => {
   it('gets three reminders with growing gaps and then one alert, across a restart', async () => {
     const { h, id, path, clock } = await setup();
     h.git.statuses.set(path, ' M src/a.ts');
-    const onIdleAlert = vi.fn();
-    const options = { now: () => clock.now, onIdleAlert };
+    const onAlert = vi.fn();
+    const options = { now: () => clock.now, onAlert };
     let monitor = new UsageLimitMonitor(h.runner, h.store, options);
     await monitor.checkOnce(); // the clock starts
     clock.now += 30 * MINUTE - 1;
@@ -126,14 +226,30 @@ describe('an idle agent with undelivered work', () => {
     clock.now += 240 * MINUTE;
     await monitor.checkOnce();
     expect(nudges(h, id)).toBe(3);
-    expect(onIdleAlert).not.toHaveBeenCalled();
+    expect(onAlert).not.toHaveBeenCalled();
     clock.now += 6 * MINUTE;
     await monitor.checkOnce();
-    expect(onIdleAlert).toHaveBeenCalledTimes(1);
+    expect(onAlert).toHaveBeenCalledTimes(1);
     clock.now += 600 * MINUTE;
     await monitor.checkOnce();
     expect(nudges(h, id)).toBe(3);
-    expect(onIdleAlert).toHaveBeenCalledTimes(1);
+    expect(onAlert).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the count past 50 other history entries (N5)', async () => {
+    const { h, id, path, clock } = await setup();
+    h.git.statuses.set(path, ' M src/a.ts');
+    const monitor = new UsageLimitMonitor(h.runner, h.store, { now: () => clock.now });
+    await monitor.checkOnce();
+    clock.now += 30 * MINUTE;
+    await monitor.checkOnce();
+    expect(nudges(h, id)).toBe(1);
+    for (let i = 0; i < 60; i++) {
+      h.store.history.add({ projectId: h.shop.id, sessionId: id, kind: 'decision', text: `other ${i}` });
+    }
+    clock.now += 31 * MINUTE; // past the first limit, not the second: a lost count would nudge again
+    await monitor.checkOnce();
+    expect(h.store.history.count({ sessionId: id, kind: 'decision', prefix: 'Idle watchdog nudge' })).toBe(1);
   });
 
   it('counts commits its default branch lacks, not a linked node_modules', async () => {

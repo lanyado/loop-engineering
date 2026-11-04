@@ -117,14 +117,31 @@ const EFFORT_REJECTED =
  * An error that says the network or GitHub is unreachable, not that the work failed. Auth errors, 404s,
  * merge conflicts and failing tests never match: those are real failures and keep counting as attempts.
  * GitHub's gateway errors are matched as gh ("HTTP 502: Bad Gateway") and git ("returned error: 503") print them.
- * Git over SSH prints the same outage as a refused key or a closed connection, so those count too: a key
- * that is really gone still reaches the human, once NETWORK_WAITS_MAX runs out. A refused push never matches.
  */
 const NETWORK_ERROR =
-  /could not resolve host|error connecting to|operation timed out|connection (?:reset by peer|refused)|network is unreachable|tls handshake timeout|\b(?:ENOTFOUND|ECONNRESET|ECONNREFUSED|ENETUNREACH|ETIMEDOUT|EAI_AGAIN)\b|(?:HTTP|returned error:?) 50[234]\b|bad gateway|service unavailable|gateway time-?out|permission denied \(publickey\)|could not read from remote repository|connection closed by|kex_exchange_identification|ssh: connect to host/i;
+  /could not resolve host|error connecting to|operation timed out|connection (?:reset by peer|refused)|network is unreachable|tls handshake timeout|\b(?:ENOTFOUND|ECONNRESET|ECONNREFUSED|ENETUNREACH|ETIMEDOUT|EAI_AGAIN)\b|(?:HTTP|returned error:?) 50[234]\b|bad gateway|service unavailable|gateway time-?out/i;
+
+/**
+ * Git over SSH prints an outage as a refused key or a closed connection, so those count too: a key
+ * that is really gone still reaches the human, once NETWORK_WAITS_MAX runs out.
+ */
+const SSH_FAILURE =
+  /permission denied \(publickey\)|could not read from remote repository|connection closed by (?:\S+ port \d+|remote host)|kex_exchange_identification|ssh: connect to host/i;
+
+/** GitHub answered and said no. Git prints these above the same "Could not read from remote repository". */
+const REFUSED_BY_GITHUB = /permission to \S+ denied|repository not found/i;
+
+const asText = (err: unknown): string => (typeof err === 'string' ? err : errorMessage(err));
 
 export function isNetworkError(err: unknown): boolean {
-  return NETWORK_ERROR.test(typeof err === 'string' ? err : errorMessage(err));
+  const text = asText(err);
+  return !REFUSED_BY_GITHUB.test(text) && (NETWORK_ERROR.test(text) || SSH_FAILURE.test(text));
+}
+
+/** Only git over SSH failed. Whether the loop is offline is for gh over HTTPS to say, so one branch can't pause every PR. */
+function isSshOnly(err: unknown): boolean {
+  const text = asText(err);
+  return SSH_FAILURE.test(text) && !NETWORK_ERROR.test(text);
 }
 
 /** Waits after a network error, per PR: they don't count as failed attempts. The last one repeats. */
@@ -154,6 +171,8 @@ export interface LoopConfig {
   maxAttempts: number;
   /** After a job's attempts run out: one more try after each of these waits, then the human is asked. */
   jobRetryWaitsMin: number[];
+  /** A tests or browser job waits this long for a machine-wide slot, then runs without one. */
+  heavyWaitMs: number;
   tickIntervalMs: number;
   /** Model for jobs on Claude. Default: Settings.sessionModel. On OpenCode: Settings.fallbackModel. */
   jobModel: string | null;
@@ -192,6 +211,7 @@ export const DEFAULT_LOOP_CONFIG: LoopConfig = {
   qaTimeoutMs: 15 * MINUTE,
   maxAttempts: 3,
   jobRetryWaitsMin: [15, 30, 60, 90],
+  heavyWaitMs: 30 * MINUTE,
   tickIntervalMs: 30_000,
   jobModel: null,
   stageProviders: {
@@ -484,14 +504,45 @@ export class LoopEngine {
     if (!out || loopState(pr).revertOf !== undefined) {
       throw new ValidationError(`PR ${pr.repo}#${pr.number} is not out of the loop (stage ${pr.stage})`);
     }
+    // A step could still write over the reset: its answer to a question, say.
+    if (this.busy.has(prId)) {
+      throw new ValidationError(`a step of PR ${pr.repo}#${pr.number} is still running: try again shortly`);
+    }
     const c = this.ctx(pr);
     if (!c) throw new ValidationError(`PR ${pr.repo}#${pr.number} is not in a git project of this loop`);
     const gh = await github.getPr(c.ref, pr.number);
     if (gh.state !== 'OPEN')
       throw new ValidationError(`PR ${pr.repo}#${pr.number} is ${gh.state.toLowerCase()}`);
     this.history(c, `PR ${pr.repo}#${pr.number} was returned to the loop.`);
-    this.backToFirstCheck(c, gh.headRefOid, { outcome: null }, { done: false, stall: undefined });
+    // Whatever a person did since, it gets every check again, and old review feedback goes nowhere.
+    this.backToFirstCheck(
+      c,
+      gh.headRefOid,
+      { outcome: null },
+      { ...CHECKS_NOT_PASSED, done: false, stall: undefined },
+    );
     this.pokePr(prId);
+    return store.pullRequests.require(prId);
+  }
+
+  /**
+   * Takes a PR out of the loop at any time, also after its question defaulted to Continue (the answer
+   * to a question is refused after its deadline). The loop then only watches for a merge or a close.
+   */
+  takeOver(prId: number): PullRequest {
+    const { store } = this.deps;
+    const pr = store.pullRequests.require(prId);
+    if (pr.outcome !== null || loopState(pr).revertOf !== undefined) {
+      throw new ValidationError(`PR ${pr.repo}#${pr.number} is not in the loop`);
+    }
+    if (pr.stage === 'merge' && this.busy.has(prId)) {
+      throw new ValidationError(`PR ${pr.repo}#${pr.number} is being merged right now`);
+    }
+    const c = this.ctx(pr);
+    if (!c) throw new ValidationError(`PR ${pr.repo}#${pr.number} is not in a git project of this loop`);
+    this.history(c, `PR ${pr.repo}#${pr.number}: the human took over.`);
+    this.running.get(prId)?.controller.abort(new TakenOver());
+    this.save(c, { outcome: 'escalated' }, { question: undefined, stall: undefined, feedback: undefined });
     return store.pullRequests.require(prId);
   }
 
@@ -575,7 +626,7 @@ export class LoopEngine {
         }
       } catch (err) {
         // The connection, not the PR: the PR keeps its stage and shows no error.
-        if (isNetworkError(err)) return this.net.markOffline();
+        if (isNetworkError(err) && !isSshOnly(err)) return this.net.markOffline();
         const pr = this.deps.store.pullRequests.get(prId);
         this.log(`PR ${pr ? `${pr.repo}#${pr.number}` : prId}: ${errorMessage(err)}`);
         if (pr)
@@ -748,7 +799,7 @@ export class LoopEngine {
       if (next === null) return this.toMerge(c, {}, {});
       // Another check now (the pipeline changed, or a skip): it starts with fresh attempts.
       if (next !== checkAt(c.pr.stage, c.s))
-        return this.save(c, stageFor(next), { ...checkField(next), ...FRESH_ATTEMPTS });
+        return this.save(c, stageFor(next), { ...checkField(next), ...freshAttempts(c.s) });
       // Fail closed: a check whose stage file is missing or broken holds the PR, never skips.
       const stage = this.stages(c).stage(next);
       if (!stage || stage.error)
@@ -1027,12 +1078,7 @@ export class LoopEngine {
 
   private toMerge(c: Ctx, state: Partial<LoopState>, usage: MetricsDelta): boolean {
     const stage = this.needsHuman(c) ? 'awaiting_approval' : 'merge';
-    return this.save(
-      c,
-      { stage },
-      { ...state, qaReason: undefined, attempts: 0, lastError: undefined },
-      usage,
-    );
+    return this.save(c, { stage }, { ...state, ...freshAttempts(c.s), qaReason: undefined }, usage);
   }
 
   private async approvalStep(c: Ctx, gh: GhPr): Promise<boolean> {
@@ -1171,7 +1217,14 @@ export class LoopEngine {
       const retries = e.infra && (c.s.autoContinues ?? 0) < MAX_AUTO_CONTINUES;
       return this.ask(c, 'escalation', gh.headRefOid, {
         text: `${e.reason}: options Continue ${more} more / Take over / Close`,
-        context: clip([gh.url, ...e.items.map((i, n) => `${n + 1}. ${i}`)].join('\n'), 2000),
+        context: clip(
+          [
+            gh.url,
+            ...e.items.map((i, n) => `${n + 1}. ${i}`),
+            ...(retries ? ['With no answer in time the loop tries again, and the PR can still merge.'] : []),
+          ].join('\n'),
+          2000,
+        ),
         options,
         recommendedOption: retries ? options[0]! : TAKE_OVER,
       });
@@ -1217,6 +1270,7 @@ export class LoopEngine {
         feedback,
         retryAfter: undefined,
         limitWaits: undefined,
+        networkWaits: undefined, // a long outage must not use up the next Continue at once
         ...state,
       },
     );
@@ -1387,7 +1441,7 @@ export class LoopEngine {
     // the PR is not escalated (the job's usage, failure included, is still recorded); the next step
     // moves the PR on.
     const from = { kind, ...(stage ? { stage } : {}) };
-    if (this.skippedNow(c.pr, feedbackCheck(from))) return this.save(c, {}, FRESH_ATTEMPTS, usage);
+    if (this.skippedNow(c.pr, feedbackCheck(from))) return this.save(c, {}, freshAttempts(c.s), usage);
     if (c.pr.round >= this.maxRounds(c)) {
       return this.escalate(c, `PR #${c.pr.number} hit ${c.pr.round} rounds`, items, false, usage, from);
     }
@@ -1546,20 +1600,9 @@ export class LoopEngine {
     extra: Partial<LoopState> = {},
   ): boolean {
     const reset: Partial<LoopState> = {
-      reviewedSha: undefined,
-      reviewedBy: undefined,
-      testedSha: undefined,
-      qaSha: undefined,
-      qaNeeded: undefined,
-      passed: undefined,
+      ...CHECKS_NOT_PASSED,
+      ...freshAttempts(c.s),
       check: undefined,
-      approvedSha: undefined,
-      feedback: undefined,
-      question: undefined,
-      qaReason: undefined,
-      heldAt: undefined,
-      attempts: 0,
-      lastError: undefined,
       ...extra,
     };
     if (c.pr.round + 1 > this.maxRounds(c)) {
@@ -2019,7 +2062,7 @@ export class LoopEngine {
       if (this.stopped || err instanceof TakenOver) return { ok: false, progressed: false };
       // The human skipped the check while its job ran (pokePr): no attempt spent; the PR moves on now.
       if (err instanceof CheckSkipped)
-        return { ok: false, progressed: this.save(c, {}, FRESH_ATTEMPTS, usage) };
+        return { ok: false, progressed: this.save(c, {}, freshAttempts(c.s), usage) };
       return failed(err);
     }
     add(result);
@@ -2057,17 +2100,16 @@ export class LoopEngine {
     this.running.set(c.pr.id, mine);
     let release: (() => void) | null = null;
     let slot: (() => void) | undefined;
+    this.controllers.add(controller);
     let path: string | null = null;
     let timer: TimerHandle | null = null;
     try {
+      // Before the job permit, so jobs waiting for a slot don't hold up reviews and conflict fixes,
+      // and before the timeout starts, so the wait is never job time.
+      slot = await this.heavySlot(c, job, controller.signal);
       release = await this.jobs.acquire();
-      this.controllers.add(controller);
       if (this.stopped) throw new Error('the loop is stopping');
       controller.signal.throwIfAborted();
-      // Before the timeout starts, so waiting for a slot is never job time.
-      if (job.kind === 'tests' || job.rights.playwright) {
-        slot = await this.deps.heavySlots?.acquire(controller.signal);
-      }
       // A checkout owned by the loop at the exact head, never the builder's worktree.
       path = await workspace.checkout({
         repo: c.repo,
@@ -2109,6 +2151,35 @@ export class LoopEngine {
       if (path) await workspace.remove(c.repo, path).catch(() => undefined);
       slot?.();
       release?.();
+    }
+  }
+
+  /**
+   * A machine-wide slot for a job that runs browsers or whole test suites. A conflict fix runs few
+   * tests, and has to come soon. After heavyWaitMs the job runs without one: a limit that is stuck
+   * must not stop the loop.
+   */
+  private async heavySlot(c: Ctx, job: PrJob, signal: AbortSignal): Promise<(() => void) | undefined> {
+    const slots = this.deps.heavySlots;
+    if (!slots || job.kind === 'conflict' || !(job.rights.playwright || job.rights.bash === 'all')) {
+      return undefined;
+    }
+    const wait = new AbortController();
+    const passOn = () => wait.abort(signal.reason);
+    signal.addEventListener('abort', passOn, { once: true });
+    const noSlot = new Error('no slot in time');
+    const timer = this.timers.setTimeout(() => wait.abort(noSlot), this.config.heavyWaitMs);
+    try {
+      return await slots.acquire(wait.signal);
+    } catch (err) {
+      if (err !== noSlot) throw err;
+      this.log(
+        `PR ${c.pr.repo}#${c.pr.number}: the ${job.kind} job runs without a heavy-run slot: none came free in ${duration(this.config.heavyWaitMs)}`,
+      );
+      return undefined;
+    } finally {
+      this.timers.clearTimeout(timer);
+      signal.removeEventListener('abort', passOn);
     }
   }
 
@@ -2233,7 +2304,7 @@ export class LoopEngine {
     usage: MetricsDelta,
     extra: Partial<LoopState>,
   ): boolean {
-    this.net.markOffline();
+    if (!isSshOnly(message)) this.net.markOffline();
     const waits = c.s.networkWaits ?? 0;
     if (waits >= NETWORK_WAITS_MAX) {
       return this.escalate(
@@ -2288,7 +2359,7 @@ export class LoopEngine {
     backoff: Partial<LoopState> = {},
   ): JobOutcome<never> | null {
     if (!this.skippedNow(c.pr, jobCheck(kind))) return null;
-    return { ok: false, progressed: this.save(c, {}, { ...FRESH_ATTEMPTS, ...backoff }, usage) };
+    return { ok: false, progressed: this.save(c, {}, { ...freshAttempts(c.s), ...backoff }, usage) };
   }
 
   /**
@@ -2503,6 +2574,27 @@ const FRESH_ATTEMPTS: Partial<LoopState> = {
   lastError: undefined,
   jobRetryWaits: undefined,
   jobTimeouts: undefined,
+};
+
+/** Also ends a wait after failed jobs. A wait for a model limit stays: the limit holds for any check. */
+const freshAttempts = (s: LoopState): Partial<LoopState> => ({
+  ...FRESH_ATTEMPTS,
+  ...(s.jobRetryWaits ? { retryAfter: undefined } : {}),
+});
+
+/** Every check runs again. Not `check`: which one runs next is set along with this. */
+const CHECKS_NOT_PASSED: Partial<LoopState> = {
+  reviewedSha: undefined,
+  reviewedBy: undefined,
+  testedSha: undefined,
+  qaSha: undefined,
+  qaNeeded: undefined,
+  passed: undefined,
+  approvedSha: undefined,
+  feedback: undefined,
+  question: undefined,
+  qaReason: undefined,
+  heldAt: undefined,
 };
 
 /** The PR stages a check runs in; advanceOpen picks which check from the pipeline. */

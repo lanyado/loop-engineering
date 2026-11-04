@@ -240,10 +240,13 @@ describe.skipIf(!hasTmux())('runner with real tmux (fake agents)', () => {
         [
           '#!/bin/sh',
           `pwd -P > '${cwdOut}'`,
-          'echo "FOLDER AGENT up"',
-          // Claude's empty input box, so the runner will type into it.
-          "printf '────────────\\n❯ \\n────────────\\n'",
-          'exec sleep 300',
+          // Claude's empty input box, so the runner will type into it. What is typed shows inside
+          // the box (the cursor goes back up), and Enter empties it.
+          'box() {',
+          "  printf '\\033[H\\033[JFOLDER AGENT up\\n────────────\\n❯ \\n────────────\\n\\033[2A\\033[2C'",
+          '}',
+          'box',
+          'while read -r line; do box; done',
           '',
         ].join('\n'),
         { mode: 0o755 },

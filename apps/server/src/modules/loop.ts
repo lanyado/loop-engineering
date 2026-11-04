@@ -79,6 +79,13 @@ export function loopModule(options: LoopModuleOptions): LoopModule {
         if (!Number.isInteger(id)) return c.json({ error: 'no such PR' }, 404);
         return c.json({ pullRequest: await engine.retry(id) });
       });
+      // A PR out of the loop at any time, also after its question's deadline passed.
+      api.post('/prs/:id/take-over', (c) => {
+        if (!engine) return c.json({ error: 'the PR loop is not running' }, 503);
+        const id = Number(c.req.param('id'));
+        if (!Number.isInteger(id)) return c.json({ error: 'no such PR' }, 404);
+        return c.json({ pullRequest: engine.takeOver(id) });
+      });
       // A read-only ttyd page following a stage's job log, for the dashboard to embed.
       api.post('/prs/:id/web-terminal', async (c) => {
         const logsDir = engine?.config.logsDir;

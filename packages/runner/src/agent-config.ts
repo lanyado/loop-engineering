@@ -18,13 +18,15 @@ export const DEFAULT_MCP_TOKEN_ENV = 'MCP_TOKEN';
 
 /**
  * Optional variables passed from the runner's env to the agent when set: API keys its MCP configs
- * reference, and the size of the machine-wide limit its heavy runs go through (scripts/heavy).
+ * reference, and the settings of the machine-wide limit its heavy runs go through (scripts/heavy).
  */
 export const PASSTHROUGH_ENV = [
   'TAVILY_API_KEY',
   'CONTEXT7_API_KEY',
   'GITHUB_PERSONAL_ACCESS_TOKEN',
   'LOOP_HEAVY_SLOTS',
+  'LOOP_HEAVY_DIR',
+  'LOOP_HEAVY_MAX_SECONDS',
 ] as const;
 
 export interface AgentConfigInput {

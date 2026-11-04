@@ -93,6 +93,9 @@ export class DemoBackend implements Backend {
   skipCheck(): never {
     throw new ReadOnlyError();
   }
+  prLoop(): never {
+    throw new ReadOnlyError();
+  }
   webTerminal(): never {
     throw new ReadOnlyError();
   }

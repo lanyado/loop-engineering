@@ -2,8 +2,10 @@
 # Runs a heavy command (a browser suite, a full QA run) once a machine-wide slot is free, so builders
 # and loop jobs don't all run browsers at once. Waits instead of failing, and exits with the command's
 # code. Put a timeout inside it, so waiting doesn't count: heavy timeout 600 npm test
-#   LOOP_HEAVY_SLOTS  runs at once (default 3)
-#   LOOP_HEAVY_DIR    lock folder (default /tmp/loop-heavy-<uid>)
+#   LOOP_HEAVY_SLOTS          runs at once (default 3)
+#   LOOP_HEAVY_DIR            lock folder (default /tmp/loop-heavy-<uid>)
+#   LOOP_HEAVY_MAX_SECONDS    longest run: then TERM, and KILL after the grace period (default 7200)
+#   LOOP_HEAVY_GRACE_SECONDS  grace period (default 30)
 set -u
 if [ $# -eq 0 ]; then
   echo 'usage: heavy <command> [args...]' >&2
@@ -13,16 +15,25 @@ fi
 if [ -n "${LOOP_HEAVY_HELD:-}" ] || ! command -v flock >/dev/null 2>&1; then
   exec "$@"
 fi
-slots=${LOOP_HEAVY_SLOTS:-3}
-case $slots in
-  '' | *[!0-9]* | 0) slots=3 ;;
-esac
+number() {
+  case ${1:-} in
+    '' | *[!0-9]* | 0) echo "$2" ;;
+    *) echo "$1" ;;
+  esac
+}
+slots=$(number "${LOOP_HEAVY_SLOTS:-}" 3)
+max=$(number "${LOOP_HEAVY_MAX_SECONDS:-}" 7200)
+grace=$(number "${LOOP_HEAVY_GRACE_SECONDS:-}" 30)
 dir=${LOOP_HEAVY_DIR:-/tmp/loop-heavy-$(id -u)}
-mkdir -p "$dir"
+mkdir -p "$dir" 2>/dev/null
 said=
 while :; do
   for i in $(seq 1 "$slots"); do
-    exec 9>"$dir/slot-$i"
+    # A lock folder that can't be used must not make everyone wait for ever.
+    if ! { exec 9>"$dir/slot-$i"; } 2>/dev/null; then
+      echo "heavy: cannot use $dir, running without a limit: $*" >&2
+      exec "$@"
+    fi
     if flock -n 9; then
       break 2
     fi
@@ -37,9 +48,42 @@ done
 # This script holds the lock. The command doesn't get its descriptor, so a server it leaves behind
 # can't keep the slot. The lock goes with this process, however it ends.
 export LOOP_HEAVY_HELD=1
+# Its own process group, so a stop also reaches the browsers it started.
+set -m
 "$@" 9>&- <&0 &
 child=$!
-trap 'kill -TERM "$child" 2>/dev/null' INT TERM HUP
+set +m
+kill_group() {
+  kill "-$1" -- "-$child" 2>/dev/null || kill "-$1" "$child" 2>/dev/null
+}
+# TERM, then KILL after the grace period. Ends by itself soon after the command does.
+stop_after() {
+  local waited=0
+  while [ "$waited" -lt "$1" ]; do
+    sleep 1
+    kill -0 "$child" 2>/dev/null || return 1
+    waited=$((waited + 1))
+  done
+  return 0
+}
+(
+  stop_after "$max" || exit 0
+  echo "heavy: over the limit of ${max}s, stopping: $*" >&2
+  kill_group TERM
+  stop_after "$grace" || exit 0
+  kill_group KILL
+) 9>&- </dev/null >/dev/null &
+stopping=
+on_signal() {
+  kill_group TERM
+  if [ -z "$stopping" ]; then
+    stopping=1
+    (
+      stop_after "$grace" && kill_group KILL
+    ) 9>&- </dev/null >/dev/null 2>&1 &
+  fi
+}
+trap on_signal INT TERM HUP
 while :; do
   wait "$child"
   code=$?

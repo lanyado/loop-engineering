@@ -19,6 +19,13 @@ export interface HistoryFilter {
   limit?: number;
 }
 
+export interface HistoryCountFilter extends Omit<HistoryFilter, 'limit'> {
+  /** How the text starts. */
+  prefix: string;
+  /** Entries from this time on (ISO). */
+  since?: string;
+}
+
 export interface HistorySearchOptions extends HistoryFilter {
   /**
    * Pass the query to FTS5 as-is (operators, prefixes, phrases); invalid syntax throws.
@@ -93,6 +100,22 @@ export class HistoryRepo {
     const entry = this.get(id);
     if (!entry) throw new NotFoundError('history entry', id);
     return entry;
+  }
+
+  /** How many entries match: for counts that list()'s limit would cut short. */
+  count(filter: HistoryCountFilter): number {
+    const { clause, params } = where({
+      project_id: filter.projectId,
+      session_id: filter.sessionId,
+      kind: filter.kind,
+    });
+    const text = 'substr(text, 1, length(@prefix)) = @prefix AND created_at >= @since';
+    const row = this.db
+      .prepare<[Record<string, unknown>], { n: number }>(
+        `SELECT COUNT(*) AS n FROM history_entries ${clause ? `${clause} AND` : 'WHERE'} ${text}`,
+      )
+      .get({ ...params, prefix: filter.prefix, since: filter.since ?? '' });
+    return row?.n ?? 0;
   }
 
   /** Newest first. */

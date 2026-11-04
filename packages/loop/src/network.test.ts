@@ -25,6 +25,8 @@ describe('isNetworkError', () => {
     'git@github.com: Permission denied (publickey).',
     'fatal: Could not read from remote repository.',
     'Connection closed by 140.82.112.4 port 22',
+    'Connection closed by UNKNOWN port 65535',
+    'git fetch failed: git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.',
     'kex_exchange_identification: Connection closed by remote host',
     'ssh: connect to host github.com port 22: Connection timed out',
   ])('matches %s', (text) => {
@@ -53,6 +55,9 @@ describe('isNetworkError', () => {
     ' ! [rejected]        loop/x -> loop/x (non-fast-forward)',
     'error: failed to push some refs to github.com:me/web.git',
     'remote: Permission to me/web.git denied to some-bot.',
+    'ERROR: Permission to me/web.git denied to deploy-key.\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.',
+    'ERROR: Repository not found.\nfatal: Could not read from remote repository.',
+    'browserContext.close: Connection closed by remote browser',
     'remote: error: GH006: Protected branch update failed for refs/heads/main.',
   ])('does not match %s', (text) => {
     expect(isNetworkError(text)).toBe(false);

@@ -9,6 +9,8 @@ const PROMPT_MS = 2 * MINUTE;
 const NUDGE_AFTER_MS = [30 * MINUTE, 120 * MINUTE, 360 * MINUTE];
 /** A background shell may be what the agent waits for, or a server it forgot: not idle before this. */
 const SHELL_IDLE_MS = 120 * MINUTE;
+/** The agent hears why this many times per task. Each telling is a paid turn, and it may just try again. */
+const MAX_EXPLAINED_REFUSALS = 3;
 /** Between looks at git and tries to send, for a session that is past its idle limit. */
 const RECHECK_MS = 5 * MINUTE;
 /** Claude's spinner sits above its task list, which can be long. */
@@ -25,6 +27,8 @@ const tail = (pane: string, lines: number): string =>
 // In the session's history, so counts survive a server restart: a restart can never nudge more.
 const NUDGED = 'Idle watchdog nudge';
 const ALERTED = 'Idle watchdog alert';
+const REFUSAL = 'Permission watchdog: refused';
+const REFUSAL_ALERTED = 'Permission watchdog alert';
 
 const NUDGE =
   'Automatic check: you have been idle with work that is not delivered, and nobody watches this terminal. ' +
@@ -36,6 +40,8 @@ const REFUSED =
 
 /** The question and what it asks about, when a pane ends in Claude's permission menu. Null otherwise. */
 export function detectPermissionPrompt(pane: string): string | null {
+  // Esc in the box or in a working agent would interrupt it, whatever the words above say.
+  if (inputBoxText(pane) !== null || agentBusy(pane)) return null;
   const lines = pane
     .split('\n')
     .map((l) => l.trim())
@@ -63,8 +69,8 @@ export function runningShell(pane: string): boolean {
 
 export interface WatchdogOptions {
   now: () => number;
-  /** A session still idle with undelivered work after every nudge. Once per task. */
-  onIdleAlert?: (session: Session) => void;
+  /** Reminders or refusals did not help, and a person should look. Once per kind and task. */
+  onAlert?: (session: Session, message: string) => void;
   log?: (message: string) => void;
 }
 
@@ -76,6 +82,8 @@ export interface WatchdogOptions {
 export class SessionWatchdog {
   private readonly prompts = new Map<number, { text: string; since: number }>();
   private readonly quiet = new Map<number, { activity: number | null; since: number; looked: number }>();
+  /** Sessions whose agent was refused and has not yet heard why, because sending failed. */
+  private readonly owedExplanation = new Set<number>();
 
   constructor(
     private readonly runner: SessionRunner,
@@ -87,22 +95,27 @@ export class SessionWatchdog {
     const read = await this.runner.readClaudeAgent(session.id);
     if (!read) return;
     if (await this.refusePrompt(session, read.pane)) return;
+    if (this.owedExplanation.has(session.id)) {
+      if (inputBoxText(read.pane) === '' && !agentBusy(read.pane)) await this.explainRefusal(session);
+      return;
+    }
     await this.nudgeIfIdle(session, read.pane, read.activity);
   }
 
   /** Drops what it remembers of sessions no longer on `ids`. */
   retain(ids: readonly number[]): void {
-    for (const map of [this.prompts, this.quiet]) {
-      for (const id of map.keys()) if (!ids.includes(id)) map.delete(id);
+    for (const known of [this.prompts, this.quiet, this.owedExplanation]) {
+      for (const id of known.keys()) if (!ids.includes(id)) known.delete(id);
     }
   }
 
   /** Whether the pane shows a permission question, which leaves nothing else to do on this pass. */
   private async refusePrompt(s: Session, pane: string): Promise<boolean> {
     const text = detectPermissionPrompt(pane);
-    if (!text) {
+    // A person took over this session's PR, and may be the one answering at this terminal.
+    if (!text || this.prs(s).some((p) => p.outcome === 'escalated')) {
       this.prompts.delete(s.id);
-      return false;
+      return text !== null;
     }
     const now = this.options.now();
     const seen = this.prompts.get(s.id);
@@ -113,9 +126,28 @@ export class SessionWatchdog {
     if (now - seen.since < PROMPT_MS) return true;
     this.prompts.delete(s.id);
     if (!(await this.runner.refusePermissionPrompt(s.id))) return true;
-    this.note(s, `Permission watchdog: refused a question nobody could answer: ${text.slice(0, 500)}`);
-    await this.runner.sendToSession(s.id, REFUSED);
+    const earlier = this.entries(s, REFUSAL);
+    this.note(s, `${REFUSAL} a question nobody could answer: ${text.slice(0, 500)}`);
+    if (earlier < MAX_EXPLAINED_REFUSALS) {
+      this.owedExplanation.add(s.id);
+      await this.explainRefusal(s);
+    } else if (this.entries(s, REFUSAL_ALERTED) === 0) {
+      this.note(
+        s,
+        `${REFUSAL_ALERTED}: the agent keeps asking after ${earlier} refusals, and hears no more.`,
+      );
+      this.options.onAlert?.(
+        s,
+        `Session ${s.id} ("${s.title}") keeps asking for a permission nobody can give: it was refused ${earlier + 1} times. See its history for what it asks.`,
+      );
+    }
     return true;
+  }
+
+  /** Until this works, the agent may sit waiting with no idea why. */
+  private async explainRefusal(s: Session): Promise<void> {
+    await this.runner.sendToSession(s.id, REFUSED);
+    this.owedExplanation.delete(s.id);
   }
 
   private async nudgeIfIdle(s: Session, pane: string, activity: number | null): Promise<void> {
@@ -140,7 +172,10 @@ export class SessionWatchdog {
       );
     } else if (this.entries(s, ALERTED) === 0) {
       this.note(s, `${ALERTED}: still idle with undelivered work after ${nudges} nudges.`);
-      this.options.onIdleAlert?.(s);
+      this.options.onAlert?.(
+        s,
+        `Session ${s.id} ("${s.title}") is idle with work that is not delivered, and ${nudges} automatic reminders did not help. Open it to see why.`,
+      );
     }
   }
 
@@ -149,17 +184,17 @@ export class SessionWatchdog {
     const { store } = this;
     if (store.projects.require(s.projectId).kind === 'folder') return false;
     if (store.questions.list({ sessionId: s.id, status: 'pending' }).length > 0) return false;
-    return !store.pullRequests
-      .list({ sessionId: s.id })
-      .some((p) => p.outcome === null || p.outcome === 'escalated');
+    return !this.prs(s).some((p) => p.outcome === null || p.outcome === 'escalated');
+  }
+
+  private prs(s: Session) {
+    return this.store.pullRequests.list({ sessionId: s.id });
   }
 
   /** Entries of this kind since the session's newest task: a new task starts the count again. */
   private entries(s: Session, prefix: string): number {
     const since = this.store.requests.list({ sessionId: s.id }).at(-1)?.createdAt ?? '';
-    return this.store.history
-      .list({ sessionId: s.id, kind: 'decision' })
-      .filter((e) => e.text.startsWith(prefix) && e.createdAt >= since).length;
+    return this.store.history.count({ sessionId: s.id, kind: 'decision', prefix, since });
   }
 
   private note(s: Session, text: string): void {

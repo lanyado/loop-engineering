@@ -340,6 +340,10 @@ export const skipCheckInput = z.object({
   check: z.string().min(1).max(32),
   skip: z.boolean(),
 });
+export const prLoopInput = z.object({
+  prId: z.number().int().positive(),
+  action: z.enum(['take-over', 'retry']),
+});
 export const webTerminalInput = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('session'), sessionId: z.number().int().positive() }),
   z.object({ kind: z.literal('stage'), prId: z.number().int().positive(), stage: z.string().min(1).max(32) }),

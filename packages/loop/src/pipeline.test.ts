@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { verdictResult } from './fakes.js';
 import { skipCheck } from './skip.js';
 import {
@@ -278,6 +278,21 @@ describe('custom stages', () => {
       await h.engine.tick();
       expect([files, h.launcher.kinds()]).toEqual([files, kinds]);
       expect(h.pr().outcome).toBe('merged');
+    }
+  });
+
+  it('a custom stage with a shell holds a machine-wide slot, and one that only reads does not', async () => {
+    for (const [access, slots] of [
+      ['shell', 1],
+      ['read', 0],
+    ] as const) {
+      const acquire = vi.fn(() => Promise.resolve(() => undefined));
+      const audit: Stage = { ...security, id: 'audit', title: 'Audit', access };
+      const h = harness(library({ checks: ['audit'] }, [audit]), { deps: { heavySlots: { acquire } } });
+      h.launcher.on('check-audit', checkPass());
+      await h.builderWithPr();
+      await h.engine.tick();
+      expect([access, acquire.mock.calls.length]).toEqual([access, slots]);
     }
   });
 
