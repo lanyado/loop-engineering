@@ -1,32 +1,52 @@
 /* global Buffer, console, document, Event, fetch, setTimeout */
-// Regenerates docs/media: the README's clips and screenshots, from the real dashboard and API server
-// on sample data in a temp folder. No agent runs and nothing leaves the machine: tmux and git are the
-// fakes, and the sample terminals never attach to a real tmux session.
+// Regenerates docs/media. The clips record the real dashboard and API server on sample data in a temp
+// folder; the screenshots are its built-in demo mode. No agent runs and nothing leaves the machine:
+// tmux and git are the fakes, and no terminal can attach to a real tmux session.
 // Needs: `npm run build`, ffmpeg, ttyd, and Playwright's Chromium (npx playwright install chromium).
 //   node scripts/capture-readme-media.mjs            # everything
 //   node scripts/capture-readme-media.mjs pipeline   # by name: see `clips` and `shots` below
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { appendFile } from 'node:fs/promises';
+import { appendFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 import { URL, fileURLToPath } from 'node:url';
+import { chromium } from '@playwright/test';
+import { openStore } from '@loop-engineering/core';
+import { checkJobKind, FileStageLibrary, jobLogFile, ProjectStageFiles } from '@loop-engineering/loop';
+import {
+  DefaultAgentCli,
+  FakeGitDriver,
+  FakeTmuxDriver,
+  MemoryFs,
+  SessionRunner,
+} from '@loop-engineering/runner';
+import {
+  claudeUsageModule,
+  createServer,
+  dashboardApi,
+  pipelineModule,
+  plannerModule,
+  terminalModule,
+} from '@loop-engineering/server';
+import { loopModule } from '@loop-engineering/server/dist/modules/loop.js';
+import { ttydLauncher, WebTerminals } from '@loop-engineering/server/dist/modules/web-terminals.js';
 
-// Before anything asks where temp files go, so uploads end up in the folder removed below.
-// A short path, because the terminals and the editor show it.
+// A short path, because the terminals and the editor show it. Uploads land here too, through TMPDIR.
 const dir = realpathSync(mkdtempSync('/tmp/loop-media-'));
 process.env.TMPDIR = dir;
 
-const { chromium } = await import('@playwright/test');
-const { openStore } = await import('@loop-engineering/core');
-const { checkJobKind, FileStageLibrary, jobLogFile, ProjectStageFiles } =
-  await import('@loop-engineering/loop');
-const { DefaultAgentCli, FakeGitDriver, FakeTmuxDriver, MemoryFs, SessionRunner } =
-  await import('@loop-engineering/runner');
-const { claudeUsageModule, createServer, dashboardApi, pipelineModule, plannerModule, terminalModule } =
-  await import('@loop-engineering/server');
-const { loopModule } = await import('@loop-engineering/server/dist/modules/loop.js');
-const { ttydLauncher, WebTerminals } = await import('@loop-engineering/server/dist/modules/web-terminals.js');
+// The one way out, for success and failure alike: whatever has started by then is stopped.
+const cleanups = [() => rmSync(dir, { recursive: true, force: true })];
+process.on('exit', () => {
+  for (const undo of cleanups.reverse()) {
+    try {
+      undo();
+    } catch (error) {
+      console.error(`cleanup: ${String(error)}`);
+    }
+  }
+});
+for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => process.exit(1));
 
 const SERVER_PORT = 3191;
 const LIVE_PORT = 3192;
@@ -120,14 +140,16 @@ const MODELS = {
 // ---- The real server on a temp database, with stand-ins for tmux, git and the agents ----
 
 const store = openStore({ path: join(dir, 'loop.db') });
-// A session's terminal would attach to tmux: it plays the sample screen instead. Stage terminals are real.
+// Anything aimed at tmux plays the sample screen, so no terminal can reach a real session. Stage
+// terminals are the real thing, on the sample logs.
 const webTerminals = new WebTerminals((spec, port, basePath) => {
-  if (!spec.key.startsWith('session-')) return ttydLauncher(spec, port, basePath);
+  if (spec.argv[0] !== 'tmux') return ttydLauncher(spec, port, basePath);
   const screen = join(dir, 'builder-screen.txt');
   writeFileSync(screen, BUILDER_SCREEN);
   const play = `while IFS= read -r line; do printf '%b\\n' "$line"; sleep 0.12; done < '${screen}'; exec sleep 3600`;
   return ttydLauncher({ ...spec, argv: ['sh', '-c', play] }, port, basePath);
 });
+cleanups.push(() => webTerminals.stopAll());
 const idleEngine = {
   config: { logsDir, maxConcurrentJobs: 1 },
   start() {},
@@ -172,7 +194,12 @@ const server = createServer({
     }),
     plannerModule(),
     terminalModule({ open: () => Promise.resolve(), web: webTerminals, sweepMs: 1000 }),
-    loopModule({ createEngine: () => idleEngine, web: webTerminals, log: () => undefined }),
+    loopModule({
+      createEngine: () => idleEngine,
+      web: webTerminals,
+      openCommand: () => Promise.resolve(),
+      log: () => undefined,
+    }),
   ],
   sseKeepAliveMs: 5_000,
 });
@@ -215,7 +242,7 @@ function plannedSession(stage) {
     title: 'Apple Pay checkout',
     model: 'opus',
     branch: 'loop/apple-pay',
-    tmuxTarget: 'loop:@5',
+    tmuxTarget: 'readme-sample:@5',
   });
   const request = store.requests.create({
     projectId: shop.id,
@@ -307,11 +334,11 @@ async function clip(browser, name, script) {
   await page.waitForTimeout(1000);
 
   const cdp = await ctx.newCDPSession(page);
-  const shots = [];
+  const frameList = [];
   cdp.on('Page.screencastFrame', (f) => {
-    const file = join(clipDir, `${String(shots.length).padStart(5, '0')}.jpg`);
+    const file = join(clipDir, `${String(frameList.length).padStart(5, '0')}.jpg`);
     writeFileSync(file, Buffer.from(f.data, 'base64'));
-    shots.push({ file, at: f.metadata.timestamp });
+    frameList.push({ file, at: f.metadata.timestamp });
     cdp.send('Page.screencastFrameAck', { sessionId: f.sessionId }).catch(() => {});
   });
   await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 95, everyNthFrame: 1 });
@@ -323,11 +350,11 @@ async function clip(browser, name, script) {
   await ctx.close();
 
   // Frames come when the screen changes, so each one lasts until the next, and the last until the end.
-  const list = shots.flatMap((s, i) => [
+  const list = frameList.flatMap((s, i) => [
     `file '${s.file}'`,
-    `duration ${Math.max((shots[i + 1]?.at ?? end) - s.at, 0.01).toFixed(4)}`,
+    `duration ${Math.max((frameList[i + 1]?.at ?? end) - s.at, 0.01).toFixed(4)}`,
   ]);
-  list.push(`file '${shots.at(-1).file}'`);
+  list.push(`file '${frameList.at(-1).file}'`);
   const listFile = join(clipDir, 'frames.txt');
   writeFileSync(listFile, `${list.join('\n')}\n`);
   execFileSync('ffmpeg', [
@@ -346,7 +373,7 @@ async function clip(browser, name, script) {
     join(out, `${name}.gif`),
   ]);
   rmSync(clipDir, { recursive: true, force: true });
-  console.log(`${name}.gif (${shots.length} frames)`);
+  console.log(`${name}.gif (${frameList.length} frames)`);
 }
 
 // ---- The clips ----
@@ -355,7 +382,7 @@ const clips = {
   /** A task from the first word to the deploy: the README's hero. */
   pipeline: {
     setup: () => freshProject(),
-    height: 660,
+    height: 720,
     hold: 2600,
     async run(page, shop) {
       await page.waitForTimeout(500);
@@ -380,7 +407,7 @@ const clips = {
         title: 'Apple Pay checkout',
         model: 'opus',
         branch: 'loop/apple-pay',
-        tmuxTarget: 'loop:@5',
+        tmuxTarget: 'readme-sample:@5',
       });
       store.requests.assignSession(request.id, session.id);
       await refresh(page, 1500);
@@ -397,8 +424,8 @@ const clips = {
 
       const { question } = server.ctx.questions.ask({
         sessionId: session.id,
-        text: 'PR web#212 passed review, tests and QA. Merge it?',
-        options: ['Merge', 'Hold'],
+        text: 'PR web#212 at 8f3c2d1 (round 1) passed its checks. Merge it?',
+        options: ['Merge', 'Hold', 'Close'],
         recommendedOption: 'Hold',
       });
       store.pullRequests.update(pr.id, {
@@ -443,7 +470,7 @@ const clips = {
       });
       return { session, pr };
     },
-    height: 780,
+    height: 860,
     async run(page, { session, pr }) {
       const card = page.getByTestId('question').first();
       await page.waitForTimeout(600);
@@ -456,7 +483,7 @@ const clips = {
 
       server.ctx.questions.ask({
         sessionId: session.id,
-        text: `PR web#212 has not moved for 2h: waiting for builder session ${session.id} (active) to push fixes for the code review it got 2h ago. Options Keep waiting / Nudge builder / Take over`,
+        text: `PR web#212 has not moved for 2h: waiting for builder session ${session.id} (active) to push fixes for the review feedback it got 2h ago. Options Keep waiting / Nudge builder / Take over`,
         context: pr.url,
         options: ['Keep waiting', 'Nudge builder', 'Take over'],
         recommendedOption: 'Keep waiting',
@@ -519,7 +546,7 @@ const clips = {
       await click(page, tabs.filter({ hasText: 'QA' }));
       await page.waitForTimeout(3000);
       // A running stage's terminal follows its log.
-      await appendFile(
+      appendFileSync(
         jobLogFile(logsDir, pr.id, checkJobKind('qa')),
         jobEvents('Checked the failure paths too: a declined card returns to the sheet.', 'QA passed.'),
       );
@@ -570,16 +597,15 @@ const clips = {
 
 // ---- The screenshots ----
 
-/** A retina picture of the page. PNGs of a flat UI shrink a lot on a 256-color palette. */
-async function shot(browser, name, options) {
-  const { url, colorScheme = 'dark' } = options;
+/** A retina picture of the demo dashboard (labelled as demo data on screen). PNGs of a flat UI shrink a lot on a 256-color palette. */
+async function shot(browser, name, { colorScheme }) {
   const ctx = await browser.newContext({
-    viewport: { width: WIDTH, height: 860 },
+    viewport: { width: WIDTH, height: 845 },
     colorScheme,
     deviceScaleFactor: 2,
   });
   const page = await ctx.newPage();
-  await page.goto(url);
+  await page.goto(`http://localhost:${DEMO_PORT}/`);
   await page.waitForTimeout(1000);
   const raw = join(dir, `${name}-raw.png`);
   await page.screenshot({ path: raw });
@@ -599,40 +625,47 @@ async function shot(browser, name, options) {
   console.log(`${name}.png`);
 }
 
-const demo = `http://localhost:${DEMO_PORT}/`;
 const shots = {
-  'board-dark': { url: demo },
-  'board-light': { url: demo, colorScheme: 'light' },
+  'board-dark': { colorScheme: 'dark' },
+  'board-light': { colorScheme: 'light' },
 };
 
 // ---- Run ----
 
-function nextStart(port, env) {
-  return spawn(join(root, 'node_modules/.bin/next'), ['start', '-H', '127.0.0.1', '-p', String(port)], {
-    cwd: join(root, 'apps/dashboard'),
-    stdio: 'ignore',
-    env: {
-      ...process.env,
-      NEXT_TELEMETRY_DISABLED: '1',
-      DASHBOARD_HOST: '127.0.0.1',
-      DASHBOARD_AUTH: '',
-      DASHBOARD_PASSWORD: '',
-      DASHBOARD_SESSION_SECRET: '',
-      ...env,
-    },
-  });
-}
+const answers = (url) =>
+  fetch(url).then(
+    (r) => r.ok,
+    () => false,
+  );
 
-async function waitFor(url) {
+/** Refuses a port something else holds: its pages would be recorded as if they were ours. */
+async function nextStart(port, env) {
+  const url = `http://127.0.0.1:${port}/login`;
+  if (await answers(url)) throw new Error(`port ${port} is in use`);
+  const child = spawn(
+    join(root, 'node_modules/.bin/next'),
+    ['start', '-H', '127.0.0.1', '-p', String(port)],
+    {
+      cwd: join(root, 'apps/dashboard'),
+      stdio: ['ignore', 'ignore', 'inherit'],
+      env: {
+        ...process.env,
+        NEXT_TELEMETRY_DISABLED: '1',
+        DASHBOARD_HOST: '127.0.0.1',
+        DASHBOARD_AUTH: '',
+        DASHBOARD_PASSWORD: '',
+        DASHBOARD_SESSION_SECRET: '',
+        ...env,
+      },
+    },
+  );
+  cleanups.push(() => child.kill());
   for (let i = 0; i < 120; i++) {
-    const ok = await fetch(url).then(
-      (r) => r.ok,
-      () => false,
-    );
-    if (ok) return;
+    if (child.exitCode !== null) throw new Error(`the dashboard on port ${port} exited`);
+    if (await answers(url)) return;
     await new Promise((r) => setTimeout(r, 500));
   }
-  throw new Error(`nothing answered at ${url}`);
+  throw new Error(`the dashboard on port ${port} did not start`);
 }
 
 const wanted = process.argv.slice(2);
@@ -642,20 +675,9 @@ for (const name of wanted) {
 }
 
 await server.start();
-const dashboards = [
-  nextStart(LIVE_PORT, { SERVER_URL: `http://127.0.0.1:${SERVER_PORT}`, DASHBOARD_TOKEN: TOKEN }),
-  nextStart(DEMO_PORT, { SERVER_URL: '', DASHBOARD_TOKEN: '' }),
-];
+await nextStart(LIVE_PORT, { SERVER_URL: `http://127.0.0.1:${SERVER_PORT}`, DASHBOARD_TOKEN: TOKEN });
+await nextStart(DEMO_PORT, { SERVER_URL: '', DASHBOARD_TOKEN: '' });
 const browser = await chromium.launch();
-try {
-  await waitFor(`http://127.0.0.1:${LIVE_PORT}/login`);
-  await waitFor(`http://127.0.0.1:${DEMO_PORT}/login`);
-  for (const [name, script] of Object.entries(clips)) if (chosen(name)) await clip(browser, name, script);
-  for (const [name, options] of Object.entries(shots)) if (chosen(name)) await shot(browser, name, options);
-} finally {
-  await browser.close();
-  for (const d of dashboards) d.kill();
-  await server.close();
-  store.close();
-  rmSync(dir, { recursive: true, force: true });
-}
+for (const [name, script] of Object.entries(clips)) if (chosen(name)) await clip(browser, name, script);
+for (const [name, options] of Object.entries(shots)) if (chosen(name)) await shot(browser, name, options);
+process.exit(0);

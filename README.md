@@ -28,8 +28,8 @@
 - **Planned before it's built.** A Planner reads the code, asks what's unclear, and picks the rigor level and the model for each agent. You can override any of it.
 - **Questions, not interruptions.** The agent asks through the dashboard as one-tap options with a default answer. If you don't reply in time, the default wins.
 - **A PR loop that closes the job.** Optional. Tests, code review by a separate agent, QA, merge and deploy for every PR a session opens. Failures go back to the agent, and a failed deploy is reverted (repos with a Vercel project set).
-- **Nothing stalls in silence.** A PR that stops moving for 2 hours comes to you, whatever the cause. Messages to an agent are checked against its own conversation file, and a builder whose agent exited is resumed with the feedback it missed.
-- **Every agent, one click away.** Live terminals sit under each pipeline, with your Claude 5-hour and weekly limits in the top bar.
+- **Stuck PRs come to you.** With the PR loop on, an open PR that stops moving for 2 hours is put to you, whatever the cause, and a builder whose agent exited is resumed with the feedback it missed. Messages to Claude are checked against its own conversation file.
+- **Terminals under each pipeline.** Open the Builder's live window or any check's log in one click, with your Claude 5-hour and weekly limits in the top bar.
 - **Screenshots in the prompt.** Attach, paste or drop files when you start a session or message one.
 - **Yours to edit.** Reorder, remove or add stages and rewrite their prompts from the dashboard, shared or per project.
 
@@ -37,7 +37,7 @@ The pipeline runs left to right: **Planner → Builder → Tests → Code review
 
 ## See it work
 
-These clips show the real dashboard and server, with real clicks. No agents run in them: the work and the terminal output are sample data, played by [`scripts/capture-readme-media.mjs`](scripts/capture-readme-media.mjs).
+The clips show the real dashboard and server, with real clicks. No agents run in them: the work and the terminal output are sample data, played by [`scripts/capture-readme-media.mjs`](scripts/capture-readme-media.mjs).
 
 ### Answer without leaving the board
 
@@ -45,15 +45,15 @@ An agent's question appears on the node that asked it. When a PR stops moving, t
 
 <img src="docs/media/questions.gif" alt="Opening a builder's question, reading its context and answering with one tap, then a stall alarm asks whether to keep waiting, nudge the builder or take over" width="860" />
 
-### Watch any agent work
+### Watch the agents work
 
-The Builder's terminal is live and takes your typing. Each check follows its own log.
+While a session is active, its Builder terminal is live and takes your typing. Each check that has run follows its own log.
 
 <img src="docs/media/terminals.gif" alt="Opening the Terminals panel under a pipeline and switching between the Builder, Tests, Code review and QA tabs" width="860" />
 
 ### Decide how much care a task gets
 
-Move the rigor dial, change the model on any node, or skip one check for one PR.
+Move the rigor dial, change the model of the Builder or a check, or skip one check for one PR.
 
 <img src="docs/media/controls.gif" alt="Clicking the rigor levels, choosing a different model for QA, and skipping QA for one pull request" width="860" />
 
@@ -71,6 +71,8 @@ Drag stages, remove them, or write a new one, for all projects or just one.
   <img src="docs/media/board-dark.png" alt="The board with a session waiting for approval, in the theme your system uses" width="860" />
 </picture>
 
+<sub>The dashboard's built-in demo mode, which needs no server.</sub>
+
 > [!WARNING]
 > Everything runs on your machine, reachable only from it, and it starts agents with write access to your repos. It is a personal project, built mostly by the agents it runs, and developed on macOS. Read [SECURITY.md](SECURITY.md) first.
 
@@ -80,7 +82,7 @@ Drag stages, remove them, or write a new one, for all projects or just one.
 - [Claude Code](https://docs.claude.com/en/docs/claude-code), installed and logged in (run `claude` once)
 - Optional: [`gh`](https://cli.github.com) for the PR loop, [OpenCode](https://opencode.ai) for the free fallback, `jq` for the usage meters, and [`ttyd`](https://github.com/tsl0922/ttyd) for the terminals under each pipeline
 
-`npm run setup` checks all of these except `ttyd` and tells you what's missing. Without `ttyd`, opening a terminal shows the command to install it.
+`npm run setup` checks your Node version and that each tool is installed, except `ttyd`, and tells you what's missing. Without `ttyd`, opening a terminal shows the command to install it.
 
 ## Quick start
 

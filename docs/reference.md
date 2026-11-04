@@ -42,7 +42,7 @@ npm run add-project -- <path> [--name n] [--branch b] [--folder] [--outside-home
 npm run loop -- init [<path>] [same flags]  # give a project its own pipeline (adds it first if needed); `loop init` after `npm link`
 ```
 
-`scripts/capture-readme-media.mjs` regenerates the README's clips and screenshots in `docs/media/` from the real dashboard and server on sample data, in a temp folder (after `npm run build`; needs ffmpeg, ttyd and Playwright's Chromium). Run it with no arguments for everything, or name a clip such as `pipeline`.
+`scripts/capture-readme-media.mjs` regenerates the README's media in `docs/media/` (after `npm run build`; needs ffmpeg, ttyd and Playwright's Chromium, and ports 3191-3193 free). The clips record the real dashboard and server on sample data in a temp folder, and the screenshots are the dashboard's demo mode. Run it with no arguments for everything, or name a clip such as `pipeline`.
 
 Tests resolve `@loop-engineering/*` imports to package sources, so they need no build. CI (`.github/workflows/ci.yml`) runs typecheck, lint, test and build on every PR.
 
