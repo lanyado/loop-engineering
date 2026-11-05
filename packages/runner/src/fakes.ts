@@ -2,6 +2,7 @@
 import type { Fs } from './drivers/fs.js';
 import type { GitDriver } from './drivers/git.js';
 import type { NewWindow, TmuxDriver, TmuxWindow } from './drivers/tmux.js';
+import { inputBoxText, plainPane } from './input-box.js';
 
 /** The bottom of an idle Claude Code screen: an empty input box. New fake windows start with it. */
 export const IDLE_CLAUDE_PANE = ['────────────────', '❯ ', '────────────────', '  ? for shortcuts'].join(
@@ -30,13 +31,31 @@ export class FakeTmuxDriver implements TmuxDriver {
   }
 
   sendKeys(target: string, text: string, options: { enter?: boolean } = {}): Promise<void> {
-    this.require(target).keys += text + ((options.enter ?? true) ? '\n' : '');
+    const w = this.require(target);
+    const enter = options.enter ?? true;
+    w.keys += text + (enter ? '\n' : '');
+    // Claude's box shows what is typed and empties on Enter. With both at once, the screen stays as it was.
+    if (text === '' || !enter) {
+      const lines = w.output.split('\n');
+      const box = lines.findLastIndex((l) => /^\s*❯/.test(l));
+      if (box >= 0 && inputBoxText(plainPane(w.output)) !== null) {
+        lines[box] = `❯ ${text}`;
+        w.output = lines.join('\n');
+      }
+    }
+    return Promise.resolve();
+  }
+
+  pressEscape(target: string): Promise<void> {
+    this.require(target).keys += '<Esc>';
     return Promise.resolve();
   }
 
   capture(target: string): Promise<string> {
     const w = this.windows.get(target);
-    return w ? Promise.resolve(w.output) : Promise.reject(new Error(`can't find window: ${target}`));
+    return w
+      ? Promise.resolve(plainPane(w.output))
+      : Promise.reject(new Error(`can't find window: ${target}`));
   }
 
   kill(target: string): Promise<void> {
@@ -76,6 +95,8 @@ export class FakeGitDriver implements GitDriver {
   /** `git status --short` per worktree path; non-empty means dirty. */
   readonly statuses = new Map<string, string>();
   readonly commits = new Map<string, string[]>();
+  /** Commits ahead of the default branch per worktree path. */
+  readonly ahead = new Map<string, number>();
   /** Tracked paths per checkout path (worktree or repo), relative to it. */
   readonly tracked = new Map<string, Set<string>>();
   readonly pushed: { path: string; branch: string }[] = [];
@@ -151,6 +172,10 @@ export class FakeGitDriver implements GitDriver {
   diffStat(path: string): Promise<string> {
     const status = this.statuses.get(path) ?? '';
     return Promise.resolve(status ? ` ${status.split('\n').length} files changed` : '');
+  }
+
+  commitsAhead(path: string): Promise<number> {
+    return Promise.resolve(this.ahead.get(path) ?? 0);
   }
 
   recentCommits(path: string, count: number): Promise<string[]> {

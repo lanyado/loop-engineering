@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { inputBoxHolds, inputBoxText } from './input-box.js';
+import { inputBoxHasText, inputBoxHolds, inputBoxText, plainPane } from './input-box.js';
 
 const SENTENCE = 'New review feedback for PR #7 is in .loop/pr28-round1-review.md. Read it and address it.';
 
@@ -23,6 +23,63 @@ const holding = (...input: string[]) =>
       .map((l) => `  ${l}\n`)
       .join('')}`,
   );
+
+describe('plainPane', () => {
+  const ESC = '\u001b';
+  const box = (inner: string) => ['─'.repeat(20), inner, '─'.repeat(20), '  ⏵⏵ auto mode on'].join('\n');
+
+  it('drops a dim suggestion from the box, with or without Claude drawing its cursor on it', () => {
+    expect(inputBoxText(plainPane(box(`❯\u00a0${ESC}[2mtry again${ESC}[22m`)))).toBe('');
+    expect(
+      inputBoxText(plainPane(box(`${ESC}[39m❯\u00a0${ESC}[7mt${ESC}[27m${ESC}[2mry again${ESC}[0m`))),
+    ).toBe('');
+  });
+
+  it('keeps what was typed, and text outside the box even when dim', () => {
+    expect(inputBoxText(plainPane(box(`❯ fix x${ESC}[2m and more${ESC}[0m`)))).toBe('fix x');
+    expect(plainPane(`${ESC}[2mdim output${ESC}[0m\n${box('❯ ')}`)).toContain('dim output');
+  });
+
+  it('does not read a colour number as dim, and carries dim across lines', () => {
+    expect(inputBoxText(plainPane(box(`❯ ${ESC}[38;5;2mgreen${ESC}[39m`)))).toBe('green');
+    expect(inputBoxText(plainPane(`${ESC}[2m${box('❯ carried')}`))).toBe('');
+  });
+
+  it('strips colours and links from a real status line', () => {
+    const line = `${ESC}[39m  ${ESC}[38;5;220m⏵⏵ auto mode on${ESC}[38;5;246m · PR${ESC}[39m ${ESC}[4m${ESC}[38;5;220m${ESC}]8;id=1;https://github.com/me/web/pull/38${ESC}\\#38${ESC}[0m${ESC}[38;5;246m${ESC}]8;;${ESC}\\ · ${ESC}[38;5;44m1 shell${ESC}[39m`;
+    expect(plainPane(line)).toBe('  ⏵⏵ auto mode on · PR #38 · 1 shell');
+  });
+});
+
+/** Claude Code 2.1.318, 80x24, 600 characters typed: only the end of the text shows. A real capture. */
+describe('a long text in a small pane', () => {
+  const text = Array.from({ length: 75 }, (_, i) => `word${String(i).padStart(3, '0')}`)
+    .join(' ')
+    .slice(0, 600);
+  const pane = [
+    '─'.repeat(27),
+    '❯ word018 word019 word020 word021 word022 word023 word024 word025 word026',
+    '  word027 word028 word029 word030 word031 word032 word033 word034 word035',
+    '  word036 word037 word038 word039 word040 word041 word042 word043 word044',
+    '  word045 word046 word047 word048 word049 word050 word051 word052 word053',
+    '  word054 word055 word056 word057 word058 word059 word060 word061 word062     ',
+    '  word063 word064 word065 word066 word067 word068 word069 word070 word071       ',
+    '  word072 word073 word074        ',
+    '─'.repeat(27),
+    '  ⏵⏵ auto mode on (shift+tab to cycle)',
+  ].join('\n');
+
+  it('holds it when the visible end matches', () => {
+    expect(inputBoxHolds(pane, text)).toBe(true);
+    expect(inputBoxHasText(pane, text)).toBe(true);
+    expect(inputBoxHolds(pane, `${text} and more`)).toBe(false);
+  });
+
+  it('does not take a short or foreign box for a long text', () => {
+    const small = ['─'.repeat(27), '❯ word074', '─'.repeat(27)].join('\n');
+    expect(inputBoxHolds(small, text)).toBe(false);
+  });
+});
 
 describe('inputBoxText', () => {
   it('reads the box between the last two rules, without the prompt mark', () => {

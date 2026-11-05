@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# Runs a heavy command (a browser suite, a full QA run) once a machine-wide slot is free, so builders
+# and loop jobs don't all run browsers at once. Waits instead of failing, and exits with the command's
+# code. Put a timeout inside it, so waiting doesn't count: heavy timeout 600 npm test
+#   LOOP_HEAVY_SLOTS          runs at once (default 3)
+#   LOOP_HEAVY_DIR            lock folder (default /tmp/loop-heavy-<uid>)
+#   LOOP_HEAVY_MAX_SECONDS    longest run: then TERM, and KILL after the grace period (default 7200)
+#   LOOP_HEAVY_GRACE_SECONDS  grace period (default 30)
+set -u
+if [ $# -eq 0 ]; then
+  echo 'usage: heavy <command> [args...]' >&2
+  exit 2
+fi
+# Already inside a slot (a nested call, a loop job), or no flock (macOS): just run it.
+if [ -n "${LOOP_HEAVY_HELD:-}" ] || ! command -v flock >/dev/null 2>&1; then
+  exec "$@"
+fi
+number() {
+  case ${1:-} in
+    '' | *[!0-9]* | 0) echo "$2" ;;
+    *) echo "$1" ;;
+  esac
+}
+slots=$(number "${LOOP_HEAVY_SLOTS:-}" 3)
+max=$(number "${LOOP_HEAVY_MAX_SECONDS:-}" 7200)
+grace=$(number "${LOOP_HEAVY_GRACE_SECONDS:-}" 30)
+dir=${LOOP_HEAVY_DIR:-/tmp/loop-heavy-$(id -u)}
+mkdir -p "$dir" 2>/dev/null
+said=
+while :; do
+  for i in $(seq 1 "$slots"); do
+    # A lock folder that can't be used must not make everyone wait for ever.
+    if ! { exec 9>"$dir/slot-$i"; } 2>/dev/null; then
+      echo "heavy: cannot use $dir, running without a limit: $*" >&2
+      exec "$@"
+    fi
+    if flock -n 9; then
+      break 2
+    fi
+    exec 9>&-
+  done
+  if [ -z "$said" ]; then
+    echo "heavy: all $slots slots are busy, waiting: $*" >&2
+    said=1
+  fi
+  sleep "${LOOP_HEAVY_POLL_SECONDS:-5}"
+done
+# This script holds the lock. The command doesn't get its descriptor, so a server it leaves behind
+# can't keep the slot. The lock goes with this process, however it ends. The command stays in this
+# script's process group, so it can read a terminal and a kill of the group reaches it too.
+export LOOP_HEAVY_HELD=1
+SECONDS=0
+"$@" 9>&- <&0 &
+child=$!
+# The command and everything it started: a stop must also reach its browsers.
+tree() {
+  local p
+  for p in $(pgrep -P "$1" 2>/dev/null); do
+    tree "$p"
+    echo "$p"
+  done
+}
+# False once the command has ended.
+wait_for() {
+  local waited=0
+  while [ "$waited" -lt "$1" ]; do
+    sleep 1
+    kill -0 "$child" 2>/dev/null || return 1
+    waited=$((waited + 1))
+  done
+  return 0
+}
+stop_all() {
+  local pids
+  pids="$(tree "$child") $child"
+  # shellcheck disable=SC2086
+  kill -TERM $pids 2>/dev/null
+  wait_for "$grace"
+  # shellcheck disable=SC2086
+  kill -KILL $pids 2>/dev/null
+}
+# Holds no output open, so it never delays whoever reads this script's output.
+(
+  wait_for "$max" && stop_all
+) 9>&- </dev/null >/dev/null 2>&1 &
+stopping=
+on_signal() {
+  if [ -z "$stopping" ]; then
+    stopping=1
+    stop_all 9>&- </dev/null >/dev/null 2>&1 &
+  fi
+}
+trap on_signal INT TERM HUP
+while :; do
+  wait "$child"
+  code=$?
+  kill -0 "$child" 2>/dev/null || break
+done
+if [ "$SECONDS" -ge "$max" ]; then
+  echo "heavy: over the limit of ${max}s, stopped: $*" >&2
+fi
+exit "$code"

@@ -86,6 +86,12 @@ export type LoopState = {
   limitWaits?: number;
   /** Consecutive waits for network errors (retryAfter holds the next try); cleared by the next success. */
   networkWaits?: number;
+  /** Waits used after the current job's attempts ran out (jobRetryWaitsMin); retryAfter holds the next try. */
+  jobRetryWaits?: number;
+  /** Times the current job was killed at its timeout: each one doubles its next timeout, up to a cap. */
+  jobTimeouts?: number;
+  /** Infrastructure escalations that nobody answered and the loop continued by itself. */
+  autoContinues?: number;
   /** infra: a job, merge or push kept failing; its error is not something the builder can fix. */
   /** from: the check whose failures hit the round cap; "Continue" sends them back as its feedback. */
   escalation?: { reason: string; items: string[]; infra: boolean; from?: Pick<Feedback, 'kind' | 'stage'> };

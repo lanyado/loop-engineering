@@ -1,3 +1,4 @@
+import { plainPane } from '../input-box.js';
 import { exec, ExecError } from './exec.js';
 
 export interface NewWindow {
@@ -22,7 +23,9 @@ export interface TmuxDriver {
   newWindow(spec: NewWindow): Promise<string>;
   /** Types `text` literally, then presses Enter unless `enter` is false. */
   sendKeys(target: string, text: string, options?: { enter?: boolean }): Promise<void>;
-  /** The last `lines` lines of the pane, wrapped lines joined. */
+  /** Presses Esc: the one key that cancels a dialog without choosing any of its options. */
+  pressEscape(target: string): Promise<void>;
+  /** The last `lines` lines of the pane, wrapped lines joined, as plainPane reads them: no styles, no suggestion in the box. */
   capture(target: string, lines?: number): Promise<string>;
   /** Kills the window. A window that is already gone is not an error. */
   kill(target: string): Promise<void>;
@@ -93,6 +96,10 @@ export class RealTmuxDriver implements TmuxDriver {
     return (await this.tmux(['new-window', '-t', `=${spec.session}:`, ...common])).trim();
   }
 
+  async pressEscape(target: string): Promise<void> {
+    await this.tmux(['send-keys', '-t', target, 'Escape']);
+  }
+
   async sendKeys(target: string, text: string, options: { enter?: boolean } = {}): Promise<void> {
     if (text !== '') await this.tmux(['send-keys', '-t', target, '-l', text]);
     if (!(options.enter ?? true)) return;
@@ -103,7 +110,7 @@ export class RealTmuxDriver implements TmuxDriver {
   }
 
   async capture(target: string, lines = 50): Promise<string> {
-    return this.tmux(['capture-pane', '-p', '-J', '-t', target, '-S', `-${lines}`]);
+    return plainPane(await this.tmux(['capture-pane', '-p', '-e', '-J', '-t', target, '-S', `-${lines}`]));
   }
 
   async kill(target: string): Promise<void> {

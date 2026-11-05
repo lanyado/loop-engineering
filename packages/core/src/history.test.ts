@@ -20,6 +20,16 @@ beforeEach(() => {
 });
 
 describe('history', () => {
+  it('counts entries by session, kind, start of the text and time, with no list limit', () => {
+    for (let i = 0; i < 60; i++)
+      store.history.add({ projectId: shop.id, sessionId: session.id, kind: 'decision', text: `note ${i}` });
+    store.history.add({ projectId: shop.id, sessionId: session.id, kind: 'decision', text: 'other' });
+    expect(store.history.count({ sessionId: session.id, kind: 'decision', prefix: 'note' })).toBe(60);
+    expect(
+      store.history.count({ sessionId: session.id, kind: 'decision', prefix: 'note', since: '9999' }),
+    ).toBe(0);
+  });
+
   it('adds, gets, lists and deletes entries', () => {
     const a = store.history.add({
       projectId: shop.id,

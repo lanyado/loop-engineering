@@ -1356,10 +1356,13 @@ describe('robustness', () => {
     const hang = () => new Promise<AgentJobResult>(() => undefined); // ignores the signal
     h.launcher.on('tests', testsPass()).on('review', hang);
     await h.builderWithPr();
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    for (const minutes of [10, 20, 40]) {
       const tick = h.engine.tick();
       await vitestFlush();
-      h.timers.advance(10 * MINUTE);
+      h.timers.advance(minutes * MINUTE - 1); // each try gets twice the time of the last
+      await vitestFlush();
+      expect(h.pr().stage).toBe('review');
+      h.timers.advance(1);
       await tick;
     }
     expect(h.launcher.jobs).toHaveLength(4); // one tests job, then three timed-out review jobs
@@ -1633,6 +1636,356 @@ describe('restart', () => {
 });
 
 /** Lets pending promise callbacks run. */
+describe('failures that pass', () => {
+  const none = { text: 'no verdict', costUsd: 0, tokensIn: 0, tokensOut: 0, isError: false };
+
+  it('tries a job again after each wait before asking the human', async () => {
+    const h = harness({ config: { jobRetryWaitsMin: [15, 30] } });
+    h.launcher.on('tests', testsPass()).on('review', none);
+    await h.builderWithPr();
+    for (let i = 0; i < 3; i++) await h.engine.tick();
+    expect(h.pr().stage).toBe('review');
+    await h.engine.tick(); // waiting: no job
+    expect(h.launcher.kinds().filter((k) => k === 'review')).toHaveLength(3);
+    h.clock.advance(15 * MINUTE);
+    await h.engine.tick();
+    expect(h.launcher.kinds().filter((k) => k === 'review')).toHaveLength(4);
+    expect(h.pr().stage).toBe('review');
+    h.clock.advance(30 * MINUTE);
+    await h.engine.tick();
+    expect(h.launcher.kinds().filter((k) => k === 'review')).toHaveLength(5);
+    expect(h.pr().stage).toBe('escalated');
+    await h.engine.tick();
+    expect(h.asked()[0]?.text).toContain('failed 5 times'); // every try, not the last run of attempts
+  });
+
+  it('a job that works after a wait carries on, with nothing left of the failures', async () => {
+    const h = harness({ config: { jobRetryWaitsMin: [15], maxAttempts: 1 } });
+    h.launcher.on('tests', testsPass()).on('review', none, clean());
+    await h.builderWithPr();
+    await h.engine.tick();
+    expect(loopState(h.pr())).toMatchObject({ jobRetryWaits: 1, lastError: expect.any(String) as string });
+    h.clock.advance(15 * MINUTE);
+    await h.engine.tick();
+    expect(h.pr().outcome).toBe('merged');
+    expect(loopState(h.pr()).jobRetryWaits).toBeUndefined();
+  });
+
+  it('continues an unanswered infrastructure escalation twice, then defaults to Take over', async () => {
+    const h = harness({ config: { maxAttempts: 1 } });
+    h.launcher.on('tests', testsPass()).on('review', none);
+    await h.builderWithPr();
+    for (const auto of [0, 1]) {
+      await h.engine.tick(); // the job fails, the PR is escalated and the question asked
+      expect(h.pr().outcome).toBeNull();
+      expect(h.asked()[0]?.recommendedOption).toBe('Continue 5 more');
+      h.clock.advance(QUESTION_TIMEOUT_MS + 1);
+      h.questions.expireDue();
+      await h.engine.tick(); // the default: back at the first check, and that job fails again
+      expect(loopState(h.pr()).autoContinues).toBe(auto + 1);
+    }
+    expect(h.asked()[0]?.recommendedOption).toBe('Take over');
+    h.clock.advance(QUESTION_TIMEOUT_MS + 1);
+    h.questions.expireDue();
+    await h.engine.tick();
+    expect(h.pr().outcome).toBe('escalated');
+    const notes = h.store.history.list({ sessionId: h.pr().sessionId! }).map((e) => e.text);
+    expect(notes.some((t) => /nobody answered, so it left the loop/.test(t))).toBe(true);
+    expect(notes.some((t) => /the human took over/.test(t))).toBe(false);
+  });
+
+  it('a Take over clicked by the human still takes over, and counts no automatic Continue', async () => {
+    const h = harness({ config: { maxAttempts: 1 } });
+    h.launcher.on('tests', testsPass()).on('review', none);
+    await h.builderWithPr();
+    await h.engine.tick();
+    h.answer(h.asked()[0]!.id, 'Take over');
+    await h.engine.tick();
+    expect(h.pr().outcome).toBe('escalated');
+    expect(loopState(h.pr()).autoContinues).toBeUndefined();
+  });
+
+  it('retry returns a taken-over PR to its first check', async () => {
+    const h = harness({ config: { maxAttempts: 1 } });
+    h.launcher.on('tests', testsPass()).on('review', none, clean());
+    await h.builderWithPr();
+    await h.engine.tick();
+    h.answer(h.asked()[0]!.id, 'Take over');
+    await h.engine.tick();
+    expect(h.pr().outcome).toBe('escalated');
+
+    const back = await h.engine.retry(h.pr().id);
+    expect(back).toMatchObject({ outcome: null, stage: 'tests' });
+    await h.engine.tick();
+    expect(h.pr().outcome).toBe('merged');
+  });
+
+  it('retry refuses a PR that is in the loop or no longer open', async () => {
+    const h = harness();
+    h.launcher.on('tests', testsPass()).on('review', blocking('no'));
+    await h.builderWithPr();
+    await h.engine.discover();
+    await expect(h.engine.retry(h.pr().id)).rejects.toThrow(/not out of the loop/);
+    h.store.pullRequests.update(h.pr().id, { stage: 'escalated' });
+    h.github.pr(SLUG, 1).state = 'CLOSED';
+    await expect(h.engine.retry(h.pr().id)).rejects.toThrow(/closed/);
+  });
+
+  it('an outage longer than the wait limit does not use up the automatic Continues (N1)', async () => {
+    const h = harness();
+    h.launcher.on('tests', testsPass()).on('review', clean());
+    await h.builderWithPr();
+    await h.engine.discover();
+    const pr = h.pr();
+    h.store.pullRequests.update(pr.id, {
+      stage: 'escalated',
+      loopState: {
+        ...loopState(pr),
+        networkWaits: 28,
+        escalation: { reason: 'kept failing', items: [], infra: true },
+      },
+    });
+    await h.engine.tick();
+    vi.spyOn(h.workspace, 'checkout').mockRejectedValue(
+      new Error('ssh: connect to host github.com port 22: Connection timed out'),
+    );
+    h.clock.advance(QUESTION_TIMEOUT_MS + 1);
+    h.questions.expireDue();
+    await h.engine.tick();
+    // A new run of waits, not straight back to the human with the next automatic Continue used up.
+    expect(h.pr().stage).not.toBe('escalated');
+    expect(loopState(h.pr())).toMatchObject({ networkWaits: 1, autoContinues: 1 });
+  });
+
+  it('new commits end a wait at once (N3)', async () => {
+    const h = harness({ config: { jobRetryWaitsMin: [60], maxAttempts: 1 } });
+    h.launcher.on('tests', testsPass()).on('review', none, clean());
+    await h.builderWithPr();
+    await h.engine.tick();
+    expect(loopState(h.pr())).toMatchObject({ jobRetryWaits: 1, retryAfter: expect.any(String) as string });
+    h.github.push(SLUG, 1);
+    await h.engine.tick();
+    expect(h.pr().outcome).toBe('merged');
+    const s = loopState(h.pr());
+    expect([s.retryAfter, s.jobRetryWaits, s.jobTimeouts]).toEqual([undefined, undefined, undefined]);
+  });
+
+  it('skipping the check that waits moves on at once (N3)', async () => {
+    const h = harness({ config: { jobRetryWaitsMin: [60], maxAttempts: 1 } });
+    h.launcher.on('tests', none).on('review', clean());
+    await h.builderWithPr();
+    await h.engine.tick();
+    expect(h.pr().stage).toBe('tests');
+    expect(loopState(h.pr()).retryAfter).toBeDefined();
+    skipCheck(h.store, builtinStageLibrary(), h.pr().id, 'tests', true);
+    await h.engine.tick(); // the review job runs now, not an hour from now
+    expect(h.launcher.kinds()).toEqual(['tests', 'review']);
+    expect(h.pr().outcome).toBe('merged');
+    expect(loopState(h.pr()).retryAfter).toBeUndefined();
+  });
+
+  it('a refused job failure spends attempts instead of waiting for the network (N2)', async () => {
+    const h = harness({ config: { maxAttempts: 1 } });
+    const refused =
+      'ERROR: Permission to me/web.git denied to bot.\nfatal: Could not read from remote repository.';
+    h.launcher.on('tests', testsPass());
+    vi.spyOn(h.workspace, 'checkout').mockRejectedValueOnce(new Error(refused));
+    await h.builderWithPr();
+    await h.engine.tick();
+    expect(h.pr().stage).toBe('escalated');
+    expect(loopState(h.pr()).networkWaits).toBeUndefined();
+  });
+
+  it('git over SSH failing does not mark the whole loop offline: gh decides that (N2)', async () => {
+    const h = harness({ config: { maxAttempts: 3 } });
+    h.launcher.on('tests', testsPass()).on('review', clean());
+    const failing = vi
+      .spyOn(h.workspace, 'checkout')
+      .mockRejectedValueOnce(new Error('git@github.com: Permission denied (publickey).'));
+    await h.builderWithPr();
+    await h.engine.tick();
+    expect(failing).toHaveBeenCalled();
+    expect(loopState(h.pr()).networkWaits).toBe(1);
+    expect(h.engine.status().offlineSince).toBeNull();
+  });
+
+  it('a remote branch delete failing over SSH leaves the loop online, with the error shown (N2)', async () => {
+    const h = harness();
+    h.launcher.on('tests', testsPass()).on('review', clean());
+    vi.spyOn(h.workspace, 'deleteRemoteBranch').mockRejectedValue(
+      new Error('git push --delete x failed: git@github.com: Permission denied (publickey).'),
+    );
+    await h.builderWithPr();
+    await h.engine.tick();
+    expect(h.pr().outcome).toBe('merged');
+    expect(h.engine.status().offlineSince).toBeNull();
+    expect(loopState(h.pr()).lastError).toMatch(/publickey/);
+  });
+
+  it('retry runs the first check again and types no old feedback at the builder (N4)', async () => {
+    const h = harness({ config: { maxRounds: 1 } });
+    h.launcher.on('tests', testsPass()).on('review', blocking('no'), clean());
+    await h.builderWithPr();
+    await h.engine.tick();
+    h.answer(h.asked()[0]!.id, 'Take over');
+    await h.engine.tick();
+    expect(h.pr().outcome).toBe('escalated');
+    const before = h.launcher.kinds().length;
+
+    h.github.push(SLUG, 1); // the human fixed it
+    const back = await h.engine.retry(h.pr().id);
+    expect(back.stage).toBe('tests');
+    expect(loopState(back).feedback).toBeUndefined();
+    await h.engine.tick();
+    expect(h.launcher.kinds().slice(before)).toEqual(['tests', 'review']);
+    expect(h.sent).toEqual([]);
+    expect(h.pr().outcome).toBe('merged');
+  });
+
+  it('retry at the same head runs every check again, never straight to the merge (N4)', async () => {
+    const h = harness({ config: { maxAttempts: 1 } });
+    h.launcher.on('tests', testsPass()).on('review', none, clean());
+    await h.builderWithPr();
+    await h.engine.tick();
+    h.answer(h.asked()[0]!.id, 'Take over');
+    await h.engine.tick();
+    const before = h.launcher.kinds().length;
+    await h.engine.retry(h.pr().id);
+    await h.engine.tick();
+    expect(h.launcher.kinds().slice(before)).toEqual(['tests', 'review']);
+  });
+
+  it('retry waits for a step of the PR that is still running', async () => {
+    const h = harness({ config: { maxAttempts: 1 } });
+    h.launcher.on('tests', testsPass()).on('review', none);
+    await h.builderWithPr();
+    await h.engine.tick();
+    h.answer(h.asked()[0]!.id, 'Take over');
+    await h.engine.tick();
+    let answer = (): void => undefined;
+    const getPr = h.github.getPr.bind(h.github);
+    vi.spyOn(h.github, 'getPr').mockImplementationOnce(async (...args) => {
+      await new Promise<void>((resolve) => (answer = resolve));
+      return getPr(...args);
+    });
+    const step = h.engine.step(h.pr().id);
+    await vitestFlush();
+    await expect(h.engine.retry(h.pr().id)).rejects.toThrow(/still running/);
+    answer();
+    await step;
+    expect(h.pr().outcome).toBe('escalated');
+  });
+
+  it('take-over stops a PR that an unanswered question sent back through the checks (B4)', async () => {
+    const h = harness({ config: { maxAttempts: 1 } });
+    h.launcher.on('tests', testsPass()).on('review', none, clean());
+    await h.builderWithPr();
+    await h.engine.tick();
+    h.clock.advance(QUESTION_TIMEOUT_MS + 1);
+    h.questions.expireDue();
+    // The human's click comes after the deadline: the question refuses it, the route does not.
+    const late = h.store.questions.answer(h.asked()[0]!.id, 'Take over', 'dashboard');
+    expect(late.accepted).toBe(false);
+    const taken = h.engine.takeOver(h.pr().id);
+    expect(taken.outcome).toBe('escalated');
+    await h.engine.tick();
+    expect(h.pr().outcome).toBe('escalated');
+    expect(h.github.pr(SLUG, 1).state).toBe('OPEN');
+  });
+
+  it('take-over kills a running job, and retry undoes it', async () => {
+    const h = harness();
+    let killed = false;
+    const hang = (_: AgentJob, signal: AbortSignal) =>
+      new Promise<AgentJobResult>(() => signal.addEventListener('abort', () => (killed = true)));
+    h.launcher.on('tests', hang, testsPass()).on('review', clean());
+    await h.builderWithPr();
+    const tick = h.engine.tick();
+    await vitestFlush();
+    h.engine.takeOver(h.pr().id);
+    await tick;
+    expect(killed).toBe(true);
+    expect(h.pr().outcome).toBe('escalated');
+    await h.engine.retry(h.pr().id);
+    await h.engine.tick();
+    expect(h.pr().outcome).toBe('merged');
+  });
+
+  it('take-over refuses a PR that already left the loop', async () => {
+    const h = harness();
+    h.launcher.on('tests', testsPass()).on('review', clean());
+    await h.builderWithPr();
+    await h.engine.tick();
+    expect(h.pr().outcome).toBe('merged');
+    expect(() => h.engine.takeOver(h.pr().id)).toThrow(/not in the loop/);
+  });
+
+  it('runs without a slot, and says so, once the wait limit passes (B1)', async () => {
+    const acquire = vi.fn(
+      (signal: AbortSignal) =>
+        new Promise<() => void>((_, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason as Error));
+        }),
+    );
+    const h = harness({ config: { heavyWaitMs: 30 * MINUTE }, deps: { heavySlots: { acquire } } });
+    h.launcher.on('tests', testsPass()).on('review', clean());
+    await h.builderWithPr();
+    const tick = h.engine.tick();
+    await vitestFlush();
+    h.timers.advance(30 * MINUTE - 1);
+    await vitestFlush();
+    expect(h.launcher.jobs).toHaveLength(0);
+    h.timers.advance(1);
+    await tick;
+    expect(h.launcher.kinds()).toEqual(['tests', 'review']);
+    expect(h.logs.join('\n')).toMatch(/without a heavy-run slot/);
+  });
+
+  it('a job waiting for a slot holds no job permit (B1)', async () => {
+    const released = vi.fn();
+    const acquire = vi
+      .fn<(signal: AbortSignal) => Promise<() => void>>()
+      .mockImplementationOnce(
+        (signal) =>
+          new Promise((_, reject) => {
+            signal.addEventListener('abort', () => reject(signal.reason as Error));
+          }),
+      )
+      .mockResolvedValue(released);
+    const h = harness({ config: { maxConcurrentJobs: 1 }, deps: { heavySlots: { acquire } } });
+    h.launcher.on('tests', testsPass()).on('review', clean());
+    await h.builderWithPr();
+    await h.builderWithPr('another task');
+    const tick = h.engine.tick();
+    await vitestFlush();
+    await vitestFlush();
+    expect(h.launcher.jobs.length).toBeGreaterThan(0); // the second PR ran with the one permit
+    h.timers.advance(60 * MINUTE);
+    await h.engine.stop();
+    await tick;
+  });
+
+  it('holds a machine-wide slot for a tests job, and waiting for it is not job time', async () => {
+    let free = () => {};
+    const released = vi.fn();
+    const acquire = vi.fn(() => new Promise<() => void>((resolve) => (free = () => resolve(released))));
+    const h = harness({ config: { jobTimeoutMs: 10 * MINUTE }, deps: { heavySlots: { acquire } } });
+    h.launcher.on('tests', testsPass()).on('review', clean());
+    await h.builderWithPr();
+    const tick = h.engine.tick();
+    await vitestFlush();
+    h.timers.advance(60 * MINUTE);
+    await vitestFlush();
+    expect(h.launcher.jobs).toHaveLength(0);
+    free();
+    await tick;
+    expect(h.launcher.kinds()).toEqual(['tests', 'review']);
+    expect(acquire).toHaveBeenCalledTimes(1); // the review job has no browser or shell to limit
+    expect(released).toHaveBeenCalledTimes(1);
+    expect(h.pr().outcome).toBe('merged');
+  });
+});
+
 async function vitestFlush(): Promise<void> {
   for (let i = 0; i < 20; i++) await Promise.resolve();
   await new Promise((r) => setImmediate(r));

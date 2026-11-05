@@ -162,7 +162,8 @@ export class Harness {
         log: (m) => this.logs.push(m),
         ...this.options.deps,
       },
-      this.options.config,
+      // Waits off unless a test wants them: most tests are about what happens when attempts run out.
+      { jobRetryWaitsMin: [], ...this.options.config },
     );
   }
 

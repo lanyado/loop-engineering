@@ -1,6 +1,7 @@
 import type { Session, Store } from '@loop-engineering/core';
 import type { SessionRunner } from './runner.js';
 import { DEFAULT_TAIL_LINES, USAGE_LIMIT_PATTERNS } from './usage-limit.js';
+import { SessionWatchdog } from './watchdog.js';
 
 export interface MonitorOptions {
   /** Poll interval. Default 15 s. */
@@ -30,6 +31,10 @@ export interface MonitorOptions {
    * (session id + tmux window), not on every pass.
    */
   onTrustPrompt?: (session: Session, folder: string) => void;
+  /** The watchdog's reminders or refusals did not help, and a person should look. */
+  onAlert?: (session: Session, message: string) => void;
+  /** What the watchdog did: nudged an idle agent or refused a permission question. */
+  log?: (message: string) => void;
 }
 
 export interface MonitorPass {
@@ -80,12 +85,19 @@ export class UsageLimitMonitor {
   private running = false;
   /** `<session id> <tmux target>` of agents already reported at the trust dialog. */
   private readonly trustReported = new Set<string>();
+  private readonly watchdog: SessionWatchdog;
 
   constructor(
     private readonly runner: SessionRunner,
     private readonly store: Store,
     private readonly options: MonitorOptions = {},
-  ) {}
+  ) {
+    this.watchdog = new SessionWatchdog(runner, store, {
+      now: options.now ?? Date.now,
+      ...(options.onAlert ? { onAlert: options.onAlert } : {}),
+      ...(options.log ? { log: options.log } : {}),
+    });
+  }
 
   async checkOnce(): Promise<MonitorPass> {
     const pass: MonitorPass = { switched: [], exited: [], trustWaits: [], rotated: [] };
@@ -125,7 +137,23 @@ export class UsageLimitMonitor {
     }
     await this.checkOpencode(pass);
     await this.retryClaudeLimit();
+    await this.runWatchdog();
     return pass;
+  }
+
+  /** After the checks above, so a session they just paused or moved to OpenCode is left alone. */
+  private async runWatchdog(): Promise<void> {
+    const sessions = this.store.sessions
+      .list({ status: 'active' })
+      .filter((s) => s.provider === 'claude' && s.tmuxTarget !== null);
+    this.watchdog.retain(sessions.map((s) => s.id));
+    for (const s of sessions) {
+      try {
+        await this.watchdog.check(s);
+      } catch (err) {
+        this.options.onError?.(err, s.id);
+      }
+    }
   }
 
   /** `<session id>` -> when it was last tried (or first seen) while paused at Claude's usage limit. */

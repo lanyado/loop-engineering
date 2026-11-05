@@ -58,6 +58,8 @@ export interface Backend {
   webTerminal(target: { sessionId: number } | { prId: number; stage: string }): Promise<string>;
   /** Skips one check of the PR loop for one PR, or brings it back. */
   skipCheck(prId: number, check: string, skip: boolean): Promise<void>;
+  /** Takes a PR out of the loop, or puts one that left it back at its first check. */
+  prLoop(prId: number, action: 'take-over' | 'retry'): Promise<void>;
   /**
    * The PR loop's pipeline and its stages (stage files): the shared one with each project's own, or
    * (with a project id) the one that project runs.

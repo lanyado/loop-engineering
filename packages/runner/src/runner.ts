@@ -45,6 +45,7 @@ import { sanitizeLine } from './sanitize.js';
 import { transcriptHas } from './transcript.js';
 import { detectTrustPrompt, TRUST_TAIL_LINES } from './trust-prompt.js';
 import { DEFAULT_TAIL_LINES, detectUsageLimit, USAGE_LIMIT_PATTERNS } from './usage-limit.js';
+import { detectPermissionPrompt } from './watchdog.js';
 
 export const DEFAULT_TMUX_SESSION = 'loop';
 /** ask_human blocks for up to 15 minutes; the MCP tool timeout must outlast it. */
@@ -555,13 +556,20 @@ export class SessionRunner {
     // Claude: type only into its input box (not a dialog, not a screen still starting), never twice,
     // and make sure the message leaves the box.
     const target = s.tmuxTarget;
-    const pane = await this.waitForInputBox(s);
     // Where Claude's conversation file ends now: a record of this message can only come after it. A
     // conversation with no file yet gets one with this message. A file that cannot be measured, or
     // turns up elsewhere, could hold an earlier send of the same line: only the screen decides then.
     const before = await this.conversationFile(s.agentSessionId);
     const from = before ? await this.deps.fs.size(before).catch(() => null) : 0;
-    await this.deps.tmux.sendKeys(target, inputBoxHasText(pane, line) ? '' : line);
+    // Last, so as little time as possible passes between seeing the box and typing into it.
+    const pane = await this.waitForInputBox(s);
+    if (!inputBoxHasText(pane, line)) await this.deps.tmux.sendKeys(target, line, { enter: false });
+    // Enter only into the box that holds the text: in a dialog that opened meanwhile, it would choose
+    // the selected option, which can be an approval.
+    if (!(await this.boxHolds(target, line))) {
+      throw new ValidationError(`the agent of session ${s.id} did not take the message`);
+    }
+    await this.deps.tmux.sendKeys(target, '', { enter: true });
     let shownTaken = false;
     for (let attempt = 0; attempt <= SUBMIT_RETRIES; attempt++) {
       await this.sleep(SUBMIT_CHECK_MS);
@@ -596,6 +604,15 @@ export class SessionRunner {
       return s;
     }
     throw new ValidationError(`the agent of session ${s.id} did not take the message`);
+  }
+
+  /** Whether Claude's box shows the text just typed, allowing it a moment to draw it. */
+  private async boxHolds(target: string, line: string): Promise<boolean> {
+    for (let attempt = 0; attempt <= SUBMIT_RETRIES; attempt++) {
+      if (inputBoxHolds(await this.deps.tmux.capture(target), line)) return true;
+      await this.sleep(SUBMIT_CHECK_MS);
+    }
+    return false;
   }
 
   /**
@@ -774,6 +791,46 @@ export class SessionRunner {
       const project = this.deps.store.projects.require(s.projectId);
       return { session: s, folder: await this.sessionCwd(s, project) };
     });
+  }
+
+  /** For the watchdog: a live Claude agent's pane and how long its conversation file is (null: none yet). */
+  readClaudeAgent(sessionId: number): Promise<{ pane: string; activity: number | null } | null> {
+    return this.withLock(sessionId, async () => {
+      const s = this.deps.store.sessions.require(sessionId);
+      if (s.provider !== 'claude' || s.status !== 'active' || !s.tmuxTarget) return null;
+      if (!(await this.isAlive(s))) return null;
+      const pane = await this.deps.tmux.capture(s.tmuxTarget, 60);
+      const file = await this.conversationFile(s.agentSessionId);
+      return { pane, activity: file ? await this.deps.fs.size(file).catch(() => null) : null };
+    });
+  }
+
+  /** Cancels the permission question the pane shows now; false if it shows none. Never answers Yes. */
+  refusePermissionPrompt(sessionId: number): Promise<boolean> {
+    return this.withLock(sessionId, async () => {
+      const s = this.deps.store.sessions.require(sessionId);
+      if (s.status !== 'active' || !s.tmuxTarget) return false;
+      if (!detectPermissionPrompt(await this.deps.tmux.capture(s.tmuxTarget, 60))) return false;
+      await this.deps.tmux.pressEscape(s.tmuxTarget);
+      return true;
+    });
+  }
+
+  /** Whether a worktree has changes, or commits its default branch does not have. */
+  async hasUndeliveredWork(sessionId: number): Promise<boolean> {
+    const { store, git } = this.deps;
+    const s = store.sessions.require(sessionId);
+    const repos = store.projects.require(s.projectId).repos;
+    for (const w of s.worktrees) {
+      // A linked node_modules shows up as untracked: `node_modules/` in .gitignore only covers folders.
+      const changes = (await git.status(w.path))
+        .split('\n')
+        .filter((l) => l.trim() && !/^\?\? node_modules$/.test(l));
+      if (changes.length > 0) return true;
+      const repo = repos.find((r) => r.name === w.repo);
+      if (repo && (await git.commitsAhead(w.path, `origin/${repo.defaultBranch}`)) > 0) return true;
+    }
+    return false;
   }
 
   /**

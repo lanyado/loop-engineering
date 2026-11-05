@@ -19,6 +19,8 @@ export interface GitDriver {
   diffStat(path: string): Promise<string>;
   /** Newest first, "<short sha> <subject>". */
   recentCommits(path: string, count: number): Promise<string[]>;
+  /** How many commits HEAD has that `ref` does not. */
+  commitsAhead(path: string, ref: string): Promise<number>;
   /** True when `relPath` (a file, or any file under a folder) is tracked in the checkout at `path`. */
   isTracked(path: string, relPath: string): Promise<boolean>;
   push(path: string, branch: string): Promise<void>;
@@ -87,6 +89,10 @@ export class RealGitDriver implements GitDriver {
   async recentCommits(path: string, count: number): Promise<string[]> {
     const out = await this.git(path, ['log', `-n${count}`, '--format=%h %s']);
     return out.split('\n').filter((l) => l !== '');
+  }
+
+  async commitsAhead(path: string, ref: string): Promise<number> {
+    return Number((await this.git(path, ['rev-list', '--count', `${ref}..HEAD`])).trim());
   }
 
   async isTracked(path: string, relPath: string): Promise<boolean> {

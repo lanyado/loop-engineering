@@ -649,6 +649,24 @@ describe('pause / resume / stop / end', () => {
   );
 });
 
+describe('passing the heavy-run settings to agents (N10)', () => {
+  it('exports the limit, the lock folder and the time cap to the launch script', async () => {
+    const h = harness({
+      env: {
+        MCP_TOKEN: 'tok-123',
+        LOOP_HEAVY_SLOTS: '2',
+        LOOP_HEAVY_DIR: '/var/heavy',
+        LOOP_HEAVY_MAX_SECONDS: '900',
+      },
+    });
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    const script = h.script(h.window(s.tmuxTarget));
+    expect(script).toContain("LOOP_HEAVY_SLOTS='2'");
+    expect(script).toContain("LOOP_HEAVY_DIR='/var/heavy'");
+    expect(script).toContain("LOOP_HEAVY_MAX_SECONDS='900'");
+  });
+});
+
 describe('sendToSession', () => {
   it('types the text on one line into the live agent and presses Enter', async () => {
     const h = harness();
@@ -697,7 +715,9 @@ describe('sendToSession', () => {
     const send = h.tmux.sendKeys.bind(h.tmux);
     let enters = 0;
     vi.spyOn(h.tmux, 'sendKeys').mockImplementation(async (t, text, options) => {
+      const before = w.output;
       await send(t, text, options);
+      w.output = before; // this Claude decides what its screen shows
       const typed = inputBoxText(w.output) ?? '';
       if (text !== '') w.output = claudePane(text);
       if ((options?.enter ?? true) && ++enters >= takes) w.output = `❯ ${text || typed}\n${claudePane('')}`;
@@ -747,7 +767,7 @@ describe('sendToSession', () => {
     expect(w.keys).toBe('fix x\n');
   });
 
-  it('does not count a box that vanished after typing as taken, and presses nothing into what replaced it', async () => {
+  it('never presses Enter into a dialog that opened as it typed: that would choose the selected option', async () => {
     const h = harness();
     const s = await h.runner.startSession(h.shop.id, REQUEST);
     const w = h.window(s.tmuxTarget);
@@ -757,6 +777,71 @@ describe('sendToSession', () => {
       w.output = ' Do you want to proceed?\n ❯ 1. Yes\n   2. No';
     });
     await expect(h.runner.sendToSession(s.id, 'fix x')).rejects.toThrow(/did not take the message/);
+    expect(w.keys).toBe('fix x'); // typed, and no Enter at all
+  });
+
+  it('types into a box with a dim suggestion as into an empty one', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    const w = h.window(s.tmuxTarget);
+    w.output = claudePane('\u001b[2mtry again\u001b[22m');
+    await h.runner.sendToSession(s.id, 'fix x');
+    expect(w.keys).toBe('fix x\n');
+  });
+
+  it('sends a long text when the box shows only its end', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    const w = h.window(s.tmuxTarget);
+    const text = Array.from({ length: 75 }, (_, i) => `word${i}`).join(' ');
+    const send = h.tmux.sendKeys.bind(h.tmux);
+    vi.spyOn(h.tmux, 'sendKeys').mockImplementation(async (t, typed, options) => {
+      await send(t, typed, options);
+      w.output = typed ? claudePane(text.slice(-200)) : claudePane('');
+    });
+    await h.runner.sendToSession(s.id, text);
+    expect(w.keys).toBe(`${text}\n`);
+  });
+
+  it('measures the conversation file first, and looks at the screen just before typing', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    await h.saveConversation(s.agentSessionId);
+    claudeTakes(h, s.tmuxTarget);
+    const order: string[] = [];
+    const size = h.fs.size.bind(h.fs);
+    vi.spyOn(h.fs, 'size').mockImplementation((p) => {
+      order.push('measure');
+      return size(p);
+    });
+    const capture = h.tmux.capture.bind(h.tmux);
+    vi.spyOn(h.tmux, 'capture').mockImplementation((t) => {
+      order.push('capture');
+      return capture(t);
+    });
+    const typing = vi.spyOn(h.tmux, 'sendKeys');
+    typing.mockClear();
+    const call = typing.getMockImplementation()!;
+    typing.mockImplementation(async (t, text, options) => {
+      if (text) order.push('type');
+      await call(t, text, options);
+    });
+    await h.runner.sendToSession(s.id, 'fix x');
+    const typedAt = order.indexOf('type');
+    expect(order.slice(0, typedAt).at(-1)).toBe('capture');
+    expect(order.indexOf('measure')).toBeLessThan(order.indexOf('capture'));
+  });
+
+  it('types without Enter first, then presses it only once the box holds the text', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    const w = claudeTakes(h, s.tmuxTarget);
+    await h.runner.sendToSession(s.id, 'fix x');
+    const calls = vi.spyOn(h.tmux, 'sendKeys').mock.calls.map(([, text, options]) => [text, options?.enter]);
+    expect(calls).toEqual([
+      ['fix x', false],
+      ['', true],
+    ]);
     expect(w.keys).toBe('fix x\n');
   });
 

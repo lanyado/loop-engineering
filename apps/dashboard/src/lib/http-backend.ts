@@ -57,6 +57,10 @@ export class HttpBackend implements Backend {
     await this.send('POST', `/prs/${prId}/skip`, { check, skip }, responses.skipped);
   }
 
+  async prLoop(prId: number, action: 'take-over' | 'retry') {
+    await this.send('POST', `/prs/${prId}/${action}`, undefined, responses.skipped);
+  }
+
   async openStageTerminal(prId: number, stage: string) {
     await this.send('POST', `/prs/${prId}/terminal`, { stage }, responses.terminal);
   }

@@ -22,6 +22,7 @@ import {
   endSessionInput,
   pipelineSaveInput,
   rigorInput,
+  prLoopInput,
   skipCheckInput,
   hideProjectInput,
   stageTerminalInput,
@@ -189,6 +190,14 @@ export async function openTerminal(sessionId: number): Promise<ActionResult> {
 export async function skipCheck(prId: number, check: string, skip: boolean): Promise<ActionResult> {
   return write(skipCheckInput, { prId, check, skip }, async (d, backend) => {
     await backend.skipCheck(d.prId, d.check, d.skip);
+    return undefined;
+  });
+}
+
+/** Takes a PR out of the loop, or puts it back (the pop-up on its lane confirmed it). */
+export async function prLoop(prId: number, action: 'take-over' | 'retry'): Promise<ActionResult> {
+  return write(prLoopInput, { prId, action }, async (d, backend) => {
+    await backend.prLoop(d.prId, d.action);
     return undefined;
   });
 }

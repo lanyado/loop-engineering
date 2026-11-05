@@ -86,3 +86,4 @@ export {
 } from './rigor.js';
 export { skipCheck } from './skip.js';
 export { GitWorkspace } from './workspace.js';
+export { HEAVY_SCRIPT, ScriptHeavySlots, type HeavySlots } from './heavy.js';
