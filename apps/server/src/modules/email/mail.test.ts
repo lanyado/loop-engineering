@@ -7,7 +7,7 @@ const raw = (headers: string[], body: string) =>
 describe('parseMail', () => {
   const withFile = [
     'From: dana@acme.com',
-    'Subject: A song',
+    'Subject: A file',
     'Message-ID: <f@acme.com>',
     'Content-Type: multipart/mixed; boundary="b"',
     '',
@@ -16,8 +16,8 @@ describe('parseMail', () => {
     '',
     'Here it is.',
     '--b',
-    'Content-Type: audio/mpeg; name="=?UTF-8?B?16nXmdeoLm1wMw==?="',
-    'Content-Disposition: attachment; filename="=?UTF-8?B?16nXmdeoLm1wMw==?="',
+    'Content-Type: audio/mpeg; name="=?UTF-8?B?16fXldeR16UubXAz?="',
+    'Content-Disposition: attachment; filename="=?UTF-8?B?16fXldeR16UubXAz?="',
     'Content-Transfer-Encoding: base64',
     '',
     'AQIDBA==',
@@ -30,7 +30,7 @@ describe('parseMail', () => {
     expect(mail.text.trim()).toBe('Here it is.');
     expect(mail.truncated).toBe(false);
     expect(mail.attachments).toEqual([
-      { name: 'שיר.mp3', contentType: 'audio/mpeg', content: Buffer.from([1, 2, 3, 4]), inline: false },
+      { name: 'קובץ.mp3', contentType: 'audio/mpeg', content: Buffer.from([1, 2, 3, 4]), inline: false },
     ]);
   });
 
