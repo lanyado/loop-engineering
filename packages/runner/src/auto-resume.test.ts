@@ -469,8 +469,8 @@ describe('several agents going at once', () => {
     // What the real driver throws when tmux can't fork: its message leads with the chained command.
     const last = '=loop:{end}';
     const command =
-      `tmux new-window -a -t ${last} -d -n loop-123 -c /home/work/loop-engineering-worktrees/shop/session-123/web ` +
-      '-P -F #{session_name}:#{window_id} sh /home/work/.loop-runner/sessions/s123/launch-4f9c2a1b7d3e.sh ' +
+      `tmux new-window -a -t ${last} -d -n loop-123 -c /srv/loop/worktrees/shop/session-123/web-frontend ` +
+      '-P -F #{session_name}:#{window_id} sh /srv/loop/.loop-runner/sessions/s123/launch-4f9c2a1b7d3e.sh ' +
       `; set-option -w -t ${last} allow-rename off ; set-option -w -t ${last} automatic-rename off ` +
       `; set-option -w -t ${last} remain-on-exit on`;
     const err = new ExecError(

@@ -26,6 +26,7 @@ import {
   type Worktree,
 } from '@loop-engineering/core';
 import type { AgentCli, LaunchSpec } from './agent-cli.js';
+import { agentBaseEnvironment } from './agent-env.js';
 import {
   DEFAULT_MCP_TOKEN_ENV,
   OPENSOURCE_SEARCH_SKILL,
@@ -1371,7 +1372,10 @@ export class SessionRunner {
       mcpConfigPath: paths.claudeMcp,
       systemPrompt: this.instructions(sessionId),
     });
+    // The agent's whole environment: it inherits nothing (the launch script runs it under env -i), so
+    // the server's own secrets (DASHBOARD_TOKEN, the shared MCP_TOKEN, .env's keys) never reach it.
     const env: Record<string, string> = {
+      ...agentBaseEnvironment(this.env),
       MCP_TOOL_TIMEOUT: String(this.mcpToolTimeoutMs),
       // The agent gets only its own session token, never the shared MCP_TOKEN (see sessionToken()).
       [this.tokenEnv]: sessionToken(this.requireToken(), sessionId),
