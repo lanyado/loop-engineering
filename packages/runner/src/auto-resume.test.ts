@@ -1,6 +1,7 @@
 import type { FakeClock } from '@loop-engineering/core';
 import { describe, expect, it, vi } from 'vitest';
 import { DefaultAgentCli } from './agent-cli.js';
+import { ExecError } from './drivers/exec.js';
 import { UsageLimitMonitor, type MonitorOptions } from './monitor.js';
 import { SessionRunner } from './runner.js';
 import { harness, type Harness } from './test-support/harness.js';
@@ -150,6 +151,11 @@ describe('auto-resume of an agent that went away', () => {
     await first.checkOnce();
     expect(status(id)).toBe('paused:agent_exited');
     expect(tries(id).map((e) => e.text)).toEqual(['Auto-resume: try 1 of 3 failed: tmux broke']);
+    // The owner hears of a failed try at once, not only when the tries run out.
+    expect(onAlert).toHaveBeenCalledTimes(1);
+    expect(onAlert.mock.calls[0]?.[1]).toContain(
+      'automatic resume try 1 of 3 failed: tmux broke. It is tried again in 5 min',
+    );
     h.tmux.newWindow = newWindow;
     clock.advance(5 * MINUTE);
     await first.checkOnce();
@@ -169,8 +175,34 @@ describe('auto-resume of an agent that went away', () => {
     clock.advance(60 * MINUTE);
     await second.checkOnce();
     expect(status(id)).toBe('paused:agent_exited');
-    expect(onAlert).toHaveBeenCalledTimes(1);
+    expect(onAlert).toHaveBeenCalledTimes(2);
+    expect(onAlert.mock.calls[1]?.[1]).toContain('resumed automatically 3 times in 24 hours');
     expect(tries(id)).toHaveLength(3);
+  });
+
+  it('stops at a last try that fails, with one alert saying why', async () => {
+    const { h, clock, ids, onAlert, monitor, vanish, status, tries } = await setup();
+    const [id] = ids as [number];
+    const m = monitor();
+    vanish(id);
+    await m.checkOnce();
+    h.tmux.newWindow = () => Promise.reject(new Error('no space left'));
+    for (let i = 0; i < 8; i++) {
+      clock.advance(5 * MINUTE);
+      await m.checkOnce();
+    }
+    expect(status(id)).toBe('paused:agent_exited');
+    expect(tries(id)).toHaveLength(3);
+    expect(onAlert).toHaveBeenCalledTimes(3); // tries 1 and 2, then the stop
+    expect(onAlert.mock.calls[2]?.[1]).toContain(
+      'lost its agent, and the last of 3 automatic resumes in 24 hours failed: no space left. It stays paused',
+    );
+    const stopped = h.store.history
+      .list({ sessionId: id })
+      .filter((e) => e.text.startsWith('Auto-resume stopped'));
+    expect(stopped.map((e) => e.text)).toEqual([
+      'Auto-resume stopped: the last of 3 automatic resumes in 24 hours failed (no space left). It stays paused until a person sends it a message.',
+    ]);
   });
 
   it('never resumes a manual or usage-limit pause, an ended session, a taken-over one or a folder session', async () => {
@@ -324,13 +356,163 @@ describe('several agents going at once', () => {
     await m.checkOnce();
     await m.checkOnce();
     expect(onAlert).toHaveBeenCalledTimes(1);
-    expect(onAlert.mock.calls[0]?.[1]).toContain(
-      `Sessions ${ids[0]}, ${ids[1]} and ${ids[2]} lost their agents at once.`,
+    expect(onAlert.mock.calls[0]?.[1]).toBe(
+      `Sessions ${ids[0]}, ${ids[1]} and ${ids[2]} lost their agents at once. They are resumed automatically, ` +
+        'at most 3 times in 24 hours. You hear again only if resuming stops working.',
     );
     clock.advance(MINUTE);
     await m.checkOnce();
     expect(ids.map(status)).toEqual(['active', 'active', 'active']);
     expect(onAlert).toHaveBeenCalledTimes(1);
+  });
+
+  it('says which sessions it resumes, leaves to the loop or paused, and which it ended', async () => {
+    const { h, ids, onAlert, monitor, vanish } = await setup(4);
+    const [plain, inLoop, takenOver, done] = ids as [number, number, number, number];
+    const pr = (sessionId: number, number: number) =>
+      h.store.pullRequests.create({ projectId: h.shop.id, repo: 'web', number, url: 'u', sessionId });
+    pr(inLoop, 1);
+    h.store.pullRequests.update(pr(takenOver, 2).id, { outcome: 'escalated' });
+    h.store.pullRequests.update(pr(done, 3).id, { outcome: 'closed' });
+    h.fs.dirs.add('/home/me/notes');
+    const notes = h.store.projects.create({ name: 'Notes', kind: 'folder', folderPath: '/home/me/notes' });
+    const folder = (await h.runner.startSession(notes.id, { text: 'tidy' })).id;
+    const m = monitor();
+    await m.checkOnce();
+    for (const id of [...ids, folder]) vanish(id);
+    await m.checkOnce();
+    expect(h.store.sessions.require(folder).status).toBe('ended');
+    expect(onAlert).toHaveBeenCalledTimes(1);
+    expect(onAlert.mock.calls[0]?.[0]).not.toMatchObject({ status: 'ended' });
+    expect(onAlert.mock.calls[0]?.[1]).toBe(
+      `Sessions ${plain}, ${inLoop}, ${takenOver}, ${done} and ${folder} lost their agents at once. ` +
+        `Session ${plain} is resumed automatically, at most 3 times in 24 hours. ` +
+        `Session ${inLoop} has a PR in the loop, which resumes it when the PR needs it. ` +
+        `Sessions ${takenOver} and ${done} stay paused: their PRs were sent to you or taken over, or finished since ` +
+        `your last message. Session ${folder} was ended: a folder session is not resumed. ` +
+        'You hear again only if resuming stops working.',
+    );
+  });
+
+  it('lists a session out of resumes as stopping, and promises nothing when none is resumed', async () => {
+    const { h, ids, onAlert, monitor, vanish } = await setup(2);
+    const [spent, takenOver] = ids as [number, number];
+    for (let i = 1; i <= 3; i++)
+      h.store.history.add({
+        projectId: h.shop.id,
+        sessionId: spent,
+        kind: 'decision',
+        text: `Auto-resume: try ${i} of 3: relaunched the agent 1 min after it was found gone.`,
+      });
+    const pr = h.store.pullRequests.create({
+      projectId: h.shop.id,
+      repo: 'web',
+      number: 1,
+      url: 'u',
+      sessionId: takenOver,
+    });
+    h.store.pullRequests.update(pr.id, { outcome: 'escalated' });
+    const m = monitor();
+    await m.checkOnce();
+    for (const id of ids) vanish(id);
+    await m.checkOnce();
+    expect(onAlert.mock.calls[0]?.[1]).toBe(
+      `Sessions ${spent} and ${takenOver} lost their agents at once. Session ${spent} has used its 3 automatic ` +
+        `resumes in 24 hours and stays paused until you send it a message. Session ${takenOver} stays paused: its PR ` +
+        'was sent to you or taken over, or finished since your last message.',
+    );
+    // The same pass stops it, as the alert said, without a second alert to say so.
+    expect(onAlert).toHaveBeenCalledTimes(1);
+    const stopped = h.store.history
+      .list({ sessionId: spent })
+      .filter((e) => e.text.startsWith('Auto-resume stopped'));
+    expect(stopped).toHaveLength(1);
+    // A later pass alerts nothing more.
+    await m.checkOnce();
+    expect(onAlert).toHaveBeenCalledTimes(1);
+  });
+
+  it('tells of failed tries of sessions lost together in one alert per pass', async () => {
+    const { h, clock, ids, onAlert, monitor, vanish, status } = await setup(3);
+    const m = monitor();
+    await m.checkOnce();
+    for (const id of ids) vanish(id);
+    await m.checkOnce();
+    h.tmux.newWindow = () => Promise.reject(new Error('tmux broke'));
+    for (let i = 0; i < 8; i++) {
+      clock.advance(5 * MINUTE);
+      await m.checkOnce();
+    }
+    expect(ids.map(status)).toEqual(['paused:agent_exited', 'paused:agent_exited', 'paused:agent_exited']);
+    const texts = onAlert.mock.calls.map((c) => String(c[1]));
+    expect(texts).toHaveLength(4); // lost at once, try 1, try 2, out of resumes
+    const [a, b, c] = ids as [number, number, number];
+    expect(texts[1]).toBe(
+      `Sessions ${a}, ${b} and ${c} lost their agents, and an automatic resume of each failed. ` +
+        `Session ${a} ("build 0"): try 1 of 3 failed: tmux broke; tried again in 5 min. ` +
+        `Session ${b} ("build 1"): try 1 of 3 failed: tmux broke; tried again in 5 min. ` +
+        `Session ${c} ("build 2"): try 1 of 3 failed: tmux broke; tried again in 5 min. ` +
+        'You hear again about a session when its resumes run out, whether they fail or its agent keeps going away.',
+    );
+    expect(texts[3]).toContain(`Sessions ${a}, ${b} and ${c} stay paused, out of automatic resumes.`);
+    expect(texts[3]).toContain(
+      `Session ${c} ("build 2"): the last of 3 automatic resumes in 24 hours failed: tmux broke.`,
+    );
+  });
+
+  it("gives a tmux launch's reason, not its command line, in the alert", async () => {
+    const { h, clock, ids, onAlert, monitor, vanish, tries } = await setup();
+    const [id] = ids as [number];
+    const m = monitor();
+    vanish(id);
+    await m.checkOnce();
+    // What the real driver throws when tmux can't fork: its message leads with the chained command.
+    const last = '=loop:{end}';
+    const command =
+      `tmux new-window -a -t ${last} -d -n loop-123 -c /srv/loop/worktrees/shop/session-123/web-frontend ` +
+      '-P -F #{session_name}:#{window_id} sh /srv/loop/.loop-runner/sessions/s123/launch-4f9c2a1b7d3e.sh ' +
+      `; set-option -w -t ${last} allow-rename off ; set-option -w -t ${last} automatic-rename off ` +
+      `; set-option -w -t ${last} remain-on-exit on`;
+    const err = new ExecError(
+      command,
+      1,
+      'create window failed: fork failed: Resource temporarily unavailable\n',
+    );
+    expect(err.message.length).toBeGreaterThan(400);
+    h.tmux.newWindow = () => Promise.reject(err);
+    for (let i = 0; i < 8; i++) {
+      clock.advance(5 * MINUTE);
+      await m.checkOnce();
+    }
+    expect(onAlert).toHaveBeenCalledTimes(3);
+    for (const [, text] of onAlert.mock.calls)
+      expect(text).toContain(
+        'failed: create window failed: fork failed: Resource temporarily unavailable (exit 1)',
+      );
+    // The history keeps the whole error, command line included.
+    expect(tries(id)[0]?.text).toContain(command);
+  });
+
+  it('cuts a long error in the middle, keeping its end, and never halves an emoji', async () => {
+    const { h, clock, ids, onAlert, monitor, vanish, tries } = await setup();
+    const [id] = ids as [number];
+    const m = monitor();
+    vanish(id);
+    await m.checkOnce();
+    const huge = `${'\u{1F600}'.repeat(20_000)} the real reason`;
+    h.tmux.newWindow = () => Promise.reject(new Error(huge));
+    for (let i = 0; i < 8; i++) {
+      clock.advance(5 * MINUTE);
+      await m.checkOnce();
+    }
+    expect(onAlert).toHaveBeenCalledTimes(3);
+    const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    for (const [, text] of onAlert.mock.calls) {
+      expect(Array.from(String(text)).length).toBeLessThan(700);
+      expect(text).toMatch(/\u{1F600} … \u{1F600}+ the real reason/u);
+      expect(text).not.toMatch(lone);
+    }
+    expect(tries(id)[0]?.text).toContain(huge);
   });
 
   it('does not alert for agents that exited by themselves, or for one window closing', async () => {
@@ -375,7 +557,11 @@ describe("the tmux server's death", () => {
     expect(h.logs.some((l) => l.includes('The tmux server (pid 4242'))).toBe(true);
     // One agent, but the server went with it: the owner hears, once.
     expect(onAlert).toHaveBeenCalledTimes(1);
-    expect(onAlert.mock.calls[0]?.[1]).toContain('(pid 4242) died: it ran for 1 h 10 min');
+    expect(onAlert.mock.calls[0]?.[1]).toBe(
+      `Session ${id} lost its agent when the tmux server holding it (pid 4242) died: it ran for 1 h 10 min and ` +
+        'was last seen alive at 2026-10-18T09:10:00.000Z. It is resumed automatically, at most 3 times in 24 hours. ' +
+        'You hear again only if resuming stops working.',
+    );
     await m.checkOnce();
     clock.advance(MINUTE);
     await m.checkOnce();
@@ -410,7 +596,7 @@ describe("the tmux server's death", () => {
   });
 
   it('is remembered across a server restart, and a server that just exited empty is not a death', async () => {
-    const { h, clock, ids, monitor, vanish, deaths } = await setup();
+    const { h, clock, ids, onAlert, monitor, vanish, deaths } = await setup();
     const [id] = ids as [number];
     await monitor().checkOnce();
     // The server exits after its last window closed normally: nothing to record.
@@ -429,5 +615,14 @@ describe("the tmux server's death", () => {
     expect(deaths()[0]?.text).toContain(
       'The tmux server (pid 5000, started 2026-10-18T09:00:00.000Z) is gone. It ran for 0 min',
     );
+    // Found by the first pass after the restart, the death still reaches the owner, once: another
+    // restart before the session is resumed neither records nor alerts it again.
+    expect(onAlert).toHaveBeenCalledTimes(1);
+    expect(onAlert.mock.calls[0]?.[1]).toContain(
+      `Session ${id} lost its agent when the tmux server holding it (pid 5000) died`,
+    );
+    await monitor(restartedRunner(h)).checkOnce();
+    expect(deaths()).toHaveLength(1);
+    expect(onAlert).toHaveBeenCalledTimes(1);
   });
 });

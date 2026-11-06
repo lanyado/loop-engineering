@@ -1,9 +1,14 @@
 import { errorMessage, type Session, type Store } from '@loop-engineering/core';
+import { ExecError } from './drivers/exec.js';
 import { AGENT_GONE, type SessionRunner, type TmuxServerDeath } from './runner.js';
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
-/** The wait before each automatic resume, by how many came before it in the window. */
+/**
+ * The wait before each automatic resume, by how many came before it in the window. It is counted
+ * from the pass that found the agent gone and checked on each monitor pass (every 15 s), so a resume
+ * comes up to one pass late, and up to two after the agent actually went: exact enough for minutes.
+ */
 const WAITS_MS = [1 * MINUTE, 5 * MINUTE, 15 * MINUTE];
 const MAX_RESUMES = WAITS_MS.length;
 /** Automatic resumes are counted over this rolling window (and since the person's newest message). */
@@ -53,6 +58,55 @@ function listIds(sessions: readonly Session[]): string {
   return ids.length < 2 ? (ids[0] ?? '') : `${ids.slice(0, -1).join(', ')} and ${ids.at(-1)!}`;
 }
 
+/** "Session 4" or "Sessions 4 and 7". */
+const sessionsLabel = (sessions: readonly Session[]) =>
+  `${sessions.length === 1 ? 'Session' : 'Sessions'} ${listIds(sessions)}`;
+
+/** The singular or the plural form, by how many sessions. */
+const verb = (sessions: readonly Session[], one: string, many: string) =>
+  sessions.length === 1 ? one : many;
+
+/** What happens next to a session whose agent went: see afterReconcile's alert. */
+type Fate = 'resumed' | 'loop' | 'paused' | 'spent' | 'ended';
+
+/** Why a try failed is cut to this in an alert (the history keeps all of it). */
+const ERROR_CHARS = 300;
+/** An alert is cut to this: ask_human refuses a question over 3000 characters, and the alert would be lost. */
+const ALERT_CHARS = 2_500;
+
+/** `text` on one line, at most `max` characters; by code points, so an emoji is never cut in half. */
+function clip(text: string, max: number): string {
+  const chars = Array.from(text.replace(/\s+/g, ' ').trim());
+  return chars.length <= max ? chars.join('') : `${chars.slice(0, max - 1).join('')}…`;
+}
+
+/** Like clip, but keeps the end too: an error's reason is usually its last part. */
+function clipMiddle(text: string, max: number): string {
+  const chars = Array.from(text.replace(/\s+/g, ' ').trim());
+  if (chars.length <= max) return chars.join('');
+  const head = Math.floor((max - 3) / 3);
+  return `${chars.slice(0, head).join('')} … ${chars.slice(chars.length - (max - 3 - head)).join('')}`;
+}
+
+/**
+ * Why a try failed, short enough for an alert. A command's error leads with its whole command line
+ * (a tmux launch's is longer than ERROR_CHARS), so for one only what it printed and its exit code.
+ */
+function reason(err: unknown): string {
+  if (err instanceof ExecError)
+    return clipMiddle(`${err.stderr.trim() || 'no error output'} (exit ${String(err.code)})`, ERROR_CHARS);
+  return clipMiddle(errorMessage(err), ERROR_CHARS);
+}
+
+/** A session the owner hears about after a pass: alone, or as one line among others of the same pass. */
+interface Trouble {
+  session: Session;
+  alone: string;
+  line: string;
+  /** Its history entry, written as the alert goes out (see run()). */
+  note?: string;
+}
+
 /**
  * Nobody watches the agents' terminals, so a session whose agent went away by itself (paused as
  * agent_exited by reconcile: a crash, a closed window, the tmux server dying) is resumed after a
@@ -78,26 +132,114 @@ export class AutoResume {
    */
   async afterReconcile(vanished: readonly Session[]): Promise<void> {
     const now = this.options.now();
-    // The first pass after a start, or after a long stall, can't tell whether they went together.
+    // The first pass after a start, or after a long stall, can't tell whether windows went together.
     const atOnce = this.lastPass !== undefined && now - this.lastPass <= PASS_GAP_MS;
     this.lastPass = now;
     const death = await this.runner.checkTmuxServer(vanished.length > 0, now);
     if (death) this.recordDeath(death, vanished);
-    if (!atOnce || (vanished.length < 2 && !(death && vanished.length > 0))) return;
-    const server = death
-      ? ` The tmux server holding them (pid ${death.pid}) died: it ran for ${duration(death.lastSeenAt - death.startedAt)} and was last seen alive at ${iso(death.lastSeenAt)}.`
-      : '';
-    const message =
-      `Sessions ${listIds(vanished)} lost their agents at once.${server} Each is resumed automatically ` +
-      `(at most ${MAX_RESUMES} times in 24 hours), except a folder session, which is ended, and one with a PR ` +
-      'in the loop, which the loop resumes when the PR needs it. You hear again only if that stops working.';
+    // A dead server says they went together, also on the first pass after a start. It is reported
+    // once: checkTmuxServer saves the new server first, and these sessions are no longer active.
+    if (vanished.length === 0 || (!death && !(atOnce && vanished.length >= 2))) return;
+    const what = death
+      ? `${sessionsLabel(vanished)} lost ${verb(vanished, 'its agent', 'their agents')} when the tmux server ` +
+        `holding ${verb(vanished, 'it', 'them')} (pid ${death.pid}) died: it ran for ` +
+        `${duration(death.lastSeenAt - death.startedAt)} and was last seen alive at ${iso(death.lastSeenAt)}.`
+      : `${sessionsLabel(vanished)} lost their agents at once.`;
+    const { text, resumed } = this.fates(vanished, now);
+    const message = `${what} ${text}${resumed ? ' You hear again only if resuming stops working.' : ''}`;
     this.options.log?.(`[runner] ${message}`);
-    const at = vanished.find((s) => s.status !== 'ended') ?? vanished[0]!;
-    this.options.onAlert?.(at, message);
+    this.alert(vanished.find((s) => s.status !== 'ended') ?? vanished[0]!, message);
   }
 
-  /** Resumes the sessions that are due. `skip`: sessions another part of the monitor is relaunching. */
+  /** Sessions this pass's alert already said are out of resumes: run() stops them without a second alert. */
+  private readonly announcedSpent = new Set<number>();
+
+  /**
+   * What happens to each of `sessions` now, by the rules run() and the loop follow, in sentences;
+   * `resumed` when any of them is resumed automatically.
+   */
+  private fates(sessions: readonly Session[], now: number): { text: string; resumed: boolean } {
+    const human = this.store.requests.latestBySession();
+    const by = new Map<Fate, Session[]>();
+    for (const s of sessions) {
+      const fate = this.fate(s, human.get(s.id) ?? '', now);
+      by.set(fate, [...(by.get(fate) ?? []), s]);
+    }
+    const say: Record<Fate, (group: Session[]) => string> = {
+      resumed: (g) =>
+        `${verb(g, 'is', 'are')} resumed automatically, at most ${MAX_RESUMES} times in 24 hours`,
+      loop: (g) =>
+        `${verb(g, 'has a PR', 'have PRs')} in the loop, which resumes ` +
+        `${verb(g, 'it when the PR needs it', 'each when its PR needs it')}`,
+      paused: (g) =>
+        `${verb(g, 'stays paused: its PR was', 'stay paused: their PRs were')} sent to you or taken over, or ` +
+        'finished since your last message',
+      spent: (g) =>
+        `${verb(g, 'has used its', 'have used their')} ${MAX_RESUMES} automatic resumes in 24 hours and ` +
+        `${verb(g, 'stays', 'stay')} paused until you send ${verb(g, 'it', 'each')} a message`,
+      ended: (g) => `${verb(g, 'was', 'were')} ended: a folder session is not resumed`,
+    };
+    const groups = (['resumed', 'spent', 'loop', 'paused', 'ended'] as const).filter((f) => by.has(f));
+    const text = groups
+      .map((f) => {
+        const group = by.get(f)!;
+        // One group needs no names again; several say whose is whose.
+        const who = groups.length === 1 ? verb(group, 'It', 'They') : sessionsLabel(group);
+        return `${who} ${say[f](group)}.`;
+      })
+      .join(' ');
+    for (const s of by.get('spent') ?? []) this.announcedSpent.add(s.id);
+    return { text, resumed: by.has('resumed') };
+  }
+
+  private fate(s: Session, task: string, now: number): Fate {
+    if (s.status === 'ended') return 'ended';
+    if (this.ours(s, task)) {
+      // What run() does with it in this same pass: no resume is left, so it stops.
+      const spent = this.count(s, STOPPED, task) > 0 || this.tries(s, task, now) >= MAX_RESUMES;
+      return spent ? 'spent' : 'resumed';
+    }
+    const inLoop = this.store.pullRequests.list({ sessionId: s.id }).some((p) => p.outcome === null);
+    return inLoop ? 'loop' : 'paused';
+  }
+
+  /** Automatic resumes of `s` in the last 24 hours, since the person's newest message `task`. */
+  private tries(s: Session, task: string, now: number): number {
+    const windowStart = iso(now - WINDOW_MS);
+    return this.count(s, RESUMED, task > windowStart ? task : windowStart);
+  }
+
+  /**
+   * Resumes the sessions that are due. `skip`: sessions another part of the monitor is relaunching.
+   * Failed tries, and sessions out of resumes, each reach the owner as one alert per pass: sessions
+   * lost together are tried together, and a dozen of them must not become dozens of questions.
+   * A stop's history entry is written only as its alert goes out, so a Loop restart in the middle
+   * of a pass can't lose a stop alert: the next pass stops the session again and alerts then. The
+   * alert of a failed try with tries left can be lost that way; its history entry stays.
+   */
   async run(skip: ReadonlySet<number> = new Set()): Promise<void> {
+    const failed: Trouble[] = [];
+    const stopped: Trouble[] = [];
+    try {
+      await this.resumeDue(skip, failed, stopped);
+    } finally {
+      for (const t of stopped) if (t.note) this.note(t.session, t.note);
+      this.alertTogether(
+        failed,
+        (g) => `${sessionsLabel(g)} lost their agents, and an automatic resume of each failed.`,
+        'You hear again about a session when its resumes run out, whether they fail or its agent keeps going away.',
+      );
+      // One this pass's lost-at-once alert already said is out of resumes needs no second alert.
+      this.alertTogether(
+        stopped.filter((t) => !this.announcedSpent.has(t.session.id)),
+        (g) => `${sessionsLabel(g)} stay paused, out of automatic resumes.`,
+        'Send a session a message to resume it, or end it.',
+      );
+      this.announcedSpent.clear();
+    }
+  }
+
+  private async resumeDue(skip: ReadonlySet<number>, failed: Trouble[], stopped: Trouble[]): Promise<void> {
     const now = this.options.now();
     // A person's newest message: the loop's own "[loop]" requests don't count.
     const human = this.store.requests.latestBySession();
@@ -119,10 +261,9 @@ export class AutoResume {
       }
       const task = human.get(s.id) ?? '';
       if (this.count(s, STOPPED, task) > 0) continue; // until a person sends it a message
-      const windowStart = iso(now - WINDOW_MS);
-      const tries = this.count(s, RESUMED, task > windowStart ? task : windowStart);
+      const tries = this.tries(s, task, now);
       if (tries >= MAX_RESUMES) {
-        this.stop(s, tries);
+        stopped.push(this.stop(s, tries));
         continue;
       }
       if (now - seen.since < WAITS_MS[tries]!) continue;
@@ -147,8 +288,21 @@ export class AutoResume {
           `${attempt}: relaunched the agent ${duration(now - seen.since)} after it was found gone.`,
         );
       } catch (err) {
-        this.waiting.set(s.id, { since: this.options.now(), size }); // the next try waits from this failure
         this.note(s, `${attempt} failed: ${errorMessage(err)}`);
+        if (tries + 1 >= MAX_RESUMES) {
+          stopped.push(this.stop(s, tries + 1, err));
+          continue;
+        }
+        this.waiting.set(s.id, { since: this.options.now(), size }); // the next try waits from this failure
+        const failure = `try ${tries + 1} of ${MAX_RESUMES} failed: ${reason(err)}`;
+        const next = duration(WAITS_MS[tries + 1]!);
+        failed.push({
+          session: s,
+          alone:
+            `Session ${s.id} ("${s.title}") lost its agent, and automatic resume ${failure}. It is tried again in ` +
+            `${next}. You hear again when its resumes run out, whether they fail or its agent keeps going away.`,
+          line: `Session ${s.id} ("${s.title}"): ${failure}; tried again in ${next}.`,
+        });
       }
     }
   }
@@ -166,16 +320,42 @@ export class AutoResume {
       .some((p) => p.outcome === null || p.outcome === 'escalated' || p.updatedAt >= task);
   }
 
-  private stop(s: Session, tries: number): void {
+  /**
+   * No automatic resume is left: `failed` is the error when the last one failed, else the agent went
+   * again. run() records it and tells the owner, with the others of the same pass.
+   */
+  private stop(s: Session, tries: number, failed?: unknown): Trouble {
     this.waiting.delete(s.id);
-    this.note(
-      s,
-      `${STOPPED}: its agent went away again after ${tries} automatic resumes in 24 hours. It stays paused until a person sends it a message.`,
-    );
-    this.options.onAlert?.(
-      s,
-      `Session ${s.id} ("${s.title}") keeps losing its agent: it was resumed automatically ${tries} times in 24 hours and is gone again. It stays paused: send it a message to resume it, or end it.`,
-    );
+    const after = `${tries} automatic resumes in 24 hours`;
+    const why = failed === undefined ? undefined : reason(failed);
+    return {
+      session: s,
+      note:
+        `${STOPPED}: ${failed === undefined ? `its agent went away again after ${after}` : `the last of ${after} failed (${errorMessage(failed)})`}. ` +
+        'It stays paused until a person sends it a message.',
+      alone: why
+        ? `Session ${s.id} ("${s.title}") lost its agent, and the last of ${after} failed: ${why}. It stays paused: send it a message to resume it, or end it.`
+        : `Session ${s.id} ("${s.title}") keeps losing its agent: it was resumed automatically ${tries} times in 24 hours and is gone again. It stays paused: send it a message to resume it, or end it.`,
+      line: why
+        ? `Session ${s.id} ("${s.title}"): the last of ${after} failed: ${why}.`
+        : `Session ${s.id} ("${s.title}"): resumed automatically ${tries} times in 24 hours and gone again.`,
+    };
+  }
+
+  /** One alert for the troubles of a pass: a single one as it is, several under `head` and over `tail`. */
+  private alertTogether(troubles: Trouble[], head: (sessions: Session[]) => string, tail: string): void {
+    const sorted = [...troubles].sort((a, b) => a.session.id - b.session.id);
+    const [first] = sorted;
+    if (!first) return;
+    const message =
+      sorted.length === 1
+        ? first.alone
+        : `${head(sorted.map((t) => t.session))} ${sorted.map((t) => t.line).join(' ')} ${tail}`;
+    this.alert(first.session, message);
+  }
+
+  private alert(s: Session, message: string): void {
+    this.options.onAlert?.(s, clip(message, ALERT_CHARS));
   }
 
   private recordDeath(death: TmuxServerDeath, vanished: readonly Session[]): void {
