@@ -5,15 +5,17 @@ import { describeWindow } from './retro-window.js';
 /**
  * One line of untrusted text for Markdown: token shapes, `secrets` (the server's and the projects'
  * secret values) and addresses masked, cut to `max`, and every character that Markdown or HTML would
- * read as markup (links, emphasis, code, table cells, tags) escaped.
+ * read as markup (links, emphasis, code, table cells, tags) escaped; `markdown: false` leaves the
+ * markup alone, for plain text.
  */
-export function cleanText(text: string, max = 120, secrets: readonly string[] = []): string {
+export function cleanText(text: string, max = 120, secrets: readonly string[] = [], markdown = true): string {
   const line = redactSecrets(text, secrets)
     .replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, '<email>')
     .replace(/[\p{Cc}\p{Cf}]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   const cut = line.length > max ? `${line.slice(0, max - 1)}…` : line;
+  if (!markdown) return cut;
   return cut
     .replace(/[\\`*_[\]|]/g, '\\$&')
     .replace(/</g, '&lt;')
@@ -165,6 +167,7 @@ export function renderRetro(d: RetroData, options: RenderOptions = {}): string {
       `- Slowest from request to merge: ${d.prs.slowest.map((x) => `${link(x.pr)} ${formatDuration(x.ms)}`).join(', ')}.`,
     );
   ev('The human took over', d.prs.tookOver);
+  ev('Left the loop because nobody answered its escalation', d.prs.leftLoop);
   ev('Given back to the loop', d.prs.returned);
   ev('A check skipped by the human', d.prs.skippedChecks);
   ev('Reverted after merging', d.prs.reverted);
@@ -262,7 +265,7 @@ export function renderRetro(d: RetroData, options: RenderOptions = {}): string {
       "- Sessions are the runner's own (imported past conversations are left out); the router's reserved project is left out of everything but questions.",
       '- Pauses come from the pause log (one history entry per pause, change of reason and resume). "Pauses started" counts those that began in the window; "Sessions paused" and "Time paused" also include pauses carried in from before it, for their part inside the window. Pauses under a minute (a relaunch passes through one) are left out. Usage limit, agent exits and automatic resumes are counted from the runner\'s history entries.',
       '- Medians and p90s are nearest-rank: with an even count the median is the lower of the two middle values.',
-      '- PRs: "escalated" is waiting on the human, "taken over" is the human\'s now; a PR merged and then reverted counts as merged (and as reverted), and the loop\'s own revert PRs are left out.',
+      '- PRs: "escalated" is waiting on the human, "taken over" is the human\'s now, "left the loop" was escalated and nobody answered; a PR merged and then reverted counts as merged (and as reverted), and the loop\'s own revert PRs are left out.',
       "- Fix rounds are the PR's round minus one: each new head after the first went through the checks again.",
       '- Stage failures are the "… failed" comments the loop posted (one per failed verdict) on PRs opened in the window; "job kept failing" counts escalations dated in the window because the job itself crashed or gave no verdict, whenever its PR was opened.',
       '- A request is finished when a PR from it (or from a part of it) merged, or its session merged a PR after it arrived. Thank-you notes and questions that need no PR show as not finished.',
@@ -278,7 +281,8 @@ export const RETRO_REQUEST_MAX = 3_800;
 
 /** The request `loop retro --file-request` files: the task, the headline numbers, the top problems. */
 export function retroRequestText(d: RetroData, fileName: string, options: RenderOptions = {}): string {
-  const clean = (text: string, max: number) => cleanText(text, max, options.secrets);
+  // Plain text (the request is not rendered as Markdown): secrets masked, no escaping.
+  const clean = (text: string, max: number) => cleanText(text, max, options.secrets, false);
   const head = [
     `Retro of the loop for ${describeWindow(d.window)}${d.project ? ` (${clean(d.project.name, 80)})` : ''}: propose improvements to the pipeline and its prompts.`,
     '',

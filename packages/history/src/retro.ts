@@ -127,6 +127,8 @@ export interface RetroData {
     fixRoundStats: Stats;
     mostRounds: { pr: Evidence; rounds: number; outcome: string }[];
     tookOver: Evidence[];
+    /** Escalations nobody answered: the PR left the loop by itself (outcome "escalated" too). */
+    leftLoop: Evidence[];
     returned: Evidence[];
     skippedChecks: Evidence[];
     /** Merged PRs reverted later (labelled with the revert PR). */
@@ -203,6 +205,7 @@ interface PrRow {
   stage: string;
   round: number;
   outcome: string | null;
+  reverted_by_pr_id: number | null;
   created_at: string;
   updated_at: string;
   loop_state: string;
@@ -300,6 +303,7 @@ const MERGED = /^PR (\S+)#(\d+)(?: merged|: the human merged it)/;
 const ESCALATED = /^PR (\S+)#(\d+) sent to the human: (.+?)\.?$/s;
 const CLOSED = /^PR (\S+)#(\d+) closed: (.+?)\.?$/s;
 const TOOK_OVER = /^PR (\S+)#(\d+): the human took over/;
+const LEFT_LOOP = /^PR (\S+)#(\d+): nobody answered, so it left the loop/;
 const RETURNED = /^PR (\S+)#(\d+) was returned to the loop/;
 const SKIPPED = /^PR (\S+)#(\d+): the human skipped/;
 const REVERTED = /^PR (\S+)#(\d+) reverted by #(\d+)/;
@@ -347,7 +351,7 @@ export function collectRetro(db: RetroDb, options: RetroOptions): RetroData {
     .all(params) as DecisionRow[];
   const prs = db
     .prepare(
-      `SELECT p.id, p.project_id, p.session_id, p.request_id, p.repo, p.number, p.url, p.stage, p.round, p.outcome,
+      `SELECT p.id, p.project_id, p.session_id, p.request_id, p.repo, p.number, p.url, p.stage, p.round, p.outcome, p.reverted_by_pr_id,
               p.created_at, p.updated_at, p.loop_state, COALESCE(m.cost_usd, 0) AS cost_usd,
               COALESCE(m.tokens_in, 0) AS tokens_in, COALESCE(m.tokens_out, 0) AS tokens_out,
               COALESCE(m.failures, 0) AS failures
@@ -463,8 +467,17 @@ export function collectRetro(db: RetroDb, options: RetroOptions): RetroData {
   for (const r of PAUSE_REASONS) byReason[r].sessions = pausedSessions.get(r)!.size;
   longest.sort((a, b) => b.ms - a.ms || a.sessionId - b.sessionId);
 
-  // PRs. The loop's own revert PRs (loopState.revertOf) are reported apart, not as work.
-  const isRevertPr = (p: PrRow) => parseState(p.loop_state).revertOf !== undefined;
+  // PRs. The loop's own revert PRs are reported apart, not as work. The original names its revert
+  // (reverted_by_pr_id); the revert's loopState.revertOf (the original's row id) is cleared once it
+  // merges, so it only helps while the revert is in flight.
+  const revertedBy = new Map(
+    prs.flatMap((p) => (p.reverted_by_pr_id === null ? [] : [[p.reverted_by_pr_id, p] as const])),
+  );
+  const originalOf = (p: PrRow): PrRow | undefined => {
+    const of = parseState(p.loop_state).revertOf;
+    return revertedBy.get(p.id) ?? (typeof of === 'number' ? prById.get(of) : undefined);
+  };
+  const isRevertPr = (p: PrRow) => revertedBy.has(p.id) || parseState(p.loop_state).revertOf !== undefined;
   const opened = prs.filter((p) => inWindow(p.created_at, w) && !isRevertPr(p));
   const mergedAt = new Map<string, string>();
   for (const d of decisions) {
@@ -478,11 +491,23 @@ export function collectRetro(db: RetroDb, options: RetroOptions): RetroData {
     if (p.outcome === 'merged') return logged ?? p.updated_at;
     return p.outcome === 'reverted' ? (logged ?? null) : null;
   };
-  // outcome "escalated" is set when the human takes a PR over; a PR waiting on the human has
-  // outcome null at stage "escalated".
+  // outcome "escalated" is set when the human takes a PR over, and when an escalation nobody answered
+  // lets it leave the loop: the newest of those history entries says which. A PR waiting on the human
+  // has outcome null at stage "escalated".
+  const lastExit = new Map<string, 'taken over' | 'left the loop (nobody answered)'>();
+  for (const d of decisions) {
+    const took = TOOK_OVER.exec(d.text);
+    const left = took ? null : LEFT_LOOP.exec(d.text);
+    const m = took ?? left;
+    if (m)
+      lastExit.set(
+        prKey(d.project_id, m[1]!, Number(m[2])),
+        took ? 'taken over' : 'left the loop (nobody answered)',
+      );
+  }
   const outcomeOf = (p: PrRow) =>
     p.outcome === 'escalated'
-      ? 'taken over'
+      ? (lastExit.get(prKey(p.project_id, p.repo, p.number)) ?? 'taken over')
       : (p.outcome ?? (p.stage === 'escalated' ? 'escalated' : p.stage === 'reverted' ? 'reverted' : 'open'));
   const rounds = (p: PrRow) => Math.max(0, p.round - 1);
   const fixRounds = [0, 0, 0, 0, 0];
@@ -690,6 +715,7 @@ export function collectRetro(db: RetroDb, options: RetroOptions): RetroData {
         .slice(0, LIST_MAX)
         .map((p) => ({ pr: prEvidence(p), rounds: rounds(p), outcome: outcomeOf(p) })),
       tookOver: prRefs(TOOK_OVER),
+      leftLoop: prRefs(LEFT_LOOP),
       returned: prRefs(RETURNED),
       skippedChecks: prRefs(SKIPPED),
       reverted: matching(REVERTED).map((d) => {
@@ -699,10 +725,11 @@ export function collectRetro(db: RetroDb, options: RetroOptions): RetroData {
       }),
       revertPrs: prs
         .filter((p) => inWindow(p.created_at, w) && isRevertPr(p))
-        .map((p) => ({
-          ...prEvidence(p),
-          label: `${prEvidence(p).label} (revert of #${String(parseState(p.loop_state).revertOf)})`,
-        })),
+        .map((p) => {
+          const original = originalOf(p);
+          const of = original ? prEvidence(original).label : 'an unknown PR';
+          return { ...prEvidence(p), label: `${prEvidence(p).label} (revert of ${of})` };
+        }),
       costUsd: opened.reduce((a, p) => a + p.cost_usd, 0),
       tokensIn: opened.reduce((a, p) => a + p.tokens_in, 0),
       tokensOut: opened.reduce((a, p) => a + p.tokens_out, 0),
@@ -797,6 +824,7 @@ function topProblems(d: RetroData, x: ProblemInputs): Problem[] {
   add('PRs needed 3 or more fix rounds', x.manyRounds);
   add('PRs sent to the human (escalated)', d.stages.escalations);
   add('the human took a PR over', d.prs.tookOver);
+  add('PRs that left the loop because nobody answered', d.prs.leftLoop);
   add('deploys reverted', d.prs.reverted);
   add('Production Guardian failed or errored after a deploy', x.guardianFailed);
   add('Claude usage limit reached', d.pauses.usageLimit);

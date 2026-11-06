@@ -391,17 +391,45 @@ describe('collectRetro: reverts, automatic resumes and two projects with a repo 
           number,
           url: `https://github.example/${projectId}/${number}`,
         }).id;
-      const a1 = open(a, 1);
-      const b1 = open(b, 1);
+      // Row ids differ from PR numbers, as in real databases.
+      const b120 = open(b, 120);
+      const a120 = open(a, 120);
+      const a130 = open(a, 130);
+      const merged = (projectId: number, n: number) =>
+        store.history.add({ projectId, kind: 'decision', text: `PR web#${n} merged (squash) as 1111111.` });
       clock.set('2026-10-05T10:00:00.000Z');
-      store.history.add({ projectId: a, kind: 'decision', text: 'PR web#1 merged (squash) as 1111111.' });
+      merged(a, 120);
       clock.set('2026-10-05T11:00:00.000Z');
-      store.history.add({ projectId: b, kind: 'decision', text: 'PR web#1 merged (squash) as 2222222.' });
-      store.pullRequests.update(b1, { outcome: 'merged', stage: 'deployed' });
-      const revert = open(a, 2);
-      store.pullRequests.update(revert, { outcome: 'merged', loopState: { revertOf: 1 } });
-      store.pullRequests.update(a1, { outcome: 'reverted', stage: 'reverted', revertedByPrId: revert });
-      store.history.add({ projectId: a, kind: 'decision', text: 'PR web#1 reverted by #2 (3333333).' });
+      merged(b, 120);
+      store.pullRequests.update(b120, { outcome: 'merged', stage: 'deployed' });
+      clock.set('2026-10-05T12:00:00.000Z');
+      merged(a, 130);
+      store.pullRequests.update(a130, { outcome: 'merged', stage: 'deploying' });
+      // A finished revert, as the engine leaves it: the revert merged without its revertOf, the
+      // original reverted and pointing at it.
+      const r121 = open(a, 121);
+      store.pullRequests.update(r121, { outcome: 'merged', stage: 'merge', loopState: {} });
+      store.pullRequests.update(a120, { outcome: 'reverted', stage: 'reverted', revertedByPrId: r121 });
+      store.history.add({ projectId: a, kind: 'decision', text: 'PR web#120 reverted by #121 (3333333).' });
+      // A revert still in flight: revertOf is the original's row id.
+      const r131 = open(a, 131);
+      store.pullRequests.update(r131, { stage: 'merge', loopState: { revertOf: a130 } });
+      store.pullRequests.update(a130, { revertedByPrId: r131 });
+      // A PR whose escalation nobody answered, and one the human took.
+      const a140 = open(a, 140);
+      store.pullRequests.update(a140, { outcome: 'escalated', stage: 'escalated' });
+      store.history.add({
+        projectId: a,
+        kind: 'decision',
+        text: 'PR web#140: nobody answered, so it left the loop (PR #140 hit 5 rounds).',
+      });
+      const a141 = open(a, 141);
+      store.pullRequests.update(a141, { outcome: 'escalated', stage: 'escalated' });
+      store.history.add({
+        projectId: a,
+        kind: 'decision',
+        text: 'PR web#141: the human took over (stalled).',
+      });
       store.history.add({
         projectId: a,
         sessionId: s,
@@ -418,11 +446,19 @@ describe('collectRetro: reverts, automatic resumes and two projects with a repo 
       const db = new Database(path, { readonly: true });
       const d = collectRetro(db, { window: OCTOBER, now: NOW });
       db.close();
-      expect(d.prs).toMatchObject({ opened: 2, byOutcome: { reverted: 1, merged: 1 }, mergedInWindow: 2 });
-      // Each PR #1 has its own project's merge time: 1h and 2h after opening.
-      expect(d.prs.openToMerge).toMatchObject({ count: 2, median: HOUR, max: 2 * HOUR });
-      expect(d.prs.reverted).toEqual([{ label: '#1 (reverted by #2)', url: 'https://github.example/1/1' }]);
-      expect(d.prs.revertPrs).toEqual([{ label: '#2 (revert of #1)', url: 'https://github.example/1/2' }]);
+      expect(d.prs).toMatchObject({
+        opened: 5,
+        byOutcome: { reverted: 1, merged: 2, 'left the loop (nobody answered)': 1, 'taken over': 1 },
+        mergedInWindow: 3,
+      });
+      // Each PR #120 has its own project's merge time: 1h and 2h after opening; #130 3h.
+      expect(d.prs.openToMerge).toMatchObject({ count: 3, median: 2 * HOUR, max: 3 * HOUR });
+      expect(d.prs.reverted).toEqual([
+        { label: '#120 (reverted by #121)', url: `https://github.example/${a}/120` },
+      ]);
+      expect(d.prs.revertPrs.map((e) => e.label)).toEqual(['#121 (revert of #120)', '#131 (revert of #130)']);
+      expect(d.prs.leftLoop.map((e) => e.label)).toEqual(['#140']);
+      expect(d.prs.tookOver.map((e) => e.label)).toEqual(['#141']);
       expect(d.pauses.autoResumes.map((e) => e.label)).toEqual([`session ${s}`]);
       expect(d.pauses.autoResumeFailed.map((e) => e.label)).toEqual([`session ${s}`]);
     } finally {
@@ -477,5 +513,7 @@ describe('retro helpers', () => {
     expect(formatDuration(90 * 60_000)).toBe('1h 30m');
     expect(formatDuration(50 * HOUR)).toBe('2d 2h');
     expect(cleanText('a\nb | <c>', 20)).toBe('a b \\| &lt;c&gt;');
+    expect(cleanText('a_b [c](d) *e*', 40)).toBe('a\\_b \\[c\\](d) \\*e\\*');
+    expect(cleanText('a_b [c](d) *e* x@example.com', 40, [], false)).toBe('a_b [c](d) *e* <email>');
   });
 });
