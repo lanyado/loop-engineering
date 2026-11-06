@@ -106,7 +106,9 @@ export class RealTmuxDriver implements TmuxDriver {
   }
 
   private async tmux(args: string[]): Promise<string> {
-    return (await exec(this.bin, [...this.base, ...args], undefined, { env: this.env })).stdout;
+    // Exactly this environment, nothing from process.env (the cast: some apps type NODE_ENV as required).
+    const env = { ...this.env } as NodeJS.ProcessEnv;
+    return (await exec(this.bin, [...this.base, ...args], undefined, { env })).stdout;
   }
 
   private async hasSession(session: string): Promise<boolean> {
