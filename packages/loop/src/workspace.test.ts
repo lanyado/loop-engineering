@@ -74,8 +74,8 @@ describe('GitWorkspace', () => {
   });
 
   it("commits as the repo's git user, so deploy hosts accept the commit", async () => {
-    await git(repo.path, 'config', 'user.name', 'Rotem');
-    await git(repo.path, 'config', 'user.email', 'rotem@example.com');
+    await git(repo.path, 'config', 'user.name', 'Ada');
+    await git(repo.path, 'config', 'user.email', 'ada@example.com');
     const sha = await git(repo.path, 'rev-parse', 'HEAD');
     const path = await workspace.checkout({ repo, branch: 'feature', sha, name: 'pr1-tests', envFiles: [] });
     await writeFile(join(path, 'c.test.txt'), 'test\n');
@@ -86,7 +86,7 @@ describe('GitWorkspace', () => {
     });
     expect(result.status).toBe('pushed');
     expect(await git(repo.remote, 'log', '-1', '--format=%an <%ae>', 'feature')).toBe(
-      'Rotem <rotem@example.com>',
+      'Ada <ada@example.com>',
     );
   });
 

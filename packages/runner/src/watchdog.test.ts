@@ -55,7 +55,7 @@ const AUTO_DIALOG_80 = [
 const TRUST = [
   '─'.repeat(40),
   ' Accessing workspace:',
-  ' /home/work/project',
+  ' /srv/loops/project',
   ' Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source',
   " project, or work from your team). If not, take a moment to review what's in this folder first.",
   " Claude Code'll be able to read, edit, and execute files here.",

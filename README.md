@@ -10,7 +10,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](tsconfig.base.json)
 [![Runs locally](https://img.shields.io/badge/runs-on%20your%20machine-8b5cf6)](SECURITY.md)
 
-[Quick start](#quick-start) · [Features](#features) · [See it work](#see-it-work) · [Settings](#settings) · [Reference](docs/reference.md) · [Security](SECURITY.md)
+[Quick start](#quick-start) · [Features](#features) · [See it work](#see-it-work) · [Settings](#settings) · [Reference](docs/reference.md) · [Run it unattended](docs/unattended.md) · [Security](SECURITY.md)
 
 <br />
 
@@ -29,7 +29,7 @@
 - **Questions, not interruptions.** The agent asks through the dashboard as one-tap options with a default answer. If you don't reply in time, the default wins.
 - **Tasks by email.** Optional. Mail a task to the loop's address, answer its questions by reply, and hear back on the same thread when the change is in production. No dashboard needed.
 - **A PR loop that closes the job.** Optional. Tests, code review by a separate agent, QA, merge and deploy for every PR a session opens. Failures go back to the agent, and a failed deploy is reverted (repos with a Vercel project set).
-- **Stuck PRs come to you.** With the PR loop on, an open PR that stops moving for 2 hours is put to you, whatever the cause, and a builder whose agent exited is resumed with the feedback it missed. A session whose terminal closed by itself (a crash, the tmux server dying) is resumed automatically, up to 3 times a day, and you hear once if that isn't enough or if several close at once. Messages to Claude are checked against its own conversation file.
+- **Stuck PRs come to you.** With the PR loop on, an open PR that stops moving for 2 hours is put to you, whatever the cause, and a builder whose agent exited is resumed with the feedback it missed. A session whose terminal closed by itself (a crash, the tmux server dying) is resumed automatically, up to 3 times a day. You hear if a resume fails, if three aren't enough, or if several close at once or the tmux server dies. Messages to Claude are checked against its own conversation file.
 - **Terminals under each pipeline.** Open the Builder's live window or any check's log in one click, with your Claude 5-hour and weekly limits in the top bar.
 - **Screenshots in the prompt.** Attach, paste or drop files when you start a session or message one.
 - **Yours to edit.** Reorder, remove or add stages and rewrite their prompts from the dashboard, shared or per project.
@@ -79,7 +79,7 @@ Drag stages, remove them, or write a new one, for all projects or just one.
 
 ## Requirements
 
-- macOS (Linux is untested), Node 20.19+, git and tmux
+- macOS or Linux, Node 20.19+, Git 2.31+ and tmux. For an always-on Linux server, see [Running Loop unattended](docs/unattended.md)
 - [Claude Code](https://docs.claude.com/en/docs/claude-code), installed and logged in (run `claude` once)
 - Optional: [`gh`](https://cli.github.com) for the PR loop, [OpenCode](https://opencode.ai) for the free fallback, `jq` for the usage meters, and [`ttyd`](https://github.com/tsl0922/ttyd) for the terminals under each pipeline
 
@@ -157,6 +157,7 @@ printf '%s' "$input" | /path/to/loop-engineering/scripts/capture-claude-usage.sh
 | `npm start`                                     | Run the server and the dashboard (Ctrl-C stops both)                    |
 | `npm run add-project -- <path>`                 | Register a project (`--name`, `--branch`, `--folder`, `--outside-home`) |
 | `npm run loop -- init <path>`                   | Give a project its own pipeline (`loop init` after `npm link`)          |
+| `npm run loop -- retro`                         | Last month's numbers, from the database (`loop retro --help`)           |
 | `npm run build`                                 | Rebuild after pulling changes                                           |
 | `npm test`, `npm run typecheck`, `npm run lint` | The checks CI runs                                                      |
 | `npm run dev -w @loop-engineering/dashboard`    | Dashboard in development mode (`SERVER_URL=` for demo data)             |
@@ -164,6 +165,10 @@ printf '%s' "$input" | /path/to/loop-engineering/scripts/capture-claude-usage.sh
 ## More
 
 - [docs/reference.md](docs/reference.md): every package, the HTTP API, the PR loop, folder projects, importing past Claude sessions, and the security model in full
+- [docs/unattended.md](docs/unattended.md): running it on an always-on Linux server for a team (services, limits, email, backups, upgrades), with a [sample server `.env`](docs/examples/server.env)
+- [docs/case-study.md](docs/case-study.md): a week of unattended work, in numbers, and what broke
+- [CHANGELOG.md](CHANGELOG.md) and [RELEASING.md](RELEASING.md): releases are tags `vX.Y.Z`; pin one in production instead of following `main`
+- [CONTRIBUTING.md](CONTRIBUTING.md): setup, the checks every PR passes, and how PRs are reviewed
 - [SPEC.md](SPEC.md) describes what it does, and [PLAN.md](PLAN.md) the build order and open follow-ups
 - [CLAUDE.md](CLAUDE.md): rules for agents working on this repo
 

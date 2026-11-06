@@ -1,7 +1,7 @@
 import { FileStageLibrary, ProjectStageFiles } from '@loop-engineering/loop';
 import { loadAddins } from './addins.js';
 import { ConfigError, describeListenError, loadConfig, nonLocalBindWarning } from './config.js';
-import { fromRoot, loadRootEnv, REPO_ROOT } from './env.js';
+import { fromRoot, loadRootEnv, REPO_ROOT, rootEnvNames } from './env.js';
 import { claudeUsageModule } from './modules/claude-usage.js';
 import { terminalModule } from './modules/terminal.js';
 import { opencodeSubagentsModule } from './modules/opencode-subagents.js';
@@ -36,6 +36,7 @@ try {
   // Every session agent plans each new task first, following its project's planner.md as it reads at launch.
   runner = runnerFromEnv(process.env, config, {
     planner: (project) => stages.forProject(project).planner().prompt,
+    envFileNames: rootEnvNames(),
   });
   loop = loopModuleFromEnv(process.env, { stages });
   // Tasks and answers by email: off without EMAIL_ADDRESS; set up wrong, it stops the start.

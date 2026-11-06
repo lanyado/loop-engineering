@@ -8,7 +8,7 @@ const IDLE = [
   '⏺ Compacted while idle, before the prompt cache expired',
   '❯ Resumed: the session was paused (agent_exited). Continue where you left off.',
   '  Reading the PR review feedback file',
-  '───────────────────────────── משחק חדש- לסדר את אבני החושן ─',
+  '───────────────────────────── משימה חדשה- לעדכן את דף הקשר ─',
   '❯ ',
   '────────────────────────────────────────────────────────────',
   '  ⚡Boost 10.9K saved',
@@ -106,7 +106,7 @@ describe('a title as wide as the pane', () => {
       '',
       '  ⏵⏵ auto mode on (shift+tab to cycle) · PR #14',
     ].join('\n');
-  const hebrew = ' במשחק החושן: להחליף את המנורה שברקע במנורת הרמב"ם, כלומר קני ';
+  const hebrew = ' בדף ההגדרות: להחליף את הכפתור שבראש הדף בכפתור חדש, כלומר רק ';
   const english = ' From the owner. The files the requester attached to the email have now reach… ─';
 
   it('still shows the box, empty or holding text', () => {
@@ -127,7 +127,7 @@ describe('a title as wide as the pane', () => {
     const dialog = [
       '────────────────────────────────────────',
       ' Read outside the working directories',
-      ' Read(/home/work/incoming/a.png)',
+      ' Read(/srv/loops/incoming/a.png)',
       ' Auto mode and the sandbox read outside the working directories without asking.',
       ' Yes or No answers for this read; the rest is for later reads.',
       ' Allow this read outside the working directories?',

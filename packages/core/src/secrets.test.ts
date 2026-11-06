@@ -169,7 +169,7 @@ describe('redactSecrets', () => {
       '<script integrity="sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K/uxy9rx7HNQlGYl1kPzQho1wx4JwY8wC">',
       'integrity sha512-Fq3Yy7nB0dC8sP2mQ4rT6vW1xZ5aE9gH3jK7lN0pR2sU4wX6yA8bD0fG2hJ4kL6m',
       'const authorization: string = header;',
-      'oauth_callback: https://example.com/cb and max_tokens: 4096, author: Rotem Lanyado',
+      'oauth_callback: https://example.com/cb and max_tokens: 4096, author: Ada Lovelace',
     ])
       expect(redactSecrets(text)).toBe(text);
   });

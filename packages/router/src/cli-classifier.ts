@@ -1,6 +1,7 @@
 import { tmpdir } from 'node:os';
 import type { Clock } from '@loop-engineering/core';
 import {
+  agentBaseEnvironment,
   detectUsageLimit,
   opencodePermission,
   parseClaudeOutput,
@@ -26,6 +27,11 @@ export interface CliClassifierOptions {
   providers?: () => { claude: boolean; opencode: boolean };
   run?: Runner;
   log?: (message: string) => void;
+  /**
+   * Where the CLIs' environment is read from (only the agent allowlist, agentBaseEnvironment: the
+   * model login, never the server's secrets). Default process.env.
+   */
+  sourceEnv?: Record<string, string | undefined>;
 }
 
 export class ClassifierError extends Error {
@@ -41,10 +47,13 @@ export class CliClassifier {
   private limitedUntil = 0;
   private readonly run: Runner;
   private readonly log: (message: string) => void;
+  /** The CLIs run with exactly this (cleanEnv), never the server's whole environment. */
+  private readonly env: Record<string, string>;
 
   constructor(private readonly options: CliClassifierOptions) {
     this.run = options.run ?? runCommand;
     this.log = options.log ?? ((m) => console.log(m));
+    this.env = agentBaseEnvironment(options.sourceEnv ?? process.env);
   }
 
   /** A short session title for a task, in the task's language; null when the answer has none. */
@@ -106,6 +115,8 @@ export class CliClassifier {
       cwd: tmpdir(),
       input: prompt,
       signal,
+      env: this.env,
+      cleanEnv: true,
     });
     const { text, isError } = parseClaudeOutput(out.stdout, out.stderr);
     if (out.code !== 0 || isError || !text) {
@@ -124,7 +135,12 @@ export class CliClassifier {
     const out = await this.run(
       this.options.opencodeBin ?? 'opencode',
       ['run', '--format', 'json', '-m', this.options.fallbackModel(), '--', prompt],
-      { cwd: tmpdir(), env: { OPENCODE_CONFIG_CONTENT: JSON.stringify(config) }, signal },
+      {
+        cwd: tmpdir(),
+        env: { ...this.env, OPENCODE_CONFIG_CONTENT: JSON.stringify(config) },
+        cleanEnv: true,
+        signal,
+      },
     );
     const { text } = parseOpencodeOutput(out.stdout, out.stderr);
     const json = extractJson(text);

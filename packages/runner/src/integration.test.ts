@@ -1,5 +1,5 @@
 // Real tmux + git + filesystem, with fake agent scripts standing in for `claude` and `opencode`.
-// Uses its own tmux server (-L loop-test) and a temp dir under the OS temp folder; both are removed after.
+// Uses its own tmux servers (-L loop-test-<pid>…, so parallel runs never share one) and a temp dir under the OS temp folder; both are removed after.
 import { inputBoxText } from './input-box.js';
 import { execFile, execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
@@ -16,7 +16,7 @@ import { RealTmuxDriver } from './drivers/tmux.js';
 import { UsageLimitMonitor } from './monitor.js';
 import { SessionRunner } from './runner.js';
 
-const SOCKET = 'loop-test';
+const SOCKET = `loop-test-${process.pid}`;
 const run = promisify(execFile);
 
 function hasTmux(): boolean {
@@ -42,6 +42,13 @@ async function waitFor<T>(
   }
 }
 
+/** Kills a test's own tmux server and removes its socket file, which tmux leaves behind. */
+async function dropServer(socket: string): Promise<void> {
+  await run('tmux', ['-L', socket, 'kill-server']).catch(() => undefined);
+  const uid = process.getuid?.() ?? 0;
+  await rm(join(process.env.TMUX_TMPDIR || '/tmp', `tmux-${uid}`, socket), { force: true });
+}
+
 const exists = (p: string) =>
   stat(p).then(
     () => true,
@@ -59,7 +66,7 @@ describe.skipIf(!hasTmux())('runner with real tmux (fake agents)', () => {
 
   afterAll(async () => {
     store.close();
-    await run('tmux', ['-L', SOCKET, 'kill-server']).catch(() => undefined);
+    await dropServer(SOCKET);
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -346,7 +353,7 @@ describe.skipIf(!hasTmux())("the tmux server's pid and start time (real tmux)", 
   // Its own server, never the default one or the other tests'.
   const socket = `loop-test-server-${process.pid}`;
   afterAll(async () => {
-    await run('tmux', ['-L', socket, 'kill-server']).catch(() => undefined);
+    await dropServer(socket);
   });
 
   it('reads them while the server runs, and null once it is gone', async () => {
@@ -365,7 +372,7 @@ describe.skipIf(!hasTmux())("the tmux server's pid and start time (real tmux)", 
 describe.skipIf(!hasTmux())('an agent window keeps its dead pane (real tmux)', () => {
   const socket = `loop-test-dead-${process.pid}`;
   afterAll(async () => {
-    await run('tmux', ['-L', socket, 'kill-server']).catch(() => undefined);
+    await dropServer(socket);
   });
 
   it('stays with a dead pane when its process exits, so it reads as exited, not closed', async () => {
@@ -373,7 +380,222 @@ describe.skipIf(!hasTmux())('an agent window keeps its dead pane (real tmux)', (
     const target = await tmux.newWindow({ session: 'probe', name: 'w', cwd: tmpdir(), command: 'sleep 0.3' });
     const dead = await waitFor('the dead pane', async () => (await tmux.list('probe')).find((w) => w.dead));
     expect(dead.target).toBe(target);
+    // When it died, as tmux reports it (whole seconds): what tells a failed launch from a later exit.
+    expect(Math.abs((dead.deadAt ?? 0) - Date.now())).toBeLessThan(60_000);
     await tmux.kill(target);
     expect(await tmux.list('probe')).toEqual([]);
   });
+
+  it('keeps the pane of a process that exits at once, and sets nothing on the window beside it', async () => {
+    const tmux = new RealTmuxDriver({ socketName: socket });
+    const other = await tmux.newWindow({ session: 'quick', name: 'a', cwd: tmpdir(), command: 'sleep 30' });
+    await run('tmux', ['-L', socket, 'set-option', '-w', '-t', other, 'remain-on-exit', 'off']);
+    const target = await tmux.newWindow({ session: 'quick', name: 'b', cwd: tmpdir(), command: 'true' });
+    const dead = await waitFor('the dead pane', async () => (await tmux.list('quick')).find((w) => w.dead));
+    expect(dead.target).toBe(target);
+    const option = async (t: string) =>
+      (await run('tmux', ['-L', socket, 'show-options', '-wv', '-t', t, 'remain-on-exit'])).stdout.trim();
+    expect(await option(other)).toBe('off');
+    expect(await option(target)).toBe('on');
+  });
+});
+
+describe.skipIf(!hasTmux())('a window that cannot be set up (real tmux)', () => {
+  const socket = `loop-test-setup-${process.pid}`;
+  let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'loop-tmux-bin-'));
+  });
+  afterAll(async () => {
+    await dropServer(socket);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('is killed before the error is thrown, so no agent runs on after a failed launch', async () => {
+    // Real tmux, except that the remain-on-exit it is asked to set is an option tmux doesn't have:
+    // the window is made, then the chained set-option fails.
+    const bin = join(dir, 'tmux');
+    await writeFile(
+      bin,
+      '#!/usr/bin/env bash\nargs=()\nfor a in "$@"; do [ "$a" = remain-on-exit ] && a=no-such-option; args+=("$a"); done\nexec tmux "${args[@]}"\n',
+      { mode: 0o755 },
+    );
+    const broken = new RealTmuxDriver({ socketName: socket, bin });
+    const tmux = new RealTmuxDriver({ socketName: socket });
+    await tmux.newWindow({ session: 'setup', name: 'keep', cwd: tmpdir(), command: 'sleep 30' });
+    const spec = { name: 'agent', cwd: tmpdir(), command: 'sleep 30' };
+    await expect(broken.newWindow({ session: 'setup', ...spec })).rejects.toThrow(/invalid option/);
+    expect((await tmux.list('setup')).map((w) => w.name)).toEqual(['keep']);
+    // The same when the window would have started a new session.
+    await expect(broken.newWindow({ session: 'fresh', ...spec })).rejects.toThrow(/invalid option/);
+    expect(await tmux.list('fresh')).toEqual([]);
+    // It is killed by its window id, so a session name with a space doesn't matter.
+    await expect(broken.newWindow({ session: 'with space', ...spec })).rejects.toThrow(/invalid option/);
+    expect(await tmux.list('with space')).toEqual([]);
+  });
+
+  it('says so in the error when that window cannot be killed', async () => {
+    // As above, and kill-window fails too.
+    const bin = join(dir, 'tmux-nokill');
+    await writeFile(
+      bin,
+      '#!/usr/bin/env bash\n[ "$3" = kill-window ] && { echo "kill refused" >&2; exit 1; }\n' +
+        'args=()\nfor a in "$@"; do [ "$a" = remain-on-exit ] && a=no-such-option; args+=("$a"); done\nexec tmux "${args[@]}"\n',
+      { mode: 0o755 },
+    );
+    const broken = new RealTmuxDriver({ socketName: socket, bin });
+    const tmux = new RealTmuxDriver({ socketName: socket });
+    await expect(
+      broken.newWindow({ session: 'stuck', name: 'agent', cwd: tmpdir(), command: 'sleep 30' }),
+    ).rejects.toThrow(
+      /invalid option: no-such-option; and window @\d+, which it made, could not be killed \(kill refused\): it may still run/,
+    );
+    const [left] = await tmux.list('stuck');
+    expect(left?.name).toBe('agent');
+    await tmux.kill(left!.target);
+  });
+
+  it('refuses a session name that tmux would rename', async () => {
+    const tmux = new RealTmuxDriver({ socketName: socket });
+    for (const session of ['loop.2', 'loop:2'])
+      await expect(
+        tmux.newWindow({ session, name: 'w', cwd: tmpdir(), command: 'sleep 30' }),
+      ).rejects.toThrow(`tmux session name "${session}" has "." or ":"`);
+    expect(await tmux.list('loop_2')).toEqual([]);
+  });
+});
+
+describe.skipIf(!hasTmux())("an agent never sees the server's secrets (real tmux)", () => {
+  // Its own server, never the default one or the other tests'.
+  const socket = `loop-test-env-${process.pid}`;
+  const tag = `leak-${process.pid}`;
+  // What the server holds after loading .env: its own tokens and an add-in's password.
+  const secrets = {
+    DASHBOARD_TOKEN: `${tag}-dashboard`,
+    MCP_TOKEN: `${tag}-shared-mcp`,
+    EMAIL_APP_PASSWORD: `${tag}-email`,
+  };
+  let dir: string;
+  let store: Store;
+
+  beforeAll(async () => {
+    dir = await realpath(await mkdtemp(join(tmpdir(), 'loop-env-it-')));
+    store = openStore({ clock: new FakeClock() });
+  });
+  afterAll(async () => {
+    store.close();
+    await dropServer(socket);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  /** Starts a folder session whose fake agent saves its environment; returns that environment. */
+  async function agentEnv(tmux: RealTmuxDriver, name: string) {
+    const folder = join(dir, name);
+    await mkdir(folder, { recursive: true });
+    const out = join(dir, `${name}-env.txt`);
+    const fakeAgent = join(dir, `${name}-agent.sh`);
+    await writeFile(
+      fakeAgent,
+      `#!/bin/sh\n/usr/bin/env > '${out}.tmp' && mv '${out}.tmp' '${out}'\nexec sleep 60\n`,
+      {
+        mode: 0o755,
+      },
+    );
+    const runner = new SessionRunner(
+      {
+        store,
+        tmux,
+        git: new RealGitDriver(),
+        fs: nodeFs,
+        agentCli: new DefaultAgentCli({ claude: fakeAgent, opencode: fakeAgent }),
+        log: () => undefined,
+      },
+      {
+        worktreesRoot: join(dir, 'worktrees'),
+        serverUrl: 'http://127.0.0.1:1',
+        tmuxSession: 'loop-env-it',
+        // As apps/server runs it: the runner reads the server's whole environment.
+        env: { ...process.env, ...secrets },
+        claudeProjectsDir: join(dir, 'claude-projects'),
+      },
+    );
+    const project = store.projects.create({ name, kind: 'folder', folderPath: folder });
+    const s = await runner.startSession(project.id, { text: 'Show me your environment' });
+    const text = await waitFor(`${name}'s environment`, () => readFile(out, 'utf8'));
+    const env = new Map(
+      text
+        .split('\n')
+        .filter((l) => l.includes('='))
+        .map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)] as const),
+    );
+    return { env, text, end: () => runner.end(s.id) };
+  }
+
+  const globalEnv = async () => (await run('tmux', ['-L', socket, 'show-environment', '-g'])).stdout;
+
+  it(
+    'when the runner starts the tmux server: not in the window, not in the global environment',
+    {
+      timeout: 30_000,
+    },
+    async () => {
+      // The server's process.env holds .env's secrets the whole time; the driver and the runner
+      // read it, as apps/server builds them.
+      Object.assign(process.env, secrets);
+      try {
+        const tmux = new RealTmuxDriver({ socketName: socket });
+        expect(await tmux.server()).toBeNull();
+        const { env, text, end } = await agentEnv(tmux, 'fresh');
+        expect(text).not.toContain(tag);
+        for (const name of ['DASHBOARD_TOKEN', 'EMAIL_APP_PASSWORD']) expect(env.has(name)).toBe(false);
+        // The agent's MCP_TOKEN is its own session token, derived from the shared one, never that one.
+        expect(env.get('MCP_TOKEN')).toMatch(/\S/);
+        expect(env.get('MCP_TOKEN')).not.toBe(secrets.MCP_TOKEN);
+        // What it does get: the toolchain, and the terminal tmux gave the window.
+        expect(env.get('PATH')).toBe(process.env.PATH);
+        expect(env.get('TMUX_PANE')).toMatch(/^%\d+$/);
+        expect(env.get('LOOP_SESSION_ID')).toMatch(/^\d+$/);
+        const global = await globalEnv();
+        expect(global).not.toContain(tag);
+        for (const name of Object.keys(secrets)) expect(global).not.toMatch(new RegExp(`^-?${name}=`, 'm'));
+        await end();
+      } finally {
+        for (const name of Object.keys(secrets)) delete process.env[name];
+      }
+      // Ending the only window may have ended the server already.
+      await dropServer(socket);
+    },
+  );
+
+  it(
+    'on a tmux server someone started with secrets: not in the window; the named ones leave the global environment',
+    {
+      timeout: 30_000,
+    },
+    async () => {
+      // Someone else's session, started from a shell holding the server's .env.
+      await run('tmux', ['-L', socket, 'new-session', '-d', '-s', 'theirs', 'sleep 60'], {
+        env: { PATH: process.env.PATH, HOME: process.env.HOME, ...secrets },
+      });
+      expect(await globalEnv()).toContain(secrets.DASHBOARD_TOKEN);
+      const tmux = new RealTmuxDriver({
+        socketName: socket,
+        unsetGlobalEnv: ['DASHBOARD_TOKEN', 'MCP_TOKEN'],
+      });
+      // new-session on the running server, then new-window in the session it made.
+      const first = await agentEnv(tmux, 'existing-a');
+      const second = await agentEnv(tmux, 'existing-b');
+      for (const { env, text } of [first, second]) {
+        expect(text).not.toContain(tag);
+        for (const name of ['DASHBOARD_TOKEN', 'EMAIL_APP_PASSWORD']) expect(env.has(name)).toBe(false);
+      }
+      const global = await globalEnv();
+      expect(global).not.toContain(secrets.DASHBOARD_TOKEN);
+      expect(global).not.toContain(secrets.MCP_TOKEN);
+      // A name not on the list stays in tmux's global environment, but no agent inherits it (above).
+      expect(global).toContain(`EMAIL_APP_PASSWORD=${secrets.EMAIL_APP_PASSWORD}`);
+      await first.end();
+      await second.end();
+    },
+  );
 });

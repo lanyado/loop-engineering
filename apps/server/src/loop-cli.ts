@@ -12,8 +12,10 @@ import {
   type NewProject,
   type ServerIo,
 } from './add-project-cli.js';
+import { runRetroCli } from './retro-cli.js';
 
 export const LOOP_USAGE = `Usage: loop init [<path>] [--name <name>] [--branch <b>] [--folder] [--outside-home]
+       loop retro [--since <date>] [--until <date> | --days <n>] [--project <p>] [--stdout] [--file-request]
 
 Gives the project in <path> (default: this folder) its own pipeline: a .loop-engineering/ folder
 there, starting as a copy of the shared pipeline. The dashboard's pencil then has a tab for the
@@ -25,7 +27,9 @@ so the server must be running (\`npm start\`). Running it again changes nothing.
   --branch <b>   the repo's default branch, when it is added (default: detected)
   --folder       add it as a plain folder project, even if <path> is a git repository
   --outside-home allow a folder project outside your home folder (refused by default)
-  -h, --help     this text`;
+  -h, --help     this text
+
+\`loop retro\` writes a report of what the loop did last month, from its database: \`loop retro --help\`.`;
 
 interface KnownProject {
   id: number;
@@ -53,6 +57,7 @@ function findProject(projects: KnownProject[], wanted: NewProject): KnownProject
 
 /** `loop <command>`; returns the exit code (0 done, 1 failed, 2 usage). */
 export async function runLoopCli(argv: string[], io: AddProjectIo): Promise<number> {
+  if (argv[0] === 'retro') return runRetroCli(argv.slice(1), io);
   let parsed;
   try {
     parsed = parseArgs({

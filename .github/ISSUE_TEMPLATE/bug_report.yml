@@ -1,0 +1,64 @@
+name: Bug report
+description: Something Loop did wrong, or failed to do.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Security problems go to **Security → Report a vulnerability**, never here.
+        Before pasting logs, remove tokens, passwords, email addresses and private repo names.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what Loop did, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: The smallest steps that show it, if you have them.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The server log around the problem (`journalctl --user -u loop-server`, or the `npm start` output), and the session's history entries if relevant.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Loop version
+      description: The release tag (`git describe --tags`) or commit (`git rev-parse --short HEAD`).
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: OS and version, Node (`node -v`), tmux (`tmux -V`), Claude Code (`claude --version`).
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Sessions and tmux (runner)
+        - PR loop (tests, review, QA, merge, deploy)
+        - Production Guardian
+        - Questions and ask_human
+        - Email
+        - Router and requests
+        - Dashboard
+        - Setup and install
+        - Retro and history
+        - Other
+  - type: dropdown
+    id: unattended
+    attributes:
+      label: Running unattended?
+      description: On an always-on server with nobody watching (docs/unattended.md).
+      options:
+        - 'No'
+        - 'Yes'
