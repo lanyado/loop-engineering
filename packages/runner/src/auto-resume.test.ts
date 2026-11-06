@@ -365,7 +365,7 @@ describe('several agents going at once', () => {
     expect(onAlert).toHaveBeenCalledTimes(1);
   });
 
-  it('says which sessions it resumes and which it leaves to the loop or paused', async () => {
+  it('says which sessions it resumes, leaves to the loop or paused, and which it ended', async () => {
     const { h, ids, onAlert, monitor, vanish } = await setup(4);
     const [plain, inLoop, takenOver, done] = ids as [number, number, number, number];
     const pr = (sessionId: number, number: number) =>
@@ -373,18 +373,103 @@ describe('several agents going at once', () => {
     pr(inLoop, 1);
     h.store.pullRequests.update(pr(takenOver, 2).id, { outcome: 'escalated' });
     h.store.pullRequests.update(pr(done, 3).id, { outcome: 'closed' });
+    h.fs.dirs.add('/home/me/notes');
+    const notes = h.store.projects.create({ name: 'Notes', kind: 'folder', folderPath: '/home/me/notes' });
+    const folder = (await h.runner.startSession(notes.id, { text: 'tidy' })).id;
+    const m = monitor();
+    await m.checkOnce();
+    for (const id of [...ids, folder]) vanish(id);
+    await m.checkOnce();
+    expect(h.store.sessions.require(folder).status).toBe('ended');
+    expect(onAlert).toHaveBeenCalledTimes(1);
+    expect(onAlert.mock.calls[0]?.[0]).not.toMatchObject({ status: 'ended' });
+    expect(onAlert.mock.calls[0]?.[1]).toBe(
+      `Sessions ${plain}, ${inLoop}, ${takenOver}, ${done} and ${folder} lost their agents at once. ` +
+        `Session ${plain} is resumed automatically, at most 3 times in 24 hours. ` +
+        `Session ${inLoop} has a PR in the loop, which resumes it when the PR needs it. ` +
+        `Sessions ${takenOver} and ${done} stay paused: their PRs were sent to you or taken over, or finished since ` +
+        `your last message. Session ${folder} was ended: a folder session is not resumed. ` +
+        'You hear again only if resuming stops working.',
+    );
+  });
+
+  it('lists a session out of resumes as stopping, and promises nothing when none is resumed', async () => {
+    const { h, ids, onAlert, monitor, vanish } = await setup(2);
+    const [spent, takenOver] = ids as [number, number];
+    for (let i = 1; i <= 3; i++)
+      h.store.history.add({
+        projectId: h.shop.id,
+        sessionId: spent,
+        kind: 'decision',
+        text: `Auto-resume: try ${i} of 3: relaunched the agent 1 min after it was found gone.`,
+      });
+    const pr = h.store.pullRequests.create({
+      projectId: h.shop.id,
+      repo: 'web',
+      number: 1,
+      url: 'u',
+      sessionId: takenOver,
+    });
+    h.store.pullRequests.update(pr.id, { outcome: 'escalated' });
     const m = monitor();
     await m.checkOnce();
     for (const id of ids) vanish(id);
     await m.checkOnce();
-    expect(onAlert).toHaveBeenCalledTimes(1);
     expect(onAlert.mock.calls[0]?.[1]).toBe(
-      `Sessions ${plain}, ${inLoop}, ${takenOver} and ${done} lost their agents at once. ` +
-        `Session ${plain} is resumed automatically, at most 3 times in 24 hours. ` +
-        `Session ${inLoop} has a PR in the loop, which resumes it when the PR needs it. ` +
-        `Sessions ${takenOver} and ${done} stay paused: their PRs were sent to you or taken over, or finished since ` +
-        'your last message. You hear again only if resuming stops working.',
+      `Sessions ${spent} and ${takenOver} lost their agents at once. Session ${spent} has used its 3 automatic ` +
+        `resumes in 24 hours and stays paused until you send it a message. Session ${takenOver} stays paused: its PR ` +
+        'was sent to you or taken over, or finished since your last message.',
     );
+    // The same pass stops it, as the alert said.
+    expect(onAlert).toHaveBeenCalledTimes(2);
+    expect(onAlert.mock.calls[1]?.[1]).toContain(`Session ${spent} ("build 0") keeps losing its agent`);
+  });
+
+  it('tells of failed tries of sessions lost together in one alert per pass', async () => {
+    const { h, clock, ids, onAlert, monitor, vanish, status } = await setup(3);
+    const m = monitor();
+    await m.checkOnce();
+    for (const id of ids) vanish(id);
+    await m.checkOnce();
+    h.tmux.newWindow = () => Promise.reject(new Error('tmux broke'));
+    for (let i = 0; i < 8; i++) {
+      clock.advance(5 * MINUTE);
+      await m.checkOnce();
+    }
+    expect(ids.map(status)).toEqual(['paused:agent_exited', 'paused:agent_exited', 'paused:agent_exited']);
+    const texts = onAlert.mock.calls.map((c) => String(c[1]));
+    expect(texts).toHaveLength(4); // lost at once, try 1, try 2, out of resumes
+    const [a, b, c] = ids as [number, number, number];
+    expect(texts[1]).toBe(
+      `Sessions ${a}, ${b} and ${c} lost their agents, and an automatic resume of each failed. ` +
+        `Session ${a} ("build 0"): try 1 of 3 failed: tmux broke; tried again in 5 min. ` +
+        `Session ${b} ("build 1"): try 1 of 3 failed: tmux broke; tried again in 5 min. ` +
+        `Session ${c} ("build 2"): try 1 of 3 failed: tmux broke; tried again in 5 min. ` +
+        'You hear again about a session when its resumes run out, whether they fail or its agent keeps going away.',
+    );
+    expect(texts[3]).toContain(`Sessions ${a}, ${b} and ${c} stay paused, out of automatic resumes.`);
+    expect(texts[3]).toContain(
+      `Session ${c} ("build 2"): the last of 3 automatic resumes in 24 hours failed: tmux broke.`,
+    );
+  });
+
+  it('cuts a long error short, so the alert still fits a question', async () => {
+    const { h, clock, ids, onAlert, monitor, vanish, tries } = await setup();
+    const [id] = ids as [number];
+    const m = monitor();
+    vanish(id);
+    await m.checkOnce();
+    const huge = `tmux new-window ${'x'.repeat(20_000)}`;
+    h.tmux.newWindow = () => Promise.reject(new Error(huge));
+    for (let i = 0; i < 8; i++) {
+      clock.advance(5 * MINUTE);
+      await m.checkOnce();
+    }
+    expect(onAlert).toHaveBeenCalledTimes(3);
+    for (const [, text] of onAlert.mock.calls) expect(String(text).length).toBeLessThan(700);
+    expect(onAlert.mock.calls[2]?.[1]).toMatch(/failed: tmux new-window x+…\. It stays paused/);
+    // The history keeps the whole error.
+    expect(tries(id)[0]?.text).toContain(huge);
   });
 
   it('does not alert for agents that exited by themselves, or for one window closing', async () => {

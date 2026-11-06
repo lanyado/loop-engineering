@@ -100,6 +100,11 @@ export class RealTmuxDriver implements TmuxDriver {
   }
 
   async newWindow(spec: NewWindow): Promise<string> {
+    // tmux turns "." and ":" in a session name into "_", so "=<name>" would never find the session.
+    if (/[.:]/.test(spec.session))
+      throw new Error(
+        `tmux session name "${spec.session}" has "." or ":", which tmux replaces: use another name`,
+      );
     const common = ['-d', '-n', spec.name, '-c', spec.cwd, '-P', '-F', TARGET_FORMAT, spec.command];
     // The window's options are set in the same tmux command, which the server runs before anything
     // else: set by a later call, an agent that exits at once would take its window with it
@@ -117,13 +122,28 @@ export class RealTmuxDriver implements TmuxDriver {
     ]);
     if (!(await this.hasSession(spec.session))) {
       try {
-        return (await this.tmux(['new-session', '-s', spec.session, ...common, ...options])).trim();
+        return await this.create(['new-session', '-s', spec.session, ...common, ...options]);
       } catch (err) {
         // Another start created the session between the check and here; fall through to new-window.
         if (!(err instanceof ExecError && /duplicate session/i.test(err.stderr))) throw err;
       }
     }
-    return (await this.tmux(['new-window', '-a', '-t', last, ...common, ...options])).trim();
+    return await this.create(['new-window', '-a', '-t', last, ...common, ...options]);
+  }
+
+  /**
+   * Runs a new-session/new-window command list. When a command after the window's creation fails,
+   * the window already runs its command and printed its target: it is killed before the error is
+   * thrown, so a launch the caller counts as failed never leaves an agent running.
+   */
+  private async create(args: string[]): Promise<string> {
+    try {
+      return (await this.tmux(args)).trim();
+    } catch (err) {
+      const made = err instanceof ExecError ? /^\S+:@\d+$/m.exec(err.stdout)?.[0] : undefined;
+      if (made) await this.kill(made).catch(() => undefined);
+      throw err;
+    }
   }
 
   async keepDeadPane(target: string): Promise<void> {
