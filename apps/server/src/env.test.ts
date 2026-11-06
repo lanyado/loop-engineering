@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { fromRoot, loadRootEnv, REPO_ROOT, rootEnvNames } from './env.js';
-import { checkAgentEnvExtra, hiddenTmuxEnv } from './runner.js';
+import { checkAgentEnvExtra, gitVersionWarning, hiddenTmuxEnv } from './runner.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -54,8 +54,27 @@ describe('env', () => {
       'OPENROUTER_API_KEY',
     ]);
     expect(checkAgentEnvExtra({})).toEqual([]);
-    for (const bad of ['DASHBOARD_TOKEN', 'DASH*', 'MCP_*', 'A-B', '*', 'A*B'])
+    for (const bad of [
+      'DASHBOARD_TOKEN',
+      'DASH*',
+      'MCP_*',
+      'EMAIL_*',
+      'EM*',
+      'EMAIL_APP_PASSWORD',
+      'A-B',
+      '*',
+      'A*B',
+    ])
       expect(() => checkAgentEnvExtra({ AGENT_ENV_EXTRA: bad })).toThrow(/AGENT_ENV_EXTRA/);
+  });
+
+  it("warns when git is too old for the runner's config guard (GIT_CONFIG_COUNT, git 2.31)", () => {
+    expect(gitVersionWarning('git version 2.30.9\n')).toMatch(/git 2\.30\.9 is older than 2\.31/);
+    expect(gitVersionWarning('git version 1.9.0')).toMatch(/git 1\.9\.0 /);
+    expect(gitVersionWarning('git version 2.31.0')).toBeNull();
+    expect(gitVersionWarning('git version 2.47.3 (Apple Git-154)')).toBeNull();
+    expect(gitVersionWarning('git version 3.0.0')).toBeNull();
+    expect(gitVersionWarning(null)).toBeNull();
   });
 
   it('resolves relative paths against the root', () => {

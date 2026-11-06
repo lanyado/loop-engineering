@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { isAbsolute } from 'node:path';
 import type { Store } from '@loop-engineering/core';
 import {
@@ -13,6 +14,23 @@ import {
   type RunnerConfig,
 } from '@loop-engineering/runner';
 import { ConfigError, type ServerConfig } from './config.js';
+
+/**
+ * A warning when git is older than 2.31: the runner hands its git guard (a repo's own filters,
+ * credential helpers and drivers neutralized) to git as GIT_CONFIG_COUNT, which older git ignores.
+ * Null when git is new enough or its version is unknown.
+ */
+export function gitVersionWarning(versionOutput: string | null): string | null {
+  const m = /git version (\d+)\.(\d+)(?:\.(\d+))?/.exec(versionOutput ?? '');
+  if (!m) return null;
+  const [major, minor] = [Number(m[1]), Number(m[2])];
+  if (major > 2 || (major === 2 && minor >= 31)) return null;
+  const version = [m[1], m[2], m[3]].filter((p) => p !== undefined).join('.');
+  return (
+    `warning: git ${version} is older than 2.31, so the runner's git cannot neutralize a repo's own ` +
+    'filters, credential helpers and drivers (it needs GIT_CONFIG_COUNT); upgrade git'
+  );
+}
 
 /** AGENT_ENV_EXTRA, checked at start: a malformed entry, or one naming a server secret, stops it. */
 export function checkAgentEnvExtra(env: NodeJS.ProcessEnv): string[] {
@@ -55,6 +73,14 @@ export function runnerFromEnv(
   if (!isAbsolute(worktreesRoot)) throw new ConfigError('WORKTREES_ROOT must be an absolute path');
   const serverUrl = config.publicUrl ?? `http://${config.host}:${config.port}`;
   const unsetGlobalEnv = hiddenTmuxEnv(envFileNames);
+  let gitVersion: string | null = null;
+  try {
+    gitVersion = execFileSync('git', ['--version'], { encoding: 'utf8', env: { PATH: env.PATH ?? '' } });
+  } catch {
+    // No git at all: the first session start says so.
+  }
+  const warning = gitVersionWarning(gitVersion);
+  if (warning) console.warn(warning);
   return (store) =>
     new SessionRunner(
       {
