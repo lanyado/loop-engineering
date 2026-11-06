@@ -92,6 +92,8 @@ export interface DashboardApiOptions {
   protectedRoots?: string[];
   /** Default os.homedir(). */
   home?: string;
+  /** Where files attached to a task are saved, one new folder per task. Default the OS temp folder. */
+  uploadsDir?: string;
   /**
    * The pipelines: a session's model can only be set for the builder, the conflict fixer or the
    * checks of its project's pipeline.
@@ -450,7 +452,7 @@ export function dashboardRoutes(ctx: ServerContext, options: DashboardApiOptions
 
   api.post('/requests', async (c) => {
     const input = parse(newRequest, await body(c));
-    const withFiles = () => saveAttachments(input.text, input.attachments ?? []);
+    const withFiles = () => saveAttachments(input.text, input.attachments ?? [], options.uploadsDir);
     if (input.sessionId !== undefined) {
       const session = store.sessions.require(input.sessionId);
       if (input.projectId != null && input.projectId !== session.projectId)

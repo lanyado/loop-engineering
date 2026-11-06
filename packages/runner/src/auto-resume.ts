@@ -71,13 +71,25 @@ type Fate = 'resumed' | 'loop' | 'paused' | 'spent' | 'ended';
 
 /** Why a try failed is cut to this in an alert (the history keeps all of it). */
 const ERROR_CHARS = 300;
-/** An alert is cut to this: ask_human refuses a question over 3000 characters, and the alert would be lost. */
+/**
+ * An alert is cut to this many UTF-16 units: ask_human refuses a question over 3000 (it counts
+ * `.length`, so an emoji is two), and the alert would be lost.
+ */
 const ALERT_CHARS = 2_500;
 
-/** `text` on one line, at most `max` characters; by code points, so an emoji is never cut in half. */
+/**
+ * `text` on one line, at most `max` UTF-16 units (string length, as ask_human counts), cut between
+ * code points, so an emoji is never cut in half.
+ */
 function clip(text: string, max: number): string {
-  const chars = Array.from(text.replace(/\s+/g, ' ').trim());
-  return chars.length <= max ? chars.join('') : `${chars.slice(0, max - 1).join('')}…`;
+  const flat = text.replace(/\s+/g, ' ').trim();
+  if (flat.length <= max) return flat;
+  let out = '';
+  for (const char of flat) {
+    if (out.length + char.length > max - 1) break;
+    out += char;
+  }
+  return `${out}…`;
 }
 
 /** Like clip, but keeps the end too: an error's reason is usually its last part. */
@@ -94,7 +106,10 @@ function clipMiddle(text: string, max: number): string {
  */
 function reason(err: unknown): string {
   if (err instanceof ExecError)
-    return clipMiddle(`${err.stderr.trim() || 'no error output'} (exit ${String(err.code)})`, ERROR_CHARS);
+    return clipMiddle(
+      `${err.stderr.trim() || 'no error output'} (${err.code === null ? 'killed' : `exit ${String(err.code)}`})`,
+      ERROR_CHARS,
+    );
   return clipMiddle(errorMessage(err), ERROR_CHARS);
 }
 

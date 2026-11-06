@@ -1,7 +1,17 @@
 import { appendFile, copyFile, mkdir, readFile, rm, stat } from 'node:fs/promises';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 import { isSafeRelativePath, ValidationError, type EnvFile, type Repo } from '@loop-engineering/core';
-import { CommandError, runCommand, type Runner, type RunResult } from '@loop-engineering/runner';
+import {
+  CommandError,
+  ExecError,
+  GIT_ENV_ALLOWLIST,
+  GIT_LONG_TIMEOUT_MS,
+  GIT_TIMEOUT_MS,
+  GitConfigError,
+  gitEnvironment as runnerGitEnvironment,
+  safeGit,
+  type RunResult,
+} from '@loop-engineering/runner';
 import type { LocalBranchResult, PushResult, RemoteBranchResult, Workspace } from './ports.js';
 
 /**
@@ -11,36 +21,17 @@ import type { LocalBranchResult, PushResult, RemoteBranchResult, Workspace } fro
 const LOOP_IDENTITY = ['-c', 'user.name=loop-engineering', '-c', 'user.email=loop-engineering@localhost'];
 
 /**
- * On every git command the loop runs: no hooks and no fsmonitor. A job can write .git/hooks or
- * core.fsmonitor into the repo config it shares, and the loop's own git (with the user's
- * credentials) must never run them.
+ * Environment of the loop's git commands: the runner's git allowlist without the GitHub tokens. The
+ * loop pushes as the user through the SSH agent or the user's own credential helper (HOME), and a
+ * job (reviewer, tester), which runs without GitHub access, must not get a token by planting
+ * something git runs (what git still runs is listed in docs/reference.md).
  */
-const SAFE_GIT = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false'];
-
-/** Environment of the loop's git commands: enough to push as the user, none of the server's secrets. */
-const GIT_ENV_ALLOWLIST = [
-  'PATH',
-  'HOME',
-  'USER',
-  'LOGNAME',
-  'LANG',
-  'LC_ALL',
-  'LC_CTYPE',
-  'TMPDIR',
-  'TZ',
-  'XDG_CONFIG_HOME',
-  'SSH_AUTH_SOCK',
-  'SSH_AGENT_PID',
-  'GIT_SSH_COMMAND',
-] as const;
+const JOB_GIT_ENV_ALLOWLIST = GIT_ENV_ALLOWLIST.filter(
+  (name) => name !== 'GH_TOKEN' && name !== 'GITHUB_TOKEN',
+);
 
 export function gitEnvironment(source: Record<string, string | undefined>): Record<string, string> {
-  const env: Record<string, string> = { GIT_TERMINAL_PROMPT: '0' };
-  for (const name of GIT_ENV_ALLOWLIST) {
-    const value = source[name];
-    if (value) env[name] = value;
-  }
-  return env;
+  return runnerGitEnvironment(source, JOB_GIT_ENV_ALLOWLIST);
 }
 
 /**
@@ -68,28 +59,46 @@ const exists = (p: string) =>
  */
 export class GitWorkspace implements Workspace {
   private readonly root: string;
-  private readonly run: Runner;
   private readonly gitBin: string;
   private readonly env: Record<string, string>;
+  private readonly configTimeoutMs: number | undefined;
 
   constructor(
     root: string,
-    options: { run?: Runner; git?: string; sourceEnv?: Record<string, string | undefined> } = {},
+    options: { git?: string; sourceEnv?: Record<string, string | undefined>; configTimeoutMs?: number } = {},
   ) {
     if (!isAbsolute(root)) throw new ValidationError('the jobs folder must be an absolute path');
     this.root = resolve(root);
-    this.run = options.run ?? runCommand;
     this.gitBin = options.git ?? 'git';
     this.env = gitEnvironment(options.sourceEnv ?? process.env);
+    this.configTimeoutMs = options.configTimeoutMs;
   }
 
-  /** Every git command goes through here: hooks and fsmonitor off, a scrubbed environment. */
-  private exec(cwd: string, args: string[]): Promise<RunResult> {
-    return this.run(this.gitBin, [...SAFE_GIT, '-C', cwd, ...args], { env: this.env, cleanEnv: true });
+  /**
+   * Every git command goes through here, in the builder's repo or a job checkout of it, whose .git a
+   * job can write: the runner's safeGit (no hooks or fsmonitor, the repo's own filters, drivers and
+   * credential helpers neutralized, no core.gitProxy, nothing run when its config cannot be read, a
+   * time limit that stops git and everything it started) with a scrubbed environment. Resolves with
+   * the exit code; rejects when git could not run at all (no readable config, a timeout).
+   */
+  private async exec(cwd: string, args: string[], timeoutMs = GIT_TIMEOUT_MS): Promise<RunResult> {
+    try {
+      const { stdout, stderr } = await safeGit(cwd, args, {
+        bin: this.gitBin,
+        env: this.env,
+        timeoutMs,
+        ...(this.configTimeoutMs !== undefined ? { configTimeoutMs: this.configTimeoutMs } : {}),
+      });
+      return { code: 0, stdout, stderr };
+    } catch (err) {
+      if (err instanceof ExecError && !(err instanceof GitConfigError) && typeof err.code === 'number')
+        return { code: err.code, stdout: err.stdout, stderr: err.stderr };
+      throw err;
+    }
   }
 
-  private async git(cwd: string, args: string[]): Promise<string> {
-    const result = await this.exec(cwd, args);
+  private async git(cwd: string, args: string[], timeoutMs?: number): Promise<string> {
+    const result = await this.exec(cwd, args, timeoutMs);
     if (result.code !== 0) throw new CommandError(`git ${args.join(' ')}`, result);
     return result.stdout;
   }
@@ -106,13 +115,16 @@ export class GitWorkspace implements Workspace {
       throw new ValidationError(`job folder ${path} is outside ${this.root}`);
     await this.remove(input.repo, path);
     await mkdir(this.root, { recursive: true });
-    await this.git(input.repo.path, [
-      'fetch',
-      '--quiet',
-      'origin',
-      `+refs/heads/${input.branch}:refs/remotes/origin/${input.branch}`,
-    ]);
-    await this.git(input.repo.path, ['worktree', 'add', '--detach', '--force', '--', path, input.sha]);
+    await this.git(
+      input.repo.path,
+      ['fetch', '--quiet', 'origin', `+refs/heads/${input.branch}:refs/remotes/origin/${input.branch}`],
+      GIT_LONG_TIMEOUT_MS,
+    );
+    await this.git(
+      input.repo.path,
+      ['worktree', 'add', '--detach', '--force', '--', path, input.sha],
+      GIT_LONG_TIMEOUT_MS,
+    );
     for (const config of JOB_CONFIG_PATHS) await rm(join(path, config), { recursive: true, force: true });
     const excludes: string[] = [];
     for (const file of input.envFiles.filter((f) => f.repo === input.repo.name)) {
@@ -159,13 +171,17 @@ export class GitWorkspace implements Workspace {
     if (head === input.baseSha) return { status: 'none' };
     // To the remote URL itself (not a remote name the checkout could redefine), and only while the
     // branch is still where the job started: a builder push in the meantime wins.
-    const push = await this.exec(path, [
-      'push',
-      '--no-verify',
-      `--force-with-lease=refs/heads/${input.branch}:${input.baseSha}`,
-      repo.remote,
-      `HEAD:refs/heads/${input.branch}`,
-    ]);
+    const push = await this.exec(
+      path,
+      [
+        'push',
+        '--no-verify',
+        `--force-with-lease=refs/heads/${input.branch}:${input.baseSha}`,
+        repo.remote,
+        `HEAD:refs/heads/${input.branch}`,
+      ],
+      GIT_LONG_TIMEOUT_MS,
+    );
     if (push.code !== 0)
       return { status: 'rejected', reason: (push.stderr || push.stdout).trim().slice(0, 500) };
     return { status: 'pushed', sha: head };
@@ -181,18 +197,26 @@ export class GitWorkspace implements Workspace {
   }
 
   async deleteRemoteBranch(repo: Repo, branch: string, expectedSha: string): Promise<RemoteBranchResult> {
-    const ls = await this.git(repo.path, ['ls-remote', '--heads', repo.remote, `refs/heads/${branch}`]);
+    const ls = await this.git(
+      repo.path,
+      ['ls-remote', '--heads', repo.remote, `refs/heads/${branch}`],
+      GIT_LONG_TIMEOUT_MS,
+    );
     const current = ls.trim().split(/\s+/)[0];
     if (!current) return 'gone';
     if (current !== expectedSha) return 'moved';
-    const push = await this.exec(repo.path, [
-      'push',
-      '--no-verify',
-      `--force-with-lease=refs/heads/${branch}:${expectedSha}`,
-      repo.remote,
-      '--delete',
-      `refs/heads/${branch}`,
-    ]);
+    const push = await this.exec(
+      repo.path,
+      [
+        'push',
+        '--no-verify',
+        `--force-with-lease=refs/heads/${branch}:${expectedSha}`,
+        repo.remote,
+        '--delete',
+        `refs/heads/${branch}`,
+      ],
+      GIT_LONG_TIMEOUT_MS,
+    );
     if (push.code === 0) return 'deleted';
     if (/stale info|rejected/i.test(push.stderr)) return 'moved';
     if (/remote ref does not exist/i.test(push.stderr)) return 'gone';

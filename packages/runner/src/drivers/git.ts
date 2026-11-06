@@ -1,15 +1,16 @@
 import { isAbsolute, resolve } from 'node:path';
 import { gitEnvironment } from '../agent-env.js';
-import { exec, ExecError } from './exec.js';
+import { exec, ExecError, type ExecResult } from './exec.js';
 
 /** An unreachable remote must not stall a session start. */
 const FETCH_TIMEOUT_MS = 30_000;
 /**
  * Every other git command has a limit too: a repo's config can make git wait forever (an include.path
- * naming a FIFO), and the runner must not hang with it.
+ * naming a FIFO), and the runner must not hang with it. A timeout stops git and everything it started.
  */
-const GIT_TIMEOUT_MS = 120_000;
-const PUSH_TIMEOUT_MS = 600_000;
+export const GIT_TIMEOUT_MS = 120_000;
+/** A push, or a fetch or checkout that may move a whole repo. */
+export const GIT_LONG_TIMEOUT_MS = 600_000;
 const CONFIG_TIMEOUT_MS = 30_000;
 
 export interface GitDriver {
@@ -152,6 +153,62 @@ export function gitConfigEnv(pairs: [string, string][]): Record<string, string> 
   return env;
 }
 
+/** Thrown when a repo's config cannot be read: then no git command runs there (fails closed). */
+export class GitConfigError extends ExecError {
+  override name = 'GitConfigError';
+}
+
+export interface SafeGitOptions {
+  /** Default "git". */
+  bin?: string;
+  /** Exactly the environment git gets (gitEnvironment), nothing from process.env. */
+  env: Record<string, string>;
+  /** Limit for the command itself. Default 2 min. */
+  timeoutMs?: number;
+  /** Limit for reading the repo's config first. Default 30 s. */
+  configTimeoutMs?: number;
+}
+
+/**
+ * The guard for the repo at `cwd` (repoConfigGuard), as environment variables. Reading config runs
+ * nothing. Fails closed: when the config cannot be read, GitConfigError, and no git command runs.
+ */
+async function guardEnv(bin: string, cwd: string, options: SafeGitOptions): Promise<Record<string, string>> {
+  let out: string;
+  try {
+    out = (
+      await exec(bin, [...SAFE_GIT, '-C', cwd, 'config', '--list', '--show-scope', '-z'], undefined, {
+        env: options.env,
+        timeoutMs: options.configTimeoutMs ?? CONFIG_TIMEOUT_MS,
+      })
+    ).stdout;
+  } catch (err) {
+    const why = err instanceof ExecError ? err.stderr.trim() || String(err.code) : String(err);
+    throw new GitConfigError(
+      `${bin} config --list`,
+      err instanceof ExecError ? err.code : null,
+      `cannot read the git config in ${cwd}, so Loop runs no git there (${why})`,
+    );
+  }
+  return gitConfigEnv(repoConfigGuard(parseConfigList(out)));
+}
+
+/**
+ * Runs git in `cwd`, in a repo an agent can write (its config, its hooks): with SAFE_GIT, the repo's
+ * command-running config neutralized (repoConfigGuard, read first; nothing runs if it cannot be),
+ * exactly `options.env`, and a time limit that stops git and whatever it started. The runner's git
+ * (RealGitDriver) and the PR loop's job checkouts (GitWorkspace) both run git through this.
+ * Rejects with ExecError (GitConfigError when the config could not be read).
+ */
+export async function safeGit(cwd: string, args: string[], options: SafeGitOptions): Promise<ExecResult> {
+  const bin = options.bin ?? 'git';
+  const env = { ...options.env, ...(await guardEnv(bin, cwd, options)) };
+  return exec(bin, [...SAFE_GIT, '-C', cwd, ...args], undefined, {
+    env,
+    timeoutMs: options.timeoutMs ?? GIT_TIMEOUT_MS,
+  });
+}
+
 export interface RealGitOptions {
   bin?: string;
   /** Where the git environment (gitEnvironment) is read from. Default process.env. */
@@ -169,45 +226,25 @@ export interface RealGitOptions {
 export class RealGitDriver implements GitDriver {
   private readonly bin: string;
   /** Exactly this, nothing from process.env. */
-  private readonly env: NodeJS.ProcessEnv;
+  private readonly env: Record<string, string>;
   private readonly configTimeoutMs: number;
 
   constructor(options: RealGitOptions | string = {}) {
     const o = typeof options === 'string' ? { bin: options } : options;
     this.bin = o.bin ?? 'git';
     this.configTimeoutMs = o.configTimeoutMs ?? CONFIG_TIMEOUT_MS;
-    // The cast: unneeded here, but an app that types NODE_ENV as required (the dashboard) needs it.
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-    this.env = gitEnvironment(o.sourceEnv ?? process.env) as NodeJS.ProcessEnv;
-  }
-
-  /**
-   * The guard for the repo at `cwd` (repoConfigGuard), as environment variables. Reading config runs
-   * nothing. Fails closed: when the config cannot be read, no git command runs there.
-   */
-  private async guard(cwd: string): Promise<Record<string, string>> {
-    let out: string;
-    try {
-      out = (
-        await exec(this.bin, [...SAFE_GIT, '-C', cwd, 'config', '--list', '--show-scope', '-z'], undefined, {
-          env: this.env,
-          timeoutMs: this.configTimeoutMs,
-        })
-      ).stdout;
-    } catch (err) {
-      const why = err instanceof ExecError ? err.stderr.trim() || String(err.code) : String(err);
-      throw new ExecError(
-        `${this.bin} config --list`,
-        err instanceof ExecError ? err.code : null,
-        `cannot read the git config in ${cwd}, so the runner runs no git there (${why})`,
-      );
-    }
-    return gitConfigEnv(repoConfigGuard(parseConfigList(out)));
+    this.env = gitEnvironment(o.sourceEnv ?? process.env);
   }
 
   private async run(cwd: string, args: string[], timeoutMs = GIT_TIMEOUT_MS): Promise<string> {
-    const env = { ...this.env, ...(await this.guard(cwd)) };
-    return (await exec(this.bin, [...SAFE_GIT, '-C', cwd, ...args], undefined, { env, timeoutMs })).stdout;
+    return (
+      await safeGit(cwd, args, {
+        bin: this.bin,
+        env: this.env,
+        timeoutMs,
+        configTimeoutMs: this.configTimeoutMs,
+      })
+    ).stdout;
   }
 
   private git(cwd: string, args: string[]): Promise<string> {
@@ -276,7 +313,7 @@ export class RealGitDriver implements GitDriver {
   }
 
   async push(path: string, branch: string): Promise<void> {
-    await this.run(path, ['push', '-u', 'origin', '--', branch], PUSH_TIMEOUT_MS);
+    await this.run(path, ['push', '-u', 'origin', '--', branch], GIT_LONG_TIMEOUT_MS);
   }
 
   async excludeFile(path: string): Promise<string> {

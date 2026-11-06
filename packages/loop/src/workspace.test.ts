@@ -1,6 +1,6 @@
 // GitWorkspace against real git: a bare "remote", a clone, and job checkouts.
 import { execFile } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -114,7 +114,57 @@ describe('GitWorkspace', () => {
     expect(await exists(marker)).toBe(false);
   });
 
-  it('gives git only what a push needs, none of the server secrets', () => {
+  it('never runs filters, drivers, credential helpers or an sshCommand a job planted in the shared repo config', async () => {
+    // The PR's files ask for filters by name, one with "=" in it (no `-c key=value` can name that).
+    const path0 = repo.path;
+    await writeFile(join(path0, '.gitattributes'), '* filter=evil diff=evil\n*.eq filter=x=y\n');
+    await writeFile(join(path0, 'b.eq'), 'b\n');
+    await git(path0, 'add', '.');
+    await git(path0, 'commit', '-q', '-m', 'attributes');
+    await git(path0, 'push', '-q', 'origin', 'main:refs/heads/feature');
+    const sha = await git(path0, 'rev-parse', 'HEAD');
+    // What a job could write into the .git its checkout shares with the builder's repo.
+    const canary = join(dir, 'canary');
+    await mkdir(canary);
+    const touch = (name: string) => `touch '${join(canary, name)}'`;
+    await git(path0, 'config', 'filter.evil.clean', `${touch('filter-clean')}; cat`);
+    await git(path0, 'config', 'filter.evil.smudge', `${touch('filter-smudge')}; cat`);
+    await git(path0, 'config', 'filter.evil.required', 'true');
+    await git(path0, 'config', 'diff.evil.textconv', `${touch('textconv')}; cat`);
+    await git(path0, 'config', 'credential.helper', `!${touch('credential')}`);
+    await git(path0, 'config', 'core.sshCommand', touch('ssh'));
+    await git(path0, 'config', 'core.pager', touch('pager'));
+    await appendFile(
+      join(path0, '.git', 'config'),
+      `[filter "x=y"]\n\tclean = ${touch('eq-clean')}; cat\n\tsmudge = ${touch('eq-smudge')}; cat\n\trequired = true\n`,
+    );
+    const path = await workspace.checkout({ repo, branch: 'feature', sha, name: 'pr1-tests', envFiles: [] });
+    await writeFile(join(path, 'a.txt'), 'changed\n');
+    await writeFile(join(path, 'b.eq'), 'changed\n');
+    const result = await workspace.commitAndPush(repo, path, {
+      branch: 'feature',
+      baseSha: sha,
+      message: 'tests',
+    });
+    expect(result.status).toBe('pushed');
+    expect(await git(repo.remote, 'show', 'feature:b.eq')).toBe('changed');
+    expect(await readdir(canary)).toEqual([]);
+  });
+
+  it('runs no git where the repo config cannot be read in time (fails closed)', async () => {
+    const sha = await git(repo.path, 'rev-parse', 'HEAD');
+    const fifo = join(dir, 'config.fifo');
+    await run('mkfifo', [fifo]);
+    // Written directly: git config would try to read the FIFO too.
+    await appendFile(join(repo.path, '.git', 'config'), `[include]\n\tpath = ${fifo}\n`);
+    const stuck = new GitWorkspace(join(dir, 'jobs'), { configTimeoutMs: 300 });
+    await expect(
+      stuck.checkout({ repo, branch: 'feature', sha, name: 'pr1-review', envFiles: [] }),
+    ).rejects.toThrow(/cannot read the git config in .*runs no git there/);
+    expect(await exists(join(dir, 'jobs', 'pr1-review'))).toBe(false);
+  });
+
+  it('gives git only what a push needs, none of the server secrets and no core.gitProxy', () => {
     expect(
       gitEnvironment({
         PATH: '/bin',
@@ -123,7 +173,15 @@ describe('GitWorkspace', () => {
         DASHBOARD_TOKEN: 'd',
         MCP_TOKEN: 'm',
         GH_TOKEN: 'g',
+        GITHUB_TOKEN: 'g',
+        EMAIL_APP_PASSWORD: 'e',
       }),
-    ).toEqual({ PATH: '/bin', HOME: '/h', SSH_AUTH_SOCK: '/s', GIT_TERMINAL_PROMPT: '0' });
+    ).toEqual({
+      PATH: '/bin',
+      HOME: '/h',
+      SSH_AUTH_SOCK: '/s',
+      GIT_TERMINAL_PROMPT: '0',
+      GIT_PROXY_COMMAND: '',
+    });
   });
 });

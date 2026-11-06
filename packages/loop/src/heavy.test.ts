@@ -141,6 +141,10 @@ describe.skipIf(!hasFlock)('scripts/heavy', () => {
         });
       } finally {
         tmux('kill-server');
+        // tmux leaves the socket file behind.
+        rmSync(join(process.env.TMUX_TMPDIR || '/tmp', `tmux-${process.getuid?.() ?? 0}`, socket), {
+          force: true,
+        });
       }
     },
     10_000,

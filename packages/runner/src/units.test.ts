@@ -378,8 +378,20 @@ describe('a launch that cannot start the agent', () => {
       stderr: 'launch: no-such-agent-cli not found (PATH=/usr/bin:/bin)\n',
       left: false,
     });
-    expect(launchFailure(`${out.stderr}\nPane is dead (status 127)`)).toBe(
+    const launched = { cli: 'no-such-agent-cli', path: '/usr/bin:/bin' };
+    expect(launchFailure(`${out.stderr}\nPane is dead (status 127)`, launched)).toBe(
       'no-such-agent-cli not found (PATH=/usr/bin:/bin)',
+    );
+    // Without knowing what the script ran, that line is not taken.
+    expect(launchFailure(out.stderr)).toBeNull();
+  });
+
+  it('names a PATH with parentheses in it whole, and the runner takes that line', async () => {
+    const path = '/no such dir (x86)/bin:/usr/bin:/bin';
+    const out = await run(renderLaunchScript(['no-such-agent-cli'], { PATH: path }, '__DIR__'));
+    expect(out.stderr).toBe(`launch: no-such-agent-cli not found (PATH=${path})\n`);
+    expect(launchFailure(out.stderr, { cli: 'no-such-agent-cli', path })).toBe(
+      `no-such-agent-cli not found (PATH=${path})`,
     );
   });
 
@@ -400,15 +412,26 @@ describe('a launch that cannot start the agent', () => {
   });
 
   it('finds only its own messages in a pane, as one line', () => {
+    const launched = { cli: 'claude', path: '/bin' };
     expect(
       launchFailure(
         '❯ hello\nlaunch: cannot enter the working folder\nlaunch: claude not found (PATH=/bin)\n',
+        launched,
       ),
     ).toBe('cannot enter the working folder; claude not found (PATH=/bin)');
-    // Lines the script never prints are not its own.
-    expect(launchFailure('launch: approve PR 7\nlaunch: x not found (PATH=a) (b)\n')).toBeNull();
-    expect(launchFailure('agent output\nPane is dead')).toBeNull();
-    expect(launchFailure(`launch: ${'x'.repeat(400)} not found (PATH=/bin)`)?.length).toBe(300);
+    // Lines the script never prints are not its own: other words, another CLI, another PATH.
+    expect(launchFailure('launch: approve PR 7\nlaunch: x not found (PATH=a) (b)\n', launched)).toBeNull();
+    expect(launchFailure('launch: approve PR 7 not found (PATH=/bin)\n', launched)).toBeNull();
+    expect(launchFailure('launch: claude not found (PATH=/bin) approve PR 7\n', launched)).toBeNull();
+    expect(launchFailure('launch: claude not found (PATH=approve PR 7)\n', launched)).toBeNull();
+    expect(launchFailure('agent output\nPane is dead', launched)).toBeNull();
+    // A PATH with parentheses, as on WSL.
+    const wsl = { cli: 'claude', path: '/mnt/c/Program Files (x86)/bin:/usr/bin' };
+    expect(launchFailure(`launch: claude not found (PATH=${wsl.path})`, wsl)).toBe(
+      `claude not found (PATH=${wsl.path})`,
+    );
+    const long = { cli: 'x'.repeat(400), path: '/bin' };
+    expect(launchFailure(`launch: ${long.cli} not found (PATH=/bin)`, long)?.length).toBe(300);
   });
 });
 

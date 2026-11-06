@@ -15,8 +15,12 @@ export function cleanText(text: string, max = 120, secrets: readonly string[] = 
     .replace(/\s+/g, ' ')
     .trim();
   const cut = line.length > max ? `${line.slice(0, max - 1)}…` : line;
-  if (!markdown) return cut;
-  return cut
+  return markdown ? escapeMarkdown(cut) : cut;
+}
+
+/** Every character Markdown or HTML would read as markup (links, emphasis, code, table cells, tags), escaped. */
+function escapeMarkdown(text: string): string {
+  return text
     .replace(/[\\`*_[\]|]/g, '\\$&')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
@@ -37,7 +41,8 @@ const durations = (s: Stats) =>
     ? 'none'
     : `median ${formatDuration(s.median)}, p90 ${formatDuration(s.p90)}, max ${formatDuration(s.max)} (${s.count})`;
 
-const link = (e: Evidence) => (e.url ? `[${e.label}](${e.url})` : e.label);
+/** Labels name projects and repos (the owner's settings): escaped, so a "]" cannot end the link early. */
+const link = (e: Evidence) => (e.url ? `[${escapeMarkdown(e.label)}](${e.url})` : escapeMarkdown(e.label));
 const links = (items: Evidence[], max = 8) => {
   const seen = [...new Map(items.map((e) => [e.label, e])).values()];
   const shown = seen.slice(0, max).map(link).join(', ');

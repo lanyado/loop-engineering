@@ -4,7 +4,7 @@ Notable changes to Loop Engineering. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
-Planned as **0.1.0**, the first tagged release. It will hold everything on `main` since the initial public release on 2026-10-24 (#1 to #37, summarised at the end of this section) and the changes below (#38 to #44).
+Planned as **0.1.0**, the first tagged release. It will hold everything on `main` since the initial public release on 2026-10-24 (#1 to #37, summarised at the end of this section) and the changes below (#38 to #45).
 
 ### Added
 
@@ -28,6 +28,16 @@ Planned as **0.1.0**, the first tagged release. It will hold everything on `main
 - Builder instructions: retry a failed push with growing waits for at least two hours, use `ask_human` for product decisions only, run long tests under `timeout` (#38).
 - New tmux windows set `remain-on-exit` in the same tmux command that creates them, so an agent that exits at once still leaves its window to inspect; a window whose options fail is killed (#41).
 - Auto-resume alerts give the failing command's own output and exit code, cut to fit, and sessions handled in one pass share one alert (#41).
+- A git command that runs out of time is stopped with everything it started (its own process group: `SIGTERM`, then `SIGKILL` 2 s later), not only git (#45).
+- The history note of a failed launch takes the "not found" line only when it names the CLI and `PATH` the launch script really ran with, and a `PATH` with parentheses (`Program Files (x86)`) is kept whole (#45).
+- An auto-resume alert stays under ask_human's limit as it counts it (an emoji is two), and a command stopped by a signal reads "(killed)", not "(exit null)" (#45).
+- The server's warning for git older than 2.26 says that no session can start (#45).
+
+### Fixed
+
+- `loop retro` escapes project and repo names in its evidence links, so a `]` in a name no longer breaks the link (#45).
+- A new email task's thread and its first mail are saved in one transaction (#45).
+- The test suites remove the temp folders and tmux socket files they make; the dashboard API takes an `uploadsDir` for files attached to tasks (default unchanged: the OS temp folder) (#45).
 
 ### Removed
 
@@ -40,6 +50,7 @@ Planned as **0.1.0**, the first tagged release. It will hold everything on `main
   - `-c` options turn off hooks (`core.hooksPath=/dev/null`), `core.fsmonitor`, the `ext::` transport, submodule recursion and signature checks.
   - `GIT_PROXY_COMMAND` is set empty, so no `core.gitProxy` runs.
   - `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` override the repo's own config: its filters, diff and merge drivers, pagers, editors, `core.sshCommand` and credential helpers. It is not a sandbox: agents can still read `.env` from disk as the same user ([What agents can see](docs/reference.md#what-agents-can-see)) (#44).
+  - **The PR loop's own git** in its job checkouts, which share the builder's `.git`, now runs through the same guard (#45). Before, only hooks and `fsmonitor` were off there, so a filter, credential helper or `core.sshCommand` a job planted in that `.git` still ran.
 - Email sender checks: a From header with two addresses is not trusted, the domain is taken after the last `@`, `EMAIL_ALLOWLIST` refuses many more public-provider domains, and a mail that copies the attachments list (or a look-alike of its heading) can only ever list files inside the channel's own folder. Each saved file is listed once, at the end of the request, with a content type that is a plain `type/subtype` or else `application/octet-stream` (#40).
 - `nodemailer` 10.3.1 and `mailparser` 3.14.2, past the address-parser advisories of earlier versions (#40).
 
@@ -50,6 +61,7 @@ Planned as **0.1.0**, the first tagged release. It will hold everything on `main
 - Reload open dashboard tabs after upgrading: an old bundle still expects `telegramAllowlist` in settings.
 - A tmux server started by an older version still holds `.env`'s secrets until it exits. The next session start removes them from its global environment. For a full clean, `tmux kill-server` when no builder is running ([the reference](docs/reference.md#what-agents-can-see)).
 - A variable an agent needs that is not on its allowlist (an OpenCode provider key, say) no longer reaches it: name it in `AGENT_ENV_EXTRA`.
+- If you proxy `git://` remotes through a global `core.gitProxy`, the server's git no longer uses it: `GIT_PROXY_COMMAND` is set empty, which turns every `core.gitProxy` off.
 - **Use Git 2.31 or later.**
   - On Git 2.26 to 2.30, git ignores `GIT_CONFIG_COUNT`, so the override of a repo's own filters, drivers and credential helpers is lost. The `-c` options and the empty `GIT_PROXY_COMMAND` still apply, and the server logs a warning at start.
   - Below 2.26 (Ubuntu 20.04 ships 2.25), `git config --list --show-scope` fails, so the guard refuses to run and every git command the runner makes fails: no session can start.

@@ -471,6 +471,12 @@ describe('collectRetro: reverts, automatic resumes and two projects with a repo 
       ]);
       expect(d.pauses.autoResumes.map((e) => e.label)).toEqual([`session ${s}`]);
       expect(d.pauses.autoResumeFailed.map((e) => e.label)).toEqual([`session ${s}`]);
+      // A label carries project and repo names, the owner's own text: escaped, so "]" cannot end the link.
+      const odd = {
+        ...d,
+        prs: { ...d.prs, reverted: [{ label: 'b]x/my_web#1', url: 'https://github.example/b/1' }] },
+      };
+      expect(renderRetro(odd)).toContain('[b\\]x/my\\_web#1](https://github.example/b/1)');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

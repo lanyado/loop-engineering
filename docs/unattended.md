@@ -140,9 +140,9 @@ Agents never inherit the server's environment, which holds all of `.env`. Each a
 
 A variable an agent needs that isn't on the list doesn't reach it, and the agent fails when it looks for it, not at launch. Name extra variables in `.env` with `AGENT_ENV_EXTRA`, comma-separated names or prefixes, such as `AGENT_ENV_EXTRA=AWS_*,OPENROUTER_API_KEY`. The server refuses to start if an entry covers one of its own secrets (`DASHBOARD_TOKEN`, `DASHBOARD_PASSWORD`, `DASHBOARD_SESSION_SECRET`, `MCP_TOKEN`, `EMAIL_APP_PASSWORD`), so those can never be passed through.
 
-The runner's own git commands in builders' repos (`status`, `diff`, `fetch`, `push`, `worktree`) run with only what pushing needs, with time limits.
+The runner's own git commands in builders' repos (`status`, `diff`, `fetch`, `push`, `worktree`), and the PR loop's in its job checkouts of those repos, run with only what pushing needs, with time limits. A command that runs out of time is stopped together with everything it started (a filter, `ssh`, a credential helper).
 
-- **On every command:** `-c` options turn off hooks, `fsmonitor`, the `ext::` transport, submodule recursion and signature checks, and `GIT_PROXY_COMMAND` is set empty.
+- **On every command:** `-c` options turn off hooks, `fsmonitor`, the `ext::` transport, submodule recursion and signature checks, and `GIT_PROXY_COMMAND` is set empty. If you proxy `git://` remotes through a global `core.gitProxy`, the server's own git loses that: the empty `GIT_PROXY_COMMAND` turns every `core.gitProxy` off.
 - **The repo's own config:** its filters, diff and merge drivers, pagers, editors, `core.sshCommand` and credential helpers are overridden through `GIT_CONFIG_COUNT`. That override needs Git 2.31 or later; Git 2.26 to 2.30 keeps everything else. Below 2.26, git can't list config scopes (`git config --list --show-scope`), so the guard refuses to run: every git command the runner makes fails, and no session can start.
 
 > [!WARNING]
@@ -261,7 +261,7 @@ WantedBy=timers.target
 systemctl --user daemon-reload && systemctl --user enable --now loop-retro.timer
 ```
 
-The report lands in `data/retros/<YYYY-MM>.md`. Add `--project <name> --file-request` to `ExecStart` to have that project's builder propose pipeline and prompt changes from its report each month. Try it first with `node scripts/loop.mjs retro --days 7 --stdout`.
+The report lands in `data/retros/<YYYY-MM>.md`, or `data/retros/<YYYY-MM>-<project>.md` with `--project`. Add `--project <name> --file-request` to `ExecStart` to have that project's builder propose pipeline and prompt changes from its report each month. Try it first with `node scripts/loop.mjs retro --days 7 --stdout`.
 
 ## Backups
 
