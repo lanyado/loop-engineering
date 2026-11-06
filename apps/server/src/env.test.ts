@@ -2,7 +2,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { fromRoot, loadRootEnv, REPO_ROOT } from './env.js';
+import { fromRoot, loadRootEnv, REPO_ROOT, rootEnvNames } from './env.js';
+import { hiddenTmuxEnv } from './runner.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -26,6 +27,25 @@ describe('env', () => {
     expect(loadRootEnv(root)).toBe(true);
     expect(process.env.LOOP_ENV_TEST_A).toBe('from-file');
     expect(process.env.LOOP_ENV_TEST_B).toBe('from-shell');
+  });
+
+  it("lists the names .env sets, so the runner keeps them out of tmux's global environment", () => {
+    const root = mkdtempSync(join(tmpdir(), 'loop-env-'));
+    dirs.push(root);
+    expect(rootEnvNames(root)).toEqual([]);
+    writeFileSync(join(root, '.env'), '# comment\nDASHBOARD_TOKEN=abc\nEMAIL_APP_PASSWORD="x y"\nEMPTY=\n');
+    expect(rootEnvNames(root)).toEqual(['DASHBOARD_TOKEN', 'EMAIL_APP_PASSWORD', 'EMPTY']);
+    // The runner hides the server's secrets and .env's names, except what agents and tmux get anyway.
+    expect(
+      hiddenTmuxEnv(['EMAIL_APP_PASSWORD', 'PATH', 'LANG', 'LC_ALL', 'TAVILY_API_KEY', 'GH_TOKEN']),
+    ).toEqual([
+      'DASHBOARD_TOKEN',
+      'DASHBOARD_PASSWORD',
+      'DASHBOARD_SESSION_SECRET',
+      'MCP_TOKEN',
+      'EMAIL_APP_PASSWORD',
+      'TAVILY_API_KEY',
+    ]);
   });
 
   it('resolves relative paths against the root', () => {

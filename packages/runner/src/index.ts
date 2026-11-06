@@ -18,6 +18,13 @@ export {
   type OpencodeRule,
   type SessionConfigPaths,
 } from './agent-config.js';
+export {
+  AGENT_ENV_ALLOWLIST,
+  TMUX_CLIENT_ENV,
+  WINDOW_ENV,
+  agentBaseEnvironment,
+  tmuxClientEnvironment,
+} from './agent-env.js';
 export { buildContinuationPrompt, type ContinuationInput, type RepoState } from './continuation.js';
 export { exec, ExecError, type ExecResult } from './drivers/exec.js';
 export { nodeFs, type Fs } from './drivers/fs.js';

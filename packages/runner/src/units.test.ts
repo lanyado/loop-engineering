@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -15,6 +15,13 @@ import {
   opencodePermission,
   type OpencodeRule,
 } from './agent-config.js';
+import {
+  AGENT_ENV_ALLOWLIST,
+  agentBaseEnvironment,
+  TMUX_CLIENT_ENV,
+  tmuxClientEnvironment,
+  WINDOW_ENV,
+} from './agent-env.js';
 import { buildContinuationPrompt } from './continuation.js';
 import { renderLaunchScript, shellQuote } from './launch.js';
 import { detectUsageLimit } from './usage-limit.js';
@@ -305,6 +312,84 @@ describe('launch script', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  it('gives the agent exactly its env and the terminal variables, nothing it was started with', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'loop-launch-'));
+    try {
+      const out = join(dir, 'env.txt');
+      const script = renderLaunchScript(
+        ['/bin/sh', '-c', `/usr/bin/env > '${out}'`],
+        { PATH: '/usr/bin:/bin', GIVEN: 'yes' },
+        dir,
+      );
+      const path = join(dir, 'launch.sh');
+      await writeFile(path, script);
+      // What a window on a tmux server started with the server's environment would hold.
+      await promisify(execFile)('sh', [path], {
+        env: { PATH: '/usr/bin:/bin', DASHBOARD_TOKEN: 'leak', TERM: 'tmux-256color', TMUX_PANE: '%3' },
+      });
+      const names = (await readFile(out, 'utf8'))
+        .split('\n')
+        .map((l) => l.split('=')[0])
+        .filter((n) => n && n !== 'PWD' && n !== 'SHLVL' && n !== '_' && n !== 'OLDPWD');
+      expect(names.sort()).toEqual(['GIVEN', 'PATH', 'TERM', 'TMUX_PANE']);
+      expect(await readFile(out, 'utf8')).toContain('TERM=tmux-256color\n');
+      expect(await readFile(out, 'utf8')).not.toContain('leak');
+      await expect(promisify(execFile)('test', ['-e', path])).rejects.toThrow();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('agent environment', () => {
+  const server = {
+    PATH: '/usr/bin',
+    HOME: '/home/u',
+    LANG: 'C.UTF-8',
+    LC_TIME: 'en_GB.UTF-8',
+    TERM: 'xterm',
+    TMUX: '/tmp/tmux-1000/default,1,0',
+    CLAUDE_CODE_OAUTH_TOKEN: 'oauth',
+    GH_TOKEN: 'gh',
+    SSH_AUTH_SOCK: '/run/agent',
+    DASHBOARD_TOKEN: 'secret',
+    DASHBOARD_PASSWORD: 'secret',
+    DASHBOARD_SESSION_SECRET: 'secret',
+    MCP_TOKEN: 'secret',
+    EMAIL_APP_PASSWORD: 'secret',
+    TAVILY_API_KEY: 'tv',
+    EMPTY: '',
+    UNSET: undefined,
+  };
+
+  it("an agent's allowlisted part holds the toolchain and logins, never the server's secrets", () => {
+    expect(agentBaseEnvironment(server)).toEqual({
+      PATH: '/usr/bin',
+      HOME: '/home/u',
+      LANG: 'C.UTF-8',
+      LC_TIME: 'en_GB.UTF-8',
+      CLAUDE_CODE_OAUTH_TOKEN: 'oauth',
+      GH_TOKEN: 'gh',
+      SSH_AUTH_SOCK: '/run/agent',
+    });
+  });
+
+  it('tmux runs with no credentials at all, but finds the same server', () => {
+    expect(tmuxClientEnvironment(server)).toEqual({
+      PATH: '/usr/bin',
+      HOME: '/home/u',
+      LANG: 'C.UTF-8',
+      LC_TIME: 'en_GB.UTF-8',
+      TERM: 'xterm',
+      TMUX: '/tmp/tmux-1000/default,1,0',
+    });
+  });
+
+  it('no secret name is on any list', () => {
+    for (const name of ['DASHBOARD_TOKEN', 'DASHBOARD_PASSWORD', 'DASHBOARD_SESSION_SECRET', 'MCP_TOKEN'])
+      expect([...AGENT_ENV_ALLOWLIST, ...TMUX_CLIENT_ENV, ...WINDOW_ENV]).not.toContain(name);
   });
 });
 

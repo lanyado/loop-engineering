@@ -1,3 +1,4 @@
+import { tmuxClientEnvironment } from '../agent-env.js';
 import { plainPane } from '../input-box.js';
 import { exec, ExecError } from './exec.js';
 
@@ -74,19 +75,38 @@ export interface RealTmuxOptions {
   /** Dedicated server socket (`tmux -L <name>`), e.g. "loop-test" in tests. Default: tmux's default server. */
   socketName?: string;
   bin?: string;
+  /**
+   * The environment tmux commands run with. A server they start copies it into its global
+   * environment, which every window inherits. Default: tmuxClientEnvironment(process.env), which
+   * holds no credentials.
+   */
+  env?: Record<string, string>;
+  /**
+   * Names removed from the server's global environment (`set-environment -gu`) in the same tmux
+   * command that makes each window: secrets a server started before (by an older runner, or from a
+   * shell holding .env's variables) may still hold. The agent never inherits them anyway (the launch
+   * script runs it under `env -i`); this keeps `tmux show-environment -g` from printing them.
+   */
+  unsetGlobalEnv?: readonly string[];
 }
+
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export class RealTmuxDriver implements TmuxDriver {
   private readonly bin: string;
   private readonly base: string[];
+  private readonly env: Record<string, string>;
+  private readonly unsetGlobal: string[];
 
   constructor(options: RealTmuxOptions = {}) {
     this.bin = options.bin ?? 'tmux';
     this.base = options.socketName ? ['-L', options.socketName] : [];
+    this.env = options.env ?? tmuxClientEnvironment(process.env);
+    this.unsetGlobal = [...new Set(options.unsetGlobalEnv ?? [])].filter((name) => ENV_NAME.test(name));
   }
 
   private async tmux(args: string[]): Promise<string> {
-    return (await exec(this.bin, [...this.base, ...args])).stdout;
+    return (await exec(this.bin, [...this.base, ...args], undefined, { env: this.env })).stdout;
   }
 
   private async hasSession(session: string): Promise<boolean> {
@@ -120,15 +140,17 @@ export class RealTmuxDriver implements TmuxDriver {
       name,
       value,
     ]);
+    // Run first in the same command list (which starts the server when none runs).
+    const scrub = this.unsetGlobal.flatMap((name) => ['set-environment', '-g', '-u', name, ';']);
     if (!(await this.hasSession(spec.session))) {
       try {
-        return await this.create(['new-session', '-s', spec.session, ...common, ...options]);
+        return await this.create([...scrub, 'new-session', '-s', spec.session, ...common, ...options]);
       } catch (err) {
         // Another start created the session between the check and here; fall through to new-window.
         if (!(err instanceof ExecError && /duplicate session/i.test(err.stderr))) throw err;
       }
     }
-    return await this.create(['new-window', '-a', '-t', last, ...common, ...options]);
+    return await this.create([...scrub, 'new-window', '-a', '-t', last, ...common, ...options]);
   }
 
   /**

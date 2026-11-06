@@ -164,7 +164,7 @@ const session = await runner.startSession(project.id, { text: 'Add a login page'
 - The project's env files and the `opensource-search` skill are written into the worktree, unless the repo tracks that path (then they are skipped with a warning). Both are hidden from `git status` via `info/exclude`.
 - The MCP config (ask_human, tavily, playwright, context7, github) and the OpenCode config are written to `WORKTREES_ROOT/.loop-runner/s<id>/`, never into the repo. A repo's own `.mcp.json` servers are copied in.
 - The model comes from Settings (`sessionModel`, default `opus`); the permission mode is always `auto`.
-- Agents run in windows of the tmux session `loop` (`tmux attach -t loop`).
+- Agents run in windows of the tmux session `loop` (`tmux attach -t loop`), with an allowlisted environment, never the server's: see [What agents can see](#what-agents-can-see).
 
 #### Confirming a message arrived
 
@@ -289,6 +289,15 @@ Start both with `npm start` (after `npm run build`), or each on its own: `npm ru
 - The server refuses to start with a non-loopback `SERVER_HOST` unless `ALLOW_NON_LOCAL_BIND=on`; with it, it starts with a loud warning.
 - CORS: with `CORS_ORIGINS` empty, `/api/*` allows only `http://127.0.0.1:<DASHBOARD_PORT>` and `http://localhost:<DASHBOARD_PORT>` (`DASHBOARD_PORT` default 3737).
 - In `password` mode, the login cookie is `Secure` only over https (or `x-forwarded-proto: https`), so login works on `http://localhost`.
+
+### What agents can see
+
+Builder agents run in tmux windows as your OS user, but they do not inherit the server's environment, which holds `.env`: `DASHBOARD_TOKEN`, the shared `MCP_TOKEN`, `DASHBOARD_PASSWORD`, `DASHBOARD_SESSION_SECRET` and any add-in's keys. An agent holding those could call `/api` as you and answer its own questions.
+
+- **The agent's environment is an allowlist.** The launch script runs the agent under `env -i` with only: the toolchain and locale (`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `TZ`, `LANG`, `LANGUAGE`, `LC_*`, `XDG_*` dirs, `DBUS_SESSION_BUS_ADDRESS`), the model login (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CONFIG_DIR`), what a builder needs to push and open its PR (`GH_TOKEN`, `GITHUB_TOKEN`, `GH_HOST`, `SSH_AUTH_SOCK`, `GIT_AUTHOR_*`, `GIT_COMMITTER_*`), proxies and CA bundles; the session's own variables (its own `MCP_TOKEN`, derived from the shared one, `LOOP_SESSION_ID`, `LOOP_SERVER_URL`, `MCP_TOOL_TIMEOUT`, `OPENCODE_CONFIG*`, and `TAVILY_API_KEY`, `CONTEXT7_API_KEY`, `GITHUB_PERSONAL_ACCESS_TOKEN`, `LOOP_HEAVY_*` when set); and the terminal variables tmux sets for the window (`TERM`, `COLORTERM`, `TMUX`, `TMUX_PANE`). The list is `AGENT_ENV_ALLOWLIST` in `packages/runner/src/agent-env.ts`; a variable your agents need that is not on it has to be added there. PR-loop jobs get a narrower list (`JOB_ENV_ALLOWLIST`, no GitHub or SSH).
+- **tmux's global environment holds no secrets.** A tmux server copies its first client's environment into its global environment, which every window inherits and `tmux show-environment -g` prints. The runner runs tmux with only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `TZ`, `LANG`, `LANGUAGE`, `LC_*`, `TERM`, `TMUX`, `TMUX_TMPDIR`, `XDG_CONFIG_HOME` and `XDG_RUNTIME_DIR`, so a server it starts holds nothing else. On a server that was already running (started from your shell, or by an older version), it removes the server's secrets and every name `.env` sets from the global environment (`set-environment -gu`) before each window; names on the allowlists stay. Anything else that server holds stays in its global environment, but no agent inherits it.
+- **After upgrading from a version without this,** the tmux server that runs your agents still holds the server's environment until it exits. The runner removes the names above at the next session start; to clear it at once, run `tmux set-environment -gu <NAME>` for each secret name, or end the sessions and `tmux kill-server` when none is running.
+- **This is not a sandbox.** Agents run as your user with your real `HOME`: an agent that goes looking can still read `.env` from the repo, or your tmux server's panes. Keeping the secrets out of the environment stops them from leaking by accident (`env`, a debug print, a log or a PR body) and from being one variable away; it does not contain a hostile agent. See [SECURITY.md](../SECURITY.md).
 
 ## The PR loop
 
