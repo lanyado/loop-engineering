@@ -6,6 +6,7 @@ Everything in detail: each package, the HTTP API, the PR loop, security. For ins
 - Build order and milestone status: [PLAN.md](../PLAN.md)
 - Rules for agents working in this repo: [CLAUDE.md](../CLAUDE.md)
 - Security model: [SECURITY.md](../SECURITY.md) and [Local-only operation](#local-only-operation)
+- Running it on an always-on server: [unattended.md](unattended.md); releases and upgrades: [RELEASING.md](../RELEASING.md)
 
 ## Layout
 

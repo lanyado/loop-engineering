@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/lanyado/loop-engineering/security/advisories/new
+    about: Report it privately, never in a public issue.
+  - name: Reference and setup
+    url: https://github.com/lanyado/loop-engineering/blob/main/docs/reference.md
+    about: Every feature, setting and API route in detail.
+  - name: Running Loop unattended
+    url: https://github.com/lanyado/loop-engineering/blob/main/docs/unattended.md
+    about: Services, limits, backups and upgrades on an always-on server.

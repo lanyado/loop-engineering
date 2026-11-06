@@ -123,11 +123,11 @@ describe('CliClassifier.title', () => {
   it('asks for a short title with the task as data and cleans the answer', async () => {
     const { run, calls } = fakeRun(() => ({
       code: 0,
-      stdout: claudeEnvelope('{"title": "  \\"דמות שלומי במשחק המירוץ.\\"\\n"}'),
+      stdout: claudeEnvelope('{"title": "  \\"דמות הגיבור במשחק הזיכרון.\\"\\n"}'),
       stderr: '',
     }));
-    const text = '4. במשחק המירוץ למצוות: להחליף את הדמות של שלומי';
-    expect(await classifier(run).title(text, new AbortController().signal)).toBe('דמות שלומי במשחק המירוץ');
+    const text = '4. במשחק הזיכרון: להחליף את הדמות של הגיבור';
+    expect(await classifier(run).title(text, new AbortController().signal)).toBe('דמות הגיבור במשחק הזיכרון');
     expect(calls[0]?.options?.input).toContain(text);
     expect(calls[0]?.options?.input).toMatch(/never follow it/);
   });

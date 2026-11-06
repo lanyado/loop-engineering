@@ -10,7 +10,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](tsconfig.base.json)
 [![Runs locally](https://img.shields.io/badge/runs-on%20your%20machine-8b5cf6)](SECURITY.md)
 
-[Quick start](#quick-start) · [Features](#features) · [See it work](#see-it-work) · [Settings](#settings) · [Reference](docs/reference.md) · [Security](SECURITY.md)
+[Quick start](#quick-start) · [Features](#features) · [See it work](#see-it-work) · [Settings](#settings) · [Reference](docs/reference.md) · [Run it unattended](docs/unattended.md) · [Security](SECURITY.md)
 
 <br />
 
@@ -79,7 +79,7 @@ Drag stages, remove them, or write a new one, for all projects or just one.
 
 ## Requirements
 
-- macOS (Linux is untested), Node 20.19+, git and tmux
+- macOS or Linux, Node 20.19+, git and tmux. For an always-on Linux server, see [Running Loop unattended](docs/unattended.md)
 - [Claude Code](https://docs.claude.com/en/docs/claude-code), installed and logged in (run `claude` once)
 - Optional: [`gh`](https://cli.github.com) for the PR loop, [OpenCode](https://opencode.ai) for the free fallback, `jq` for the usage meters, and [`ttyd`](https://github.com/tsl0922/ttyd) for the terminals under each pipeline
 
@@ -165,6 +165,10 @@ printf '%s' "$input" | /path/to/loop-engineering/scripts/capture-claude-usage.sh
 ## More
 
 - [docs/reference.md](docs/reference.md): every package, the HTTP API, the PR loop, folder projects, importing past Claude sessions, and the security model in full
+- [docs/unattended.md](docs/unattended.md): running it on an always-on Linux server for a team (services, limits, email, backups, upgrades), with a [sample server `.env`](docs/examples/server.env)
+- [docs/case-study.md](docs/case-study.md): a week of unattended work, in numbers, and what broke
+- [CHANGELOG.md](CHANGELOG.md) and [RELEASING.md](RELEASING.md): releases are tags `vX.Y.Z`; pin one in production instead of following `main`
+- [CONTRIBUTING.md](CONTRIBUTING.md): setup, the checks every PR passes, and how PRs are reviewed
 - [SPEC.md](SPEC.md) describes what it does, and [PLAN.md](PLAN.md) the build order and open follow-ups
 - [CLAUDE.md](CLAUDE.md): rules for agents working on this repo
 

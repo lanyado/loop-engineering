@@ -1,0 +1,27 @@
+name: Feature request
+description: Something Loop should do, or do differently.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you were trying to do, and what got in the way. Real cases help most.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like
+      description: How Loop could solve it. Say if a stage file, a project's `.loop-engineering/` folder or a `local/` add-in could already do it.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Other ways around it you have tried or considered.
+  - type: checkboxes
+    id: pr
+    attributes:
+      label: Contributing
+      options:
+        - label: I would like to open the PR for this (see CONTRIBUTING.md).
