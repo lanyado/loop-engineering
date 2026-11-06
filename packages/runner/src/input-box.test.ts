@@ -8,7 +8,7 @@ const IDLE = [
   '⏺ Compacted while idle, before the prompt cache expired',
   '❯ Resumed: the session was paused (agent_exited). Continue where you left off.',
   '  Reading the PR review feedback file',
-  '───────────────────────────── משחק חדש- לסדר את אבני החושן ─',
+  '───────────────────────────── משחק חדש- לסדר את קוביות הגן ─',
   '❯ ',
   '────────────────────────────────────────────────────────────',
   '  ⚡Boost 10.9K saved',
