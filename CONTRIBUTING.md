@@ -23,7 +23,7 @@ You don't need Claude Code, `gh` or a running server to work on most of the code
 
 ## The gate
 
-Every PR must pass these, the same as CI (`.github/workflows/ci.yml`):
+Every PR must pass these: CI's checks (`.github/workflows/ci.yml`, which also builds) plus `npx tsc -b`:
 
 ```sh
 npx tsc -b              # the build's project references

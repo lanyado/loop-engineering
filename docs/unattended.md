@@ -25,22 +25,24 @@ One machine runs everything: the server, the dashboard, the agents in tmux, and 
 ## The machine
 
 - **A user of its own.** Run Loop as one OS user (say `loop`) that holds only what the agents need: its Claude login, a `gh` login, git credentials for the repos it works on, and the projects' test credentials. Sessions and PR jobs run as this user with its real `HOME`, so they can reach anything it can ([SECURITY.md](../SECURITY.md)).
-- **Tools.** Node 20.19 or later, git, tmux, [Claude Code](https://docs.claude.com/en/docs/claude-code) logged in as that user, and [`gh`](https://cli.github.com) logged in (`gh auth login`) for the PR loop. `flock` (util-linux) for `scripts/heavy`: without it heavy runs have no limit. `sqlite3` for backups. Optional: OpenCode for the free fallback, `jq` for the usage meters, `ttyd` for the terminals under each pipeline.
+- **Tools.** Node 20.19 or later, git, tmux, [Claude Code](https://docs.claude.com/en/docs/claude-code) logged in as that user, and [`gh`](https://cli.github.com) logged in (`gh auth login`) for the PR loop. `flock` (util-linux) and `pgrep` (procps) for `scripts/heavy`: without `flock` heavy runs have no limit, and without `pgrep` a run stopped at its time limit leaves its browsers running. `sqlite3` for backups. Optional: OpenCode for the free fallback, `jq` for the usage meters, `ttyd` for the terminals under each pipeline.
 - **Git over HTTPS.** `gh auth setup-git` lets git use gh's login, so pushes and the loop's `gh` calls share one credential and one transport. An SSH outage at GitHub then can't stop pushes while the API works. The loop treats SSH failures as network failures and waits them out either way.
 - **Size.** What loads the machine is test and browser runs, not sessions: builders and PR jobs each run them. Before the [slot limit](#limits-on-load) existed, the load average reached 56–67 on 12 CPUs and QA jobs ran out of time.
 
 ## Install a release
 
-Run a release tag, not `main` ([RELEASING.md](../RELEASING.md)):
+Run a release tag, not `main` ([RELEASING.md](../RELEASING.md)). Do it in a login shell as the Loop user (`sudo -iu loop`, or `ssh loop@server`), so `PATH` includes `~/.local/bin`, where Claude Code's installer puts `claude`:
 
 ```sh
 git clone https://github.com/lanyado/loop-engineering.git ~/loop-engineering
 cd ~/loop-engineering
-git checkout v0.1.0          # the latest release
+git checkout v0.1.0          # the latest release: git tag --sort=-v:refname | head -1
 npm ci
 cp docs/examples/server.env .env
 npm run setup                # checks the tools, builds, fills in the tokens and WORKTREES_ROOT
 ```
+
+The first tag, v0.1.0, is cut once the changes this guide describes are on `main`. Until then there is no tag to check out: use `main` and pin the commit you tested.
 
 Then edit `.env`: the dashboard password and session secret, the email settings if you use email, and the limits. [`docs/examples/server.env`](examples/server.env) lists every variable with the values that suit a server.
 
@@ -58,14 +60,18 @@ Two systemd user units. Don't run `npm start` under systemd: it is one process f
 ```ini
 [Unit]
 Description=Loop Engineering server
-After=network-online.target
 
 [Service]
 WorkingDirectory=%h/loop-engineering
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=LANG=C.UTF-8
 Environment=TMPDIR=%h/.cache/loop-tmp
+# The database and everything else the server writes: readable by this user only.
+UMask=0077
 ExecStartPre=/bin/mkdir -p %h/.cache/loop-tmp
+# Start the tmux server from a clean environment before Loop can, so agents don't inherit .env's
+# secrets (see "The tmux session"). The leading - ignores the failure when it is already running.
+ExecStartPre=-/usr/bin/env -i HOME=%h USER=%u PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 TMPDIR=%h/.cache/loop-tmp tmux new-session -d -s loop-keep "sleep infinity"
 ExecStart=/usr/bin/env node apps/server/dist/main.js
 Restart=always
 RestartSec=5
@@ -104,7 +110,11 @@ journalctl --user -u loop-server -f
 ```
 
 - **`PATH`** must reach `node`, `git`, `tmux`, `gh` and `claude` (and `opencode`, `ttyd`, `jq` if you use them). Claude's installer puts it in `~/.local/bin`. The server reads everything else from `.env` in the repo root; the dashboard reads its own variables from the same file ([how](reference.md#local-only-operation)).
-- **`KillMode=process`** matters. The server starts the tmux server the agents run in, so tmux lives in this unit's cgroup. With the default `KillMode`, every `systemctl --user restart loop-server` (an upgrade, a crash) would kill every builder. With `process`, only the Node process stops: builders keep working, and a restarted server finds them again. Running PR jobs are stopped and start again from scratch after the restart.
+- **`KillMode=process`** matters. The tmux server the agents run in is started from this unit, so it lives in the unit's cgroup. With the default `KillMode`, every `systemctl --user restart loop-server` (an upgrade, a crash) would kill every builder. With `process`, only the Node process is stopped: builders keep working, and a restarted server finds them again. systemd logs a warning that `KillMode=process` is unsafe; here it is deliberate. The consequences:
+  - On a clean stop the server ends its running PR jobs itself, and they start again from scratch after the restart.
+  - After a crash or `kill -9`, those jobs' processes keep running, and the restarted loop starts the same job again in the same checkout. Find leftovers by their folder, `ls -l /proc/*/cwd 2>/dev/null | grep .loop-jobs`, and stop them.
+  - `systemctl --user stop loop-server` doesn't stop the agents. To stop everything, end the sessions first, or `tmux kill-server` after the stop.
+- **`UMask=0077`** keeps `data/` (the database holds questions, email threads and history) private to the Loop user. For an existing install, also run `chmod -R go-rwx data`.
 - **Linger.** Without `loginctl enable-linger`, logging out of the last SSH session stops the user's systemd instance, and Loop and tmux with it.
 - **A bad `.env`** makes the server exit with a list of what is wrong, and systemd retries every 5 seconds. Read the log rather than waiting.
 
@@ -113,19 +123,32 @@ journalctl --user -u loop-server -f
 Agents run as windows of the tmux session `loop` on the Loop user's default tmux server. `tmux attach -t loop` shows them; detach with Ctrl-b d. The dashboard's terminals open the same windows.
 
 - Don't `tmux kill-server` or close windows to stop work: end the session (**End session** under its ⋯ on the board, or `POST /api/sessions/:id/end`). A window closed from outside is resumed a minute later, like a crash.
-- tmux keeps the environment of the process that started its server. If the server unit starts it, agents get the unit's `PATH`, `LANG` and `TMPDIR`. If you start a tmux of your own as the Loop user first, Loop uses that server and agents get your shell's environment. Keep personal tmux sessions to another user.
 - A reboot kills tmux. When the server comes back, the monitor finds every agent gone, alerts once, and resumes each session ([below](#when-an-agent-goes-away)).
+- Keep personal tmux sessions to another user: Loop uses whatever tmux server that user has.
+
+> [!WARNING]
+> **Agents can read `.env` unless tmux starts clean.** Every window gets the environment of the process that started the tmux server, whichever client later opens the window. When Loop itself starts tmux, that is the server process, which has loaded all of `.env`. Every builder can then read `DASHBOARD_TOKEN`, `EMAIL_APP_PASSWORD`, the dashboard password and session secret, and, through `tmux show-environment -g`, the shared `MCP_TOKEN`. With those, an agent could answer its own questions, approve merges or turn on auto-merge through the API. A code fix that starts tmux with a scrubbed environment is coming. Until it lands:
+>
+> - Keep the second `ExecStartPre` line of the server unit above. It starts the tmux server, with an idle session `loop-keep`, from an environment holding only `HOME`, `USER`, `PATH`, `LANG` and `TMPDIR`, before Loop starts. Each agent still gets what its launch script sets: its own session token, `TAVILY_API_KEY`, `CONTEXT7_API_KEY`, `GITHUB_PERSONAL_ACCESS_TOKEN` and the `LOOP_HEAVY_*` limits. If `.env` sets `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`, which builders need too, add them to that line.
+> - Check it after every start, and after any tmux death alert. This prints 0 when tmux is clean, and never prints a value:
+>
+>   ```sh
+>   tmux show-environment -g | grep -c -E '^(DASHBOARD_TOKEN|MCP_TOKEN|EMAIL_APP_PASSWORD|DASHBOARD_PASSWORD|DASHBOARD_SESSION_SECRET)='
+>   ```
+>
+> - It is not 0 when Loop started tmux itself: on a first start without that line, or after the tmux server died while Loop was running. Clean it at a quiet moment: `systemctl --user stop loop-server && tmux kill-server && systemctl --user start loop-server`. That kills the builders, and they are resumed a minute later with their worktrees intact ([below](#when-an-agent-goes-away)).
+> - Even with tmux clean, agents run as the Loop user and could read `.env` itself from the repo folder. Treat everything a builder works on as able to reach the dashboard, and send tasks only from people you would give dashboard access.
 
 ## Limits on load
 
 These settings bound how much runs at once, all in `.env`:
 
-| Variable                                              | Default | What it limits                                                                                                                     |
-| ----------------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `LOOP_MAX_JOBS`                                       | 4       | PR-loop agent jobs (tests, review, QA, custom checks) at once                                                                      |
-| `LOOP_HEAVY_SLOTS`                                    | 3       | Heavy runs at once on the machine: the loop's tests, browser and shell-check jobs, and builders' browser suites and full test runs |
-| `LOOP_JOB_TIMEOUT_MINUTES`, `LOOP_QA_TIMEOUT_MINUTES` | 30, 15  | One job's run time. A job killed at its timeout gets twice the time on its next try, at most 4x                                    |
-| `LOOP_HEAVY_MAX_SECONDS`                              | 7200    | One heavy run's time: then TERM, KILL 30 seconds later, and its slot is free                                                       |
+| Variable                                              | Default | What it limits                                                                                                                                             |
+| ----------------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `LOOP_MAX_JOBS`                                       | 4       | PR-loop agent jobs (tests, review, QA, custom checks) at once                                                                                              |
+| `LOOP_HEAVY_SLOTS`                                    | 3       | Heavy runs at once on the machine: the loop's tests, browser and shell-check jobs, and builders' browser suites and full test runs                         |
+| `LOOP_JOB_TIMEOUT_MINUTES`, `LOOP_QA_TIMEOUT_MINUTES` | 30, 15  | One job's run time; the second applies to every job that drives a browser. A job killed at its timeout gets twice the time on its next try, at most 4x     |
+| `LOOP_HEAVY_MAX_SECONDS`                              | 7200    | One heavy run of a builder (or yours): then TERM, KILL 30 seconds later, and its slot is free. The loop's own slots are bounded by the job timeout instead |
 
 `scripts/heavy <command>` waits for a free slot and returns the command's exit code. Put the timeout inside it, so waiting doesn't count:
 
@@ -135,7 +158,7 @@ These settings bound how much runs at once, all in `.env`:
 
 The loop takes a slot for each heavy job before its timeout starts; after 30 minutes without one, the job runs anyway and logs it. Builders are told to use the script (with its absolute path) for browser suites and full QA, and to run long tests under `timeout`, but nothing forces them. Use it yourself for anything heavy you run on the server. Conflict fixes and Production Guardian jobs take no slot, and **the number of sessions building at once has no limit**: if the load stays above the CPU count, lower `LOOP_HEAVY_SLOTS` and send fewer tasks at once.
 
-A test run stuck at 0% CPU (a browser waiting on a dialog, a server that never came up) holds its slot until `LOOP_HEAVY_MAX_SECONDS`. A builder idle with undelivered work and a background shell running gets a reminder after 45 minutes that its run may have hung.
+A test run stuck at 0% CPU (a browser waiting on a dialog, a server that never came up) holds its slot until `LOOP_HEAVY_MAX_SECONDS` in a builder, or until the job timeout in a loop job. A builder idle with undelivered work and a background shell running gets a reminder after 45 minutes that its run may have hung.
 
 ## Temporary files
 
@@ -175,10 +198,13 @@ With the PR loop on, the Guardian checks a repo's live site after each deploy an
 
 ```sh
 TOKEN=$(grep '^DASHBOARD_TOKEN=' ~/loop-engineering/.env | cut -d= -f2-)
-curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/api/projects/1 \
+API=http://127.0.0.1:8787/api
+curl -s -H "Authorization: Bearer $TOKEN" $API/projects | jq '.projects[] | { id, name }'   # find the id
+ID=2   # the project's id from that list
+curl -s -H "Authorization: Bearer $TOKEN" $API/projects/$ID \
   | jq '{ repos: [ .project.repos[] | .productionUrl = "https://www.example.com" ] }' \
   | curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-      -d @- http://127.0.0.1:8787/api/projects/1
+      -d @- $API/projects/$ID
 ```
 
 A failing area is retried once, and a pass on retry is recorded as flaky. What still fails is diagnosed and sent to a builder as a request, with evidence under `LOOP_JOBS_ROOT/guardian/run<id>/`. A check that could not run is an `error` run, retried after 30 minutes. The jobs sign in only with test accounts from the project's env files, so keep only test credentials there. `"guardian": false` in a project's `pipeline.json` turns it off for that project.
@@ -197,6 +223,7 @@ Description=Loop Engineering monthly retro
 Type=oneshot
 WorkingDirectory=%h/loop-engineering
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+UMask=0077
 ExecStart=/usr/bin/env node scripts/loop.mjs retro
 ```
 
@@ -246,6 +273,7 @@ Description=Loop Engineering database backup
 [Service]
 Type=oneshot
 WorkingDirectory=%h/loop-engineering
+UMask=0077
 # systemd needs $$ for $ and %% for %.
 ExecStart=/bin/sh -c 'mkdir -p data/backups && sqlite3 data/loop.db ".backup data/backups/loop-$$(date +%%F).db" && find data/backups -name "loop-*.db" -mtime +14 -delete'
 ```
@@ -268,7 +296,17 @@ WantedBy=timers.target
 systemctl --user daemon-reload && systemctl --user enable --now loop-backup.timer
 ```
 
-It keeps 14 days. Copy `data/` off the machine as well (`rsync`, your backup tool): a backup on the same disk doesn't survive the disk. To restore, stop both services, copy a backup over `data/loop.db`, delete `data/loop.db-wal` and `data/loop.db-shm`, and start them.
+It keeps 14 days. Copy `data/` off the machine as well (`rsync`, your backup tool): a backup on the same disk doesn't survive the disk.
+
+To restore, stop everything that opens the database, remove its write-ahead files **before** copying (a stale WAL would be replayed onto the restored file), copy, and start again:
+
+```sh
+cd ~/loop-engineering
+systemctl --user stop loop-server loop-dashboard loop-backup.timer loop-retro.timer
+rm -f data/loop.db-wal data/loop.db-shm
+cp data/backups/loop-YYYY-MM-DD.db data/loop.db
+systemctl --user start loop-server loop-dashboard loop-backup.timer loop-retro.timer
+```
 
 ## Upgrades
 

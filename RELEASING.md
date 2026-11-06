@@ -17,7 +17,7 @@ While the major version is 0:
 
 From an up-to-date `main` with every PR for the release merged:
 
-1. **Check it.** The same gate as CI, on the commit you will tag:
+1. **Check it.** CI's checks plus `npx tsc -b`, on the commit you will tag:
 
    ```sh
    git switch main && git pull --ff-only
@@ -32,7 +32,7 @@ From an up-to-date `main` with every PR for the release merged:
    [X.Y.Z]: https://github.com/lanyado/loop-engineering/compare/vPREVIOUS...vX.Y.Z
    ```
 
-   (For the first release, `[0.1.0]: https://github.com/lanyado/loop-engineering/releases/tag/v0.1.0`.) Every migration and every action an operator must take goes under **Upgrade notes**, with the commands.
+   (For the first release, `[0.1.0]: https://github.com/lanyado/loop-engineering/releases/tag/v0.1.0`.) Replace any note written while the section was unreleased (such as "Planned as 0.1.0…") with a one-line summary of the release, since the section becomes the release notes as written. Every migration and every action an operator must take goes under **Upgrade notes**, with the commands.
 
 3. **Bump the version** in the root `package.json` only, without creating a tag yet:
 
@@ -42,7 +42,7 @@ From an up-to-date `main` with every PR for the release merged:
 
    This also updates the root entry in `package-lock.json`.
 
-4. **Merge it.** Open a PR with the two files (`Release X.Y.Z`), let CI pass, and squash-merge it.
+4. **Merge it.** Open a PR with the three files (`CHANGELOG.md`, `package.json`, `package-lock.json`) titled `Release X.Y.Z`, let CI pass, and squash-merge it.
 
 5. **Tag the merge commit** and push the tag:
 
@@ -61,11 +61,11 @@ From an up-to-date `main` with every PR for the release merged:
 
 Never move or delete a tag once pushed: production may be pinned to it. Fix forward with a patch release.
 
-**Optional: automate step 6.** [`docs/examples/release.yml`](docs/examples/release.yml) is a GitHub Actions workflow that runs on a pushed `vX.Y.Z` tag. It checks that the tag matches `package.json`, runs the same gate as CI, and creates the release from the changelog section, unless the release exists already. It needs no secrets beyond the built-in `GITHUB_TOKEN`. To turn it on, move it to `.github/workflows/release.yml` and push that commit; pushing a workflow file needs a GitHub token with the `workflow` scope (`gh auth refresh -s workflow`).
+**Optional: automate step 6.** [`docs/examples/release.yml`](docs/examples/release.yml) is a GitHub Actions workflow that runs on a pushed `vX.Y.Z` tag. It checks that the tag matches `package.json`, runs CI's checks, and creates the release from the changelog section, unless the release exists already. It needs no secrets beyond the built-in `GITHUB_TOKEN`. To turn it on, move it to `.github/workflows/release.yml` and push that commit; pushing a workflow file needs a GitHub token with the `workflow` scope (`gh auth refresh -s workflow`).
 
 ## Running a release in production
 
-Check out the tag instead of following `main`. A fresh install:
+Check out the tag instead of following `main`. There are no tags yet: v0.1.0 is to be cut right after the PRs it covers (#39 to #43) are merged. A fresh install:
 
 ```sh
 git clone https://github.com/lanyado/loop-engineering.git
@@ -104,13 +104,14 @@ journalctl --user -u loop-server -n 50 --no-pager
 
 Running builders are not stopped by a server restart (the tmux server is left alone, see [the guide](docs/unattended.md#services)). They keep the instructions they started with until their next resume. Running PR jobs are interrupted and start again after the restart.
 
-**To roll back**, stop both services, `git checkout v<previous>`, `npm ci && npm run build`, and, if the newer version ran a migration, restore the backup before starting:
+**To roll back**, stop the services and the timers that open the database, `git checkout v<previous>`, `npm ci && npm run build`, and, if the newer version ran a migration, restore the backup before starting. Remove the write-ahead files before copying: a stale WAL would be replayed onto the restored file and migrate it again.
 
 ```sh
-systemctl --user stop loop-server loop-dashboard
+systemctl --user stop loop-server loop-dashboard loop-backup.timer loop-retro.timer
 git checkout vPREVIOUS && npm ci && npm run build
-cp data/loop.db.pre-vX.Y.Z data/loop.db && rm -f data/loop.db-wal data/loop.db-shm
-systemctl --user start loop-server loop-dashboard
+rm -f data/loop.db-wal data/loop.db-shm
+cp data/loop.db.pre-vX.Y.Z data/loop.db
+systemctl --user start loop-server loop-dashboard loop-backup.timer loop-retro.timer
 ```
 
 Older code refuses a newer database (`Database schema version N is newer than this code (M)`), so the restore is not optional after a migration. Anything recorded between the upgrade and the rollback is lost with it: sessions started since are no longer known, so their PRs leave the loop (they stay open on GitHub) and their tmux windows keep running until you close them (`tmux attach -t loop`). Roll back soon, or not at all.

@@ -1,11 +1,11 @@
 # Case study: a week of unattended work
 
-A small team building a children's content site ran Loop Engineering on one always-on Linux server in the first week of November 2026, mostly without anyone watching it. This page covers what happened and what broke along the way, with the numbers `loop retro` produced for 2026-11-01 to 2026-11-06. The site, its people and its repositories stay unnamed.
+A small team ran Loop Engineering on one always-on Linux server for one week, mostly without anyone watching it. This page covers what happened and what broke along the way, with the numbers `loop retro` produced for that week. The site, its people and its repositories stay unnamed.
 
 ## The setup
 
-- **The site.** Hebrew and English: browser games, comics, coloring pages, and voice lines recorded for its characters. Many changes are to games, which have browser tests.
-- **The team.** A few people sending tasks by email and through the dashboard, in both languages. One technical owner got the loop's own decisions and the agents' technical questions.
+- **The site.** A content website with browser games and other interactive pages, each covered by browser tests.
+- **The team.** A few people sending tasks by email and through the dashboard. One technical owner got the loop's own decisions and the agents' technical questions.
 - **The machine.** One Debian server with 12 CPUs and 31 GB of RAM, running the server, the dashboard, the builders in tmux and the PR loop's jobs. [The guide](unattended.md) describes the same setup.
 - **The pipeline.** Tests, code review, QA in a browser, merge, deploy watch, and the Production Guardian checking the live site after each deploy and once a day.
 
