@@ -1,4 +1,5 @@
 import { WINDOW_ENV } from './agent-env.js';
+import { sanitizeLine } from './sanitize.js';
 
 /** POSIX single-quote quoting: safe for any string, newlines included. */
 export function shellQuote(value: string): string {
@@ -6,6 +7,25 @@ export function shellQuote(value: string): string {
 }
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** Starts every line the script prints about its own failure; launchFailure() finds them in the pane. */
+const LAUNCH_PREFIX = 'launch:';
+
+/**
+ * What the launch script said about why the agent never started, from the dead pane's text: its
+ * "launch:" lines as one line, or null. The runner puts it in the session history, since the window
+ * is killed right after.
+ */
+export function launchFailure(pane: string): string | null {
+  const said = pane
+    .split('\n')
+    .map((l) => sanitizeLine(l))
+    .filter((l) => l.startsWith(`${LAUNCH_PREFIX} `))
+    .map((l) => l.slice(LAUNCH_PREFIX.length + 1));
+  if (said.length === 0) return null;
+  const text = said.join('; ');
+  return text.length > 300 ? `${text.slice(0, 299)}…` : text;
+}
 
 /** Passed to the script's second run, so it knows it runs in the clean environment. */
 const CLEAN_RUN = '--clean-env';
@@ -29,12 +49,14 @@ export function renderLaunchScript(argv: string[], env: Record<string, string>, 
     `if [ "$1" != ${CLEAN_RUN} ]; then`,
     `  set -- /bin/sh "$0" ${CLEAN_RUN}`,
     ...WINDOW_ENV.map((name) => `  [ -z "\${${name}+x}" ] || set -- "${name}=$${name}" "$@"`),
-    '  [ -x /usr/bin/env ] || { rm -f -- "$0"; echo "launch: /usr/bin/env not found" >&2; exit 127; }',
+    `  [ -x /usr/bin/env ] || { rm -f -- "$0"; echo "${LAUNCH_PREFIX} /usr/bin/env not found" >&2; exit 127; }`,
     '  exec /usr/bin/env -i "$@"',
     'fi',
     'rm -f -- "$0"',
-    `cd ${shellQuote(cwd)} || exit 1`,
+    `cd ${shellQuote(cwd)} || { echo "${LAUNCH_PREFIX} cannot enter the working folder" >&2; exit 1; }`,
     ...Object.entries(env).map(([name, value]) => `export ${name}=${shellQuote(value)}`),
+    // A CLI missing from the PATH the agent gets (the server's) is the likely failure: say so.
+    `command -v ${shellQuote(argv[0] ?? '')} >/dev/null 2>&1 || { printf '${LAUNCH_PREFIX} %s not found (PATH=%s)\\n' ${shellQuote(argv[0] ?? '')} "$PATH" >&2; exit 127; }`,
     `exec ${argv.map(shellQuote).join(' ')}`,
     '',
   ];

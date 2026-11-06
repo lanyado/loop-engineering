@@ -40,7 +40,7 @@ import type { Fs } from './drivers/fs.js';
 import type { GitDriver } from './drivers/git.js';
 import type { TmuxDriver, TmuxServer, TmuxWindow } from './drivers/tmux.js';
 import { sessionInstructions } from './instructions.js';
-import { renderLaunchScript, shellQuote } from './launch.js';
+import { launchFailure, renderLaunchScript, shellQuote } from './launch.js';
 import { inputBoxHasText, inputBoxHolds, inputBoxText } from './input-box.js';
 import { sanitizeLine } from './sanitize.js';
 import { transcriptHas } from './transcript.js';
@@ -908,6 +908,12 @@ export class SessionRunner {
           return null;
         }
         if (!window) vanished.add(s.id);
+        // A launch that failed (no CLI on PATH, no /usr/bin/env) said why in the pane: keep that, since
+        // the window goes now.
+        const said = window
+          ? launchFailure(await this.deps.tmux.capture(window.target, 40).catch(() => ''))
+          : null;
+        const why = said ? ` The launch script said: ${said}.` : '';
         await this.killOwnWindow(s);
         if (store.projects.get(s.projectId)?.kind === 'folder') {
           // A folder runs one session at a time: a paused dead session would block it until someone
@@ -920,7 +926,7 @@ export class SessionRunner {
             text:
               `The ${s.provider}/${s.model} agent of folder session ${s.id} is gone (tmux window ` +
               `${s.tmuxTarget ?? 'none'} closed or its process exited). Session ended so the folder is free; ` +
-              'its files are untouched.',
+              `its files are untouched.${why}`,
           });
           return ended;
         }
@@ -937,7 +943,7 @@ export class SessionRunner {
             projectId: s.projectId,
             sessionId: s.id,
             kind: 'decision',
-            text: `${AGENT_GONE} the ${s.provider}/${s.model} agent of session ${s.id} is gone (${how}). Session paused (agent_exited); resume relaunches it.`,
+            text: `${AGENT_GONE} the ${s.provider}/${s.model} agent of session ${s.id} is gone (${how}). Session paused (agent_exited); resume relaunches it.${why}`,
           });
           return updated;
         });

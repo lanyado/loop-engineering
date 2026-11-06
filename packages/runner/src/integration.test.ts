@@ -42,6 +42,13 @@ async function waitFor<T>(
   }
 }
 
+/** Kills a test's own tmux server and removes its socket file, which tmux leaves behind. */
+async function dropServer(socket: string): Promise<void> {
+  await run('tmux', ['-L', socket, 'kill-server']).catch(() => undefined);
+  const uid = process.getuid?.() ?? 0;
+  await rm(join(process.env.TMUX_TMPDIR || '/tmp', `tmux-${uid}`, socket), { force: true });
+}
+
 const exists = (p: string) =>
   stat(p).then(
     () => true,
@@ -59,7 +66,7 @@ describe.skipIf(!hasTmux())('runner with real tmux (fake agents)', () => {
 
   afterAll(async () => {
     store.close();
-    await run('tmux', ['-L', SOCKET, 'kill-server']).catch(() => undefined);
+    await dropServer(SOCKET);
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -346,7 +353,7 @@ describe.skipIf(!hasTmux())("the tmux server's pid and start time (real tmux)", 
   // Its own server, never the default one or the other tests'.
   const socket = `loop-test-server-${process.pid}`;
   afterAll(async () => {
-    await run('tmux', ['-L', socket, 'kill-server']).catch(() => undefined);
+    await dropServer(socket);
   });
 
   it('reads them while the server runs, and null once it is gone', async () => {
@@ -365,7 +372,7 @@ describe.skipIf(!hasTmux())("the tmux server's pid and start time (real tmux)", 
 describe.skipIf(!hasTmux())('an agent window keeps its dead pane (real tmux)', () => {
   const socket = `loop-test-dead-${process.pid}`;
   afterAll(async () => {
-    await run('tmux', ['-L', socket, 'kill-server']).catch(() => undefined);
+    await dropServer(socket);
   });
 
   it('stays with a dead pane when its process exits, so it reads as exited, not closed', async () => {
@@ -398,7 +405,7 @@ describe.skipIf(!hasTmux())('a window that cannot be set up (real tmux)', () => 
     dir = await mkdtemp(join(tmpdir(), 'loop-tmux-bin-'));
   });
   afterAll(async () => {
-    await run('tmux', ['-L', socket, 'kill-server']).catch(() => undefined);
+    await dropServer(socket);
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -475,7 +482,7 @@ describe.skipIf(!hasTmux())("an agent never sees the server's secrets (real tmux
   });
   afterAll(async () => {
     store.close();
-    await run('tmux', ['-L', socket, 'kill-server']).catch(() => undefined);
+    await dropServer(socket);
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -554,7 +561,7 @@ describe.skipIf(!hasTmux())("an agent never sees the server's secrets (real tmux
         for (const name of Object.keys(secrets)) delete process.env[name];
       }
       // Ending the only window may have ended the server already.
-      await run('tmux', ['-L', socket, 'kill-server']).catch(() => undefined);
+      await dropServer(socket);
     },
   );
 

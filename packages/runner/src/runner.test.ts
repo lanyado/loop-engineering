@@ -67,7 +67,7 @@ describe('startSession', () => {
     const w = h.window(s.tmuxTarget);
     expect(w).toMatchObject({ session: 'loop', name: 's1', cwd: WT });
     const script = h.script(w);
-    expect(script).toContain(`cd '${WT}' || exit 1`);
+    expect(script).toContain(`cd '${WT}' || { echo "launch: cannot enter the working folder" >&2; exit 1; }`);
     expect(script).toContain("export MCP_TOOL_TIMEOUT='1200000'");
     // Only the session's own token reaches the agent, never the shared MCP_TOKEN.
     expect(script).toContain(`export MCP_TOKEN='${sessionToken('tok-123', s.id)}'`);
@@ -1108,6 +1108,19 @@ describe('reconcile', () => {
     h.window(s.tmuxTarget).dead = true;
     expect((await h.runner.reconcile()).map((x) => x.id)).toEqual([s.id]);
     expect(h.tmux.killed).toEqual([s.tmuxTarget]);
+  });
+
+  it('keeps what a failed launch said in the history before closing its window', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    h.window(s.tmuxTarget).dead = true;
+    h.tmux.print(
+      s.tmuxTarget ?? '',
+      'launch: claude not found (PATH=/usr/bin:/bin)\n\nPane is dead (status 127)\n',
+    );
+    await h.runner.reconcile();
+    const gone = h.store.history.list({ sessionId: s.id }).find((e) => e.text.includes('is gone'));
+    expect(gone?.text).toMatch(/The launch script said: claude not found \(PATH=\/usr\/bin:\/bin\)\.$/);
   });
 
   it('leaves paused and ended sessions alone', async () => {

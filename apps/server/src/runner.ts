@@ -2,24 +2,26 @@ import { isAbsolute } from 'node:path';
 import type { Store } from '@loop-engineering/core';
 import {
   AGENT_ENV_ALLOWLIST,
-  DEFAULT_MCP_TOKEN_ENV,
   DefaultAgentCli,
   nodeFs,
+  parseAgentEnvExtra,
   RealGitDriver,
   RealTmuxDriver,
+  SERVER_SECRET_ENV,
   SessionRunner,
   TMUX_CLIENT_ENV,
   type RunnerConfig,
 } from '@loop-engineering/runner';
 import { ConfigError, type ServerConfig } from './config.js';
 
-/** The server's own secrets, wherever they were set (.env, the shell, a service file). */
-export const SERVER_SECRET_ENV = [
-  'DASHBOARD_TOKEN',
-  'DASHBOARD_PASSWORD',
-  'DASHBOARD_SESSION_SECRET',
-  DEFAULT_MCP_TOKEN_ENV,
-] as const;
+/** AGENT_ENV_EXTRA, checked at start: a malformed entry, or one naming a server secret, stops it. */
+export function checkAgentEnvExtra(env: NodeJS.ProcessEnv): string[] {
+  try {
+    return parseAgentEnvExtra(env.AGENT_ENV_EXTRA);
+  } catch (error) {
+    throw new ConfigError((error as Error).message);
+  }
+}
 
 /**
  * Names the runner removes from the tmux server's global environment before each window: the
@@ -47,6 +49,7 @@ export function runnerFromEnv(
   } = {},
 ): ((store: Store) => SessionRunner) | null {
   const { envFileNames = [], ...runnerOptions } = options;
+  checkAgentEnvExtra(env);
   const worktreesRoot = env.WORKTREES_ROOT?.trim();
   if (!worktreesRoot) return null;
   if (!isAbsolute(worktreesRoot)) throw new ConfigError('WORKTREES_ROOT must be an absolute path');
@@ -57,7 +60,7 @@ export function runnerFromEnv(
       {
         store,
         tmux: new RealTmuxDriver({ unsetGlobalEnv }),
-        git: new RealGitDriver(),
+        git: new RealGitDriver({ sourceEnv: env }),
         fs: nodeFs,
         agentCli: new DefaultAgentCli(),
       },
