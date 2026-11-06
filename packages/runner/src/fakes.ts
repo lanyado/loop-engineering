@@ -17,6 +17,8 @@ export interface FakeWindow extends NewWindow {
   keys: string;
   /** Simulates remain-on-exit: the process exited but the window stayed. */
   dead: boolean;
+  /** When the process exited (epoch ms), as tmux's pane_dead_time reports it. */
+  deadAt?: number;
 }
 
 export class FakeTmuxDriver implements TmuxDriver {
@@ -67,7 +69,12 @@ export class FakeTmuxDriver implements TmuxDriver {
     return Promise.resolve(
       [...this.windows.values()]
         .filter((w) => w.session === session)
-        .map((w) => ({ target: w.target, name: w.name, dead: w.dead })),
+        .map((w) => ({
+          target: w.target,
+          name: w.name,
+          dead: w.dead,
+          ...(w.dead && w.deadAt !== undefined ? { deadAt: w.deadAt } : {}),
+        })),
     );
   }
 

@@ -20,15 +20,28 @@ export {
 } from './agent-config.js';
 export {
   AGENT_ENV_ALLOWLIST,
+  GIT_ENV_ALLOWLIST,
+  SERVER_SECRET_ENV,
   TMUX_CLIENT_ENV,
   WINDOW_ENV,
   agentBaseEnvironment,
+  gitEnvironment,
+  parseAgentEnvExtra,
   tmuxClientEnvironment,
 } from './agent-env.js';
 export { buildContinuationPrompt, type ContinuationInput, type RepoState } from './continuation.js';
 export { exec, ExecError, type ExecResult } from './drivers/exec.js';
 export { nodeFs, type Fs } from './drivers/fs.js';
-export { RealGitDriver, type GitDriver } from './drivers/git.js';
+export {
+  gitConfigEnv,
+  parseConfigList,
+  RealGitDriver,
+  repoConfigGuard,
+  SAFE_GIT,
+  type ConfigEntry,
+  type GitDriver,
+  type RealGitOptions,
+} from './drivers/git.js';
 export {
   RealTmuxDriver,
   type NewWindow,
@@ -47,7 +60,7 @@ export {
   type InstructionsInput,
 } from './instructions.js';
 export { parseClaudeOutput, parseOpencodeOutput, type HeadlessResult } from './headless-output.js';
-export { renderLaunchScript, shellQuote } from './launch.js';
+export { launchFailure, renderLaunchScript, shellQuote } from './launch.js';
 export {
   AbortedError,
   CommandError,

@@ -17,6 +17,8 @@ export interface TmuxWindow {
   name: string;
   /** The pane's process exited but the window stayed (remain-on-exit). */
   dead: boolean;
+  /** When a dead pane's process exited (epoch ms, whole seconds), if tmux says. */
+  deadAt?: number;
 }
 
 export interface TmuxDriver {
@@ -221,7 +223,7 @@ export class RealTmuxDriver implements TmuxDriver {
         '-t',
         `=${session}`,
         '-F',
-        `${TARGET_FORMAT}\t#{window_name}\t#{pane_dead}`,
+        `${TARGET_FORMAT}\t#{window_name}\t#{pane_dead}\t#{pane_dead_time}`,
       ]);
     } catch (err) {
       if (isMissing(err)) return [];
@@ -231,8 +233,9 @@ export class RealTmuxDriver implements TmuxDriver {
       .split('\n')
       .filter((l) => l !== '')
       .map((l) => {
-        const [target = '', name = '', dead = '0'] = l.split('\t');
-        return { target, name, dead: dead === '1' };
+        const [target = '', name = '', dead = '0', deadTime = ''] = l.split('\t');
+        const deadAt = Number(deadTime) * 1000;
+        return { target, name, dead: dead === '1', ...(dead === '1' && deadAt > 0 ? { deadAt } : {}) };
       });
   }
 

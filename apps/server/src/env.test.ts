@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { fromRoot, loadRootEnv, REPO_ROOT, rootEnvNames } from './env.js';
-import { hiddenTmuxEnv } from './runner.js';
+import { checkAgentEnvExtra, hiddenTmuxEnv } from './runner.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -46,6 +46,16 @@ describe('env', () => {
       'EMAIL_APP_PASSWORD',
       'TAVILY_API_KEY',
     ]);
+  });
+
+  it('refuses an AGENT_ENV_EXTRA that would give agents a server secret, and stops the start', () => {
+    expect(checkAgentEnvExtra({ AGENT_ENV_EXTRA: ' AWS_* , OPENROUTER_API_KEY,' })).toEqual([
+      'AWS_*',
+      'OPENROUTER_API_KEY',
+    ]);
+    expect(checkAgentEnvExtra({})).toEqual([]);
+    for (const bad of ['DASHBOARD_TOKEN', 'DASH*', 'MCP_*', 'A-B', '*', 'A*B'])
+      expect(() => checkAgentEnvExtra({ AGENT_ENV_EXTRA: bad })).toThrow(/AGENT_ENV_EXTRA/);
   });
 
   it('resolves relative paths against the root', () => {

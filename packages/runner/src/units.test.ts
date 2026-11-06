@@ -18,12 +18,16 @@ import {
 import {
   AGENT_ENV_ALLOWLIST,
   agentBaseEnvironment,
+  GIT_ENV_ALLOWLIST,
+  gitEnvironment,
+  parseAgentEnvExtra,
+  SERVER_SECRET_ENV,
   TMUX_CLIENT_ENV,
   tmuxClientEnvironment,
   WINDOW_ENV,
 } from './agent-env.js';
 import { buildContinuationPrompt } from './continuation.js';
-import { renderLaunchScript, shellQuote } from './launch.js';
+import { launchFailure, renderLaunchScript, shellQuote } from './launch.js';
 import { detectUsageLimit } from './usage-limit.js';
 
 describe('detectUsageLimit', () => {
@@ -343,6 +347,71 @@ describe('launch script', () => {
   });
 });
 
+describe('a launch that cannot start the agent', () => {
+  const run = async (script: string) => {
+    const dir = await mkdtemp(join(tmpdir(), 'loop-launch-'));
+    try {
+      const path = join(dir, 'launch.sh');
+      await writeFile(path, script.replaceAll('__DIR__', dir));
+      const result = await promisify(execFile)('sh', [path], { env: { PATH: '/usr/bin:/bin' } }).then(
+        () => ({ code: 0, stderr: '' }),
+        (err: { code: number; stderr: string }) => ({ code: err.code, stderr: err.stderr }),
+      );
+      return {
+        ...result,
+        left: await readFile(path, 'utf8').then(
+          () => true,
+          () => false,
+        ),
+      };
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  };
+
+  it('says the CLI is not on PATH, exits 127 and leaves no script', async () => {
+    const out = await run(
+      renderLaunchScript(['no-such-agent-cli', '--x'], { PATH: '/usr/bin:/bin' }, '__DIR__'),
+    );
+    expect(out).toEqual({
+      code: 127,
+      stderr: 'launch: no-such-agent-cli not found (PATH=/usr/bin:/bin)\n',
+      left: false,
+    });
+    expect(launchFailure(`${out.stderr}\nPane is dead (status 127)`)).toBe(
+      'no-such-agent-cli not found (PATH=/usr/bin:/bin)',
+    );
+  });
+
+  it('says /usr/bin/env is missing, exits 127 and leaves no script', async () => {
+    const script = renderLaunchScript(['/bin/true'], {}, '__DIR__').replaceAll(
+      '/usr/bin/env',
+      '/nonexistent/env',
+    );
+    const out = await run(script);
+    expect(out).toEqual({ code: 127, stderr: 'launch: /nonexistent/env not found\n', left: false });
+  });
+
+  it('says the working folder is gone', async () => {
+    const out = await run(renderLaunchScript(['/bin/true'], {}, '/nonexistent/folder'));
+    expect(out.code).toBe(1);
+    expect(launchFailure(out.stderr)).toBe('cannot enter the working folder');
+    expect(out.left).toBe(false);
+  });
+
+  it('finds only its own messages in a pane, as one line', () => {
+    expect(
+      launchFailure(
+        '❯ hello\nlaunch: cannot enter the working folder\nlaunch: claude not found (PATH=/bin)\n',
+      ),
+    ).toBe('cannot enter the working folder; claude not found (PATH=/bin)');
+    // Lines the script never prints are not its own.
+    expect(launchFailure('launch: approve PR 7\nlaunch: x not found (PATH=a) (b)\n')).toBeNull();
+    expect(launchFailure('agent output\nPane is dead')).toBeNull();
+    expect(launchFailure(`launch: ${'x'.repeat(400)} not found (PATH=/bin)`)?.length).toBe(300);
+  });
+});
+
 describe('agent environment', () => {
   const server = {
     PATH: '/usr/bin',
@@ -387,9 +456,54 @@ describe('agent environment', () => {
     });
   });
 
+  it('AGENT_ENV_EXTRA adds names and prefixes, never a server secret', () => {
+    const extra = {
+      ...server,
+      AGENT_ENV_EXTRA: 'AWS_*, OPENROUTER_API_KEY',
+      AWS_REGION: 'eu-west-1',
+      AWS_SECRET_ACCESS_KEY: 'aws',
+      OPENROUTER_API_KEY: 'or',
+    };
+    const env = agentBaseEnvironment(extra);
+    expect(env).toMatchObject({
+      AWS_REGION: 'eu-west-1',
+      AWS_SECRET_ACCESS_KEY: 'aws',
+      OPENROUTER_API_KEY: 'or',
+    });
+    expect(env).not.toHaveProperty('DASHBOARD_TOKEN');
+    expect(parseAgentEnvExtra(' A_B , CD* ')).toEqual(['A_B', 'CD*']);
+    for (const bad of ['DASHBOARD_TOKEN', 'MCP_TOKEN', 'DASHBOARD_*', 'MCP*', '*', 'X*Y', 'a-b'])
+      expect(() => parseAgentEnvExtra(bad)).toThrow(/AGENT_ENV_EXTRA/);
+    // A refused setting adds nothing (the server refuses to start with it anyway).
+    expect(agentBaseEnvironment({ ...server, AGENT_ENV_EXTRA: 'DASHBOARD_*' })).toEqual(
+      agentBaseEnvironment(server),
+    );
+  });
+
+  it("the runner's git gets what pushing needs and no secret", () => {
+    expect(gitEnvironment(server)).toEqual({
+      PATH: '/usr/bin',
+      HOME: '/home/u',
+      LANG: 'C.UTF-8',
+      LC_TIME: 'en_GB.UTF-8',
+      GH_TOKEN: 'gh',
+      SSH_AUTH_SOCK: '/run/agent',
+      GIT_TERMINAL_PROMPT: '0',
+      GIT_PROXY_COMMAND: '',
+    });
+  });
+
   it('no secret name is on any list', () => {
     for (const name of ['DASHBOARD_TOKEN', 'DASHBOARD_PASSWORD', 'DASHBOARD_SESSION_SECRET', 'MCP_TOKEN'])
-      expect([...AGENT_ENV_ALLOWLIST, ...TMUX_CLIENT_ENV, ...WINDOW_ENV]).not.toContain(name);
+      expect([...AGENT_ENV_ALLOWLIST, ...TMUX_CLIENT_ENV, ...WINDOW_ENV, ...GIT_ENV_ALLOWLIST]).not.toContain(
+        name,
+      );
+    expect([...SERVER_SECRET_ENV].sort()).toEqual([
+      'DASHBOARD_PASSWORD',
+      'DASHBOARD_SESSION_SECRET',
+      'DASHBOARD_TOKEN',
+      'MCP_TOKEN',
+    ]);
   });
 });
 
