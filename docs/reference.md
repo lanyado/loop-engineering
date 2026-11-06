@@ -431,24 +431,26 @@ So the loop can learn from its own past, `loop retro` (`npm run loop -- retro` f
 loop retro                                   # the previous calendar month → data/retros/2026-10.md
 loop retro --since 2026-10-01 --until 2026-10-31 --project shop   # → data/retros/2026-10-shop.md
 loop retro --days 7 --stdout                 # the last 7 days, printed instead of written
-loop retro --file-request --request-project shop                  # also file it as a request (below)
+loop retro --project shop --file-request     # also file it as a request (below)
 ```
 
-- **What it reports.** Sessions started, finished and still open (by rigor and CLI); pauses by reason (`manual`, `usage_limit`, `agent_exited`) with how many, which sessions and the time spent paused, plus usage-limit hits, agents that exited, automatic resumes and model moves; PRs by outcome, fix rounds per PR, time from open and from the request to merge, take-overs, skipped checks and reverts, and the loop's cost; failures per stage (built-in and custom checks) and stage jobs that kept failing; the most common failure reasons (escalations, closures, loop errors and Production Guardian findings, grouped when they differ only in numbers, links or hashes); Production Guardian runs per area; questions to humans by who asked, how they were answered and how long they waited; requests that never finished; and the top recurring problems, each with its evidence (PR links, session, question and request ids). The report ends with how each number is made.
-- **Deterministic.** SQL and code only: no model, no network. The same database and window give the same report. Free text from the database (questions, requests, failure reasons) is cut to one line, with secrets (`redactSecrets`) and email addresses masked.
-- **Read-only.** It opens the database read-only, so it never migrates or writes it and is safe while the server runs. It needs schema 21 or later.
-- **Window.** Dates are whole UTC days and both ends count. `--since` alone runs to now; `--days N` is the N days up to now; nothing means the previous calendar month (UTC). Things that started in the window count, and their state (merged, still open) is as of now; a pause counts only for its part inside the window.
-- **Where it goes.** `retros/` beside the database (`data/retros/` by default; gitignored), as `<YYYY-MM>.md` for a calendar month and `<first day>_to_<last day>.md` otherwise, ending in `-<project>` with `--project`. The path is printed. `--out-dir` writes elsewhere; `--stdout` prints the report instead of writing it. `--db` reads another database (a copy, say).
-- **The pause log.** The sessions table holds only the current pause, so every pause, change of pause reason and resume also writes a `decision` history entry (`Session 12 paused (usage_limit).`, `Session 12 resumed after a pause (usage_limit).`; core's `pause-log.ts`). `SessionRepo.update` writes it, so every way a session is paused is counted. Ending a paused session closes its pause too (`Session 12 ended during a pause (manual).`). Pauses under a minute (a relaunch passes through one) are left out. Pauses from before the log existed show only as the runner's own events (usage limit, agent gone).
-- **`--file-request` (off by default).** Also files the report as a request, the way the dashboard does (`POST /api/requests`, so the server must be running and `DASHBOARD_TOKEN` set): a short text asking a builder to propose improvements to the pipeline and its prompts that would have prevented the top problems, tied to the report's evidence, with the full report attached as a file. A project with its own pipeline (`.loop-engineering/`) gets the changes as a PR; otherwise the builder replies with its proposals. The request goes to `--request-project`, else `--project`, else the server's only project; with several projects and neither flag it refuses. A window where nothing happened files nothing.
+- **What it reports.** Sessions started, finished and still open (by rigor and CLI); pauses by reason (`manual`, `usage_limit`, `agent_exited`) with how many started, which sessions and the time spent paused, plus usage-limit hits, agents that exited, automatic resumes (and tries that failed) and model moves; PRs by outcome (merged, escalated and waiting on you, taken over, closed, reverted, open), fix rounds per PR, time from open and from the request to merge, take-overs, skipped checks and reverts, and the loop's cost; failures per stage (built-in and custom checks) and stage jobs that kept failing; the most common failure reasons (escalations, closures, loop errors and Production Guardian findings, grouped when they differ only in numbers, links or hashes); Production Guardian runs per area; questions to humans by who asked, how they were answered and how long they waited; requests that never finished; and the top recurring problems, each with its evidence (PR links, session, question and request ids). The report ends with how each number is made.
+- **Deterministic.** SQL and code only: no model, no network. The same database and window give the same report, apart from its "made at" line and what is measured up to now (a pending question, an ongoing pause). Medians and p90s are nearest-rank. Free text from the database (questions, requests, failure reasons, the project's name) is cut to one line, with token shapes, the server's secret env values, the secret values in the projects' env files and email addresses masked (as history search does), and Markdown and HTML markup escaped.
+- **Read-only.** It opens the database read-only, so it never migrates or writes it and is safe while the server runs. It needs schema 21 or later. Run it as the user the server runs as, never with `sudo` or from root's crontab: opening a database in WAL mode can create its `-shm`/`-wal` files, which must stay the server's.
+- **Window.** Dates are whole UTC days and both ends count; a time needs its zone (`2026-10-01T08:00Z`). `--since` alone runs to now; `--days N` is the N days up to now; nothing means the previous calendar month (UTC). Things that started in the window count, and their state (merged, still open) is as of now; a pause counts only for its part inside the window. The loop's own revert PRs are listed apart and left out of the PR numbers.
+- **Where it goes.** `retros/` beside the database (`data/retros/` by default; gitignored), as `<YYYY-MM>.md` for a calendar month and `<first day>_to_<last day>.md` otherwise, ending in `-<project>` with `--project`, readable by you alone (mode 0600). The path is printed. `--out-dir` writes elsewhere and `--db` reads another database (a copy, say); both are relative to the folder you run it in. `--stdout` prints the report instead of writing it.
+- **The pause log.** The sessions table holds only the current pause, so every pause, change of pause reason and resume also writes a `decision` history entry (`Session 12 paused (usage_limit).`, `Session 12 resumed after a pause (usage_limit).`; core's `pause-log.ts`). `SessionRepo` writes it in the same transaction as the status change, so every way a session is paused is counted. Ending a paused session closes its pause too (`Session 12 ended during a pause (manual).`). Pauses under a minute (a relaunch passes through one) are left out. Pauses from before the log existed show only as the runner's own events (usage limit, agent gone).
+- **`--file-request` (off by default).** Also files the report as a request, the way the dashboard does (`POST /api/requests`, so the server must be running and `DASHBOARD_TOKEN` set): a short text asking a builder to propose improvements to the pipeline and its prompts that would have prevented the top problems, tied to the report's evidence, with the full report attached as a file. A project with its own pipeline (`.loop-engineering/`) gets the changes as a PR; otherwise the builder replies with its proposals. It needs `--project`, and the request goes to that project's builder only: a report never carries one project's request and question snippets to another project's builder. A window where nothing happened files nothing.
 
-**Run it every month.** Nothing schedules it for you. Use the built entry point (`scripts/loop.mjs`, after `npm run build`) rather than `npm run loop`, which compiles first. Either a crontab line (`crontab -e`; the 1st of each month at 06:00 local time, which is already the new month in UTC for any zone from UTC-18 to UTC+6):
+**Run it every month.** Nothing schedules it for you. Run it as the server's user, with the built entry point (`scripts/loop.mjs`, after `npm run build`) rather than `npm run loop`, which compiles first, and with the absolute path of the node that installed the repo (`command -v node`; better-sqlite3 is built for that node). The examples write `/usr/local/bin/node`: put yours there.
+
+A crontab line (`crontab -e` as that user). Many crons (Debian's among them) have no `CRON_TZ` and run in the machine's time zone; 14:00 local on the 1st falls between 00:00 on the 1st (UTC+14) and 02:00 on the 2nd (UTC-12) in UTC, so the month before is the right one wherever the machine is:
 
 ```cron
-0 6 1 * * cd /path/to/loop-engineering && /usr/bin/node scripts/loop.mjs retro >> data/retro-cron.log 2>&1
+0 14 1 * * cd /path/to/loop-engineering && mkdir -p data && /usr/local/bin/node scripts/loop.mjs retro >> data/retro-cron.log 2>&1
 ```
 
-or a systemd user timer, which also runs a missed month once the machine is up again:
+Or a systemd user timer, which takes UTC itself and runs a missed month once the machine is up again:
 
 ```ini
 # ~/.config/systemd/user/loop-retro.service
@@ -458,21 +460,21 @@ Description=Loop Engineering monthly retro
 [Service]
 Type=oneshot
 WorkingDirectory=%h/loop-engineering
-ExecStart=/usr/bin/node scripts/loop.mjs retro
+ExecStart=/usr/local/bin/node scripts/loop.mjs retro
 
 # ~/.config/systemd/user/loop-retro.timer
 [Unit]
 Description=Loop Engineering monthly retro
 
 [Timer]
-OnCalendar=*-*-01 06:00:00
+OnCalendar=*-*-01 06:00:00 UTC
 Persistent=true
 
 [Install]
 WantedBy=timers.target
 ```
 
-Then `systemctl --user daemon-reload && systemctl --user enable --now loop-retro.timer` (and `loginctl enable-linger $USER` so it runs while you are logged out). Add `--file-request --request-project <name>` to `ExecStart` or the cron line to have a builder act on it each month.
+Then `systemctl --user daemon-reload && systemctl --user enable --now loop-retro.timer` (and `loginctl enable-linger $USER` so it runs while you are logged out). Add `--project <name> --file-request` to `ExecStart` or the cron line to have that project's builder act on it each month. `data/retro-cron.log` is gitignored.
 
 ## License
 

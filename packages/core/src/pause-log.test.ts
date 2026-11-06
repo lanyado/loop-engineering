@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FakeClock } from './clock.js';
 import { endedPausedText, parsePauseLog, pausedText, resumedText } from './pause-log.js';
@@ -47,6 +51,27 @@ describe('pause log', () => {
   it('records a session created paused', () => {
     const s = store.sessions.create({ projectId, title: 't', model: 'opus', branch: 'b', status: 'paused' });
     expect(log(s.id)).toEqual([['00:00', `Session ${s.id} paused (manual).`]]);
+  });
+
+  it('creates a paused session and its entry together, or neither', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pause-log-'));
+    const path = join(dir, 'loop.db');
+    const fileStore = openStore({ path });
+    try {
+      const p = fileStore.projects.create({ name: 'shop' }).id;
+      const raw = new Database(path);
+      raw.exec(
+        `CREATE TRIGGER no_history BEFORE INSERT ON history_entries BEGIN SELECT RAISE(ABORT, 'no'); END`,
+      );
+      raw.close();
+      expect(() =>
+        fileStore.sessions.create({ projectId: p, title: 't', model: 'opus', branch: 'b', status: 'paused' }),
+      ).toThrow('no');
+      expect(fileStore.sessions.list()).toEqual([]);
+    } finally {
+      fileStore.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('reads its own entries back and nothing else', () => {

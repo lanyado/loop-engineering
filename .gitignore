@@ -20,3 +20,4 @@ data/stages/
 # Private add-ins: never part of this repository (docs/reference.md, "Local add-ins").
 /local/
 data/retros/
+data/retro-cron.log

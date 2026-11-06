@@ -111,7 +111,9 @@ export interface RetroData {
     usageLimit: Evidence[];
     usageLimitFallbacks: number;
     agentGone: Evidence[];
+    /** Automatic resumes that relaunched the agent; failed tries are counted apart. */
     autoResumes: Evidence[];
+    autoResumeFailed: Evidence[];
     autoResumeGaveUp: Evidence[];
     modelMoves: Evidence[];
   };
@@ -125,9 +127,14 @@ export interface RetroData {
     fixRoundStats: Stats;
     mostRounds: { pr: Evidence; rounds: number; outcome: string }[];
     tookOver: Evidence[];
+    /** Escalations nobody answered: the PR left the loop by itself (outcome "escalated" too). */
+    leftLoop: Evidence[];
     returned: Evidence[];
     skippedChecks: Evidence[];
+    /** Merged PRs reverted later (labelled with the revert PR). */
     reverted: Evidence[];
+    /** The loop's own revert PRs, left out of every other PR number. */
+    revertPrs: Evidence[];
     costUsd: number;
     tokensIn: number;
     tokensOut: number;
@@ -182,12 +189,14 @@ interface SessionRow {
   ended_at: string | null;
 }
 interface DecisionRow {
+  project_id: number;
   session_id: number | null;
   text: string;
   created_at: string;
 }
 interface PrRow {
   id: number;
+  project_id: number;
   session_id: number | null;
   request_id: number | null;
   repo: string;
@@ -196,6 +205,7 @@ interface PrRow {
   stage: string;
   round: number;
   outcome: string | null;
+  reverted_by_pr_id: number | null;
   created_at: string;
   updated_at: string;
   loop_state: string;
@@ -236,6 +246,7 @@ interface LoopStateView {
   lastError?: unknown;
   deployFailure?: { summary?: unknown };
   heldFor?: unknown;
+  revertOf?: unknown;
 }
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -251,7 +262,8 @@ const count = <T extends string>(values: T[]): Record<string, number> => {
   for (const v of values) out[v] = (out[v] ?? 0) + 1;
   return out;
 };
-const prKey = (repo: string, n: number) => `${repo}#${n}`;
+/** PR numbers are per repo, and two projects can have a repo of the same name. */
+const prKey = (projectId: number, repo: string, n: number) => `${projectId}/${repo}#${n}`;
 /** Code-unit order, the same on every machine (localeCompare depends on the locale). */
 export const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -291,14 +303,18 @@ const MERGED = /^PR (\S+)#(\d+)(?: merged|: the human merged it)/;
 const ESCALATED = /^PR (\S+)#(\d+) sent to the human: (.+?)\.?$/s;
 const CLOSED = /^PR (\S+)#(\d+) closed: (.+?)\.?$/s;
 const TOOK_OVER = /^PR (\S+)#(\d+): the human took over/;
+const LEFT_LOOP = /^PR (\S+)#(\d+): nobody answered, so it left the loop/;
 const RETURNED = /^PR (\S+)#(\d+) was returned to the loop/;
 const SKIPPED = /^PR (\S+)#(\d+): the human skipped/;
-const REVERTED = /^PR (\S+)#(\d+) reverted by #/;
+const REVERTED = /^PR (\S+)#(\d+) reverted by #(\d+)/;
 const JOB_FAILED = /^The (\S+) job for PR #\d+ failed/;
 const POSTED = /^(?:(tests|qa|review|escalated)|check-(.+))-(\d+)-[0-9a-f]+$/;
 const USAGE_LIMIT = /^Claude usage limit reached/;
 const AGENT_GONE = /^(?:Agent gone:|The \S+ agent of (?:folder )?session \d+ is gone)/;
 const MODEL_MOVED = /^Session \d+ moved from \S+ to \S+:/;
+// The runner's automatic resume: "Auto-resume: try 1 of 3: relaunched …" or "… try 1 of 3 failed: …".
+const AUTO_RESUME_FAILED = /^Auto-resume: try \d+ of \d+ failed/;
+const AUTO_RESUMED = /^Auto-resume:(?! try \d+ of \d+ failed)/;
 
 export function collectRetro(db: RetroDb, options: RetroOptions): RetroData {
   const w = options.window;
@@ -329,13 +345,13 @@ export function collectRetro(db: RetroDb, options: RetroOptions): RetroData {
     .all(params) as SessionRow[];
   const decisions = db
     .prepare(
-      `SELECT session_id, text, created_at FROM history_entries
+      `SELECT project_id, session_id, text, created_at FROM history_entries
        WHERE kind = 'decision' AND ${scope('project_id')} ORDER BY created_at, id`,
     )
     .all(params) as DecisionRow[];
   const prs = db
     .prepare(
-      `SELECT p.id, p.session_id, p.request_id, p.repo, p.number, p.url, p.stage, p.round, p.outcome,
+      `SELECT p.id, p.project_id, p.session_id, p.request_id, p.repo, p.number, p.url, p.stage, p.round, p.outcome, p.reverted_by_pr_id,
               p.created_at, p.updated_at, p.loop_state, COALESCE(m.cost_usd, 0) AS cost_usd,
               COALESCE(m.tokens_in, 0) AS tokens_in, COALESCE(m.tokens_out, 0) AS tokens_out,
               COALESCE(m.failures, 0) AS failures
@@ -365,16 +381,29 @@ export function collectRetro(db: RetroDb, options: RetroOptions): RetroData {
     )
     .all({ ...params, since: w.since, until: w.until }) as GuardianRow[];
 
+  // A PR's label says as much as the report needs to tell PRs apart: "#12", "web#12" when it has
+  // several repos, "shop/web#12" when it has several projects (evidence is listed once per label).
+  const projectName = new Map(
+    (db.prepare('SELECT id, name FROM projects').all() as { id: number; name: string }[]).map((p) => [
+      p.id,
+      p.name,
+    ]),
+  );
+  const multiProject = new Set(prs.map((p) => p.project_id)).size > 1;
   const multiRepo = new Set(prs.map((p) => p.repo)).size > 1;
-  const prByKey = new Map(prs.map((p) => [prKey(p.repo, p.number), p]));
+  const prLabel = (projectId: number, repo: string, n: number | string) =>
+    multiProject
+      ? `${projectName.get(projectId) ?? `project ${projectId}`}/${repo}#${n}`
+      : multiRepo
+        ? `${repo}#${n}`
+        : `#${n}`;
+  const prByKey = new Map(prs.map((p) => [prKey(p.project_id, p.repo, p.number), p]));
   const prById = new Map(prs.map((p) => [p.id, p]));
-  const prEvidence = (p: PrRow): Evidence => ({
-    label: multiRepo ? `${p.repo}#${p.number}` : `#${p.number}`,
-    url: p.url,
-  });
-  const prRef = (repo: string, n: string): Evidence => {
-    const p = prByKey.get(prKey(repo, Number(n)));
-    return p ? prEvidence(p) : { label: multiRepo ? `${repo}#${n}` : `#${n}` };
+  const prEvidence = (p: PrRow): Evidence => ({ label: prLabel(p.project_id, p.repo, p.number), url: p.url });
+  /** A PR a history entry names: its project is the entry's. */
+  const prRef = (d: DecisionRow, repo: string, n: string): Evidence => {
+    const p = prByKey.get(prKey(d.project_id, repo, Number(n)));
+    return p ? prEvidence(p) : { label: prLabel(d.project_id, repo, n) };
   };
   const sessionRef = (id: number | null): Evidence => ({
     label: id === null ? 'no session' : `session ${id}`,
@@ -384,7 +413,7 @@ export function collectRetro(db: RetroDb, options: RetroOptions): RetroData {
   const prRefs = (re: RegExp) =>
     matching(re).map((d) => {
       const m = re.exec(d.text)!;
-      return prRef(m[1]!, m[2]!);
+      return prRef(d, m[1]!, m[2]!);
     });
   const sessionRefs = (re: RegExp) => matching(re).map((d) => sessionRef(d.session_id));
 
@@ -450,17 +479,48 @@ export function collectRetro(db: RetroDb, options: RetroOptions): RetroData {
   for (const r of PAUSE_REASONS) byReason[r].sessions = pausedSessions.get(r)!.size;
   longest.sort((a, b) => b.ms - a.ms || a.sessionId - b.sessionId);
 
-  // PRs
-  const opened = prs.filter((p) => inWindow(p.created_at, w));
+  // PRs. The loop's own revert PRs are reported apart, not as work. The original names its revert
+  // (reverted_by_pr_id); the revert's loopState.revertOf (the original's row id) is cleared once it
+  // merges, so it only helps while the revert is in flight.
+  const revertedBy = new Map(
+    prs.flatMap((p) => (p.reverted_by_pr_id === null ? [] : [[p.reverted_by_pr_id, p] as const])),
+  );
+  const originalOf = (p: PrRow): PrRow | undefined => {
+    const of = parseState(p.loop_state).revertOf;
+    return revertedBy.get(p.id) ?? (typeof of === 'number' ? prById.get(of) : undefined);
+  };
+  const isRevertPr = (p: PrRow) => revertedBy.has(p.id) || parseState(p.loop_state).revertOf !== undefined;
+  const opened = prs.filter((p) => inWindow(p.created_at, w) && !isRevertPr(p));
   const mergedAt = new Map<string, string>();
   for (const d of decisions) {
     const m = MERGED.exec(d.text);
-    if (m && !mergedAt.has(prKey(m[1]!, Number(m[2]))))
-      mergedAt.set(prKey(m[1]!, Number(m[2])), d.created_at);
+    const key = m && prKey(d.project_id, m[1]!, Number(m[2]));
+    if (key && !mergedAt.has(key)) mergedAt.set(key, d.created_at);
   }
-  const mergeTime = (p: PrRow) =>
-    p.outcome === 'merged' ? (mergedAt.get(prKey(p.repo, p.number)) ?? p.updated_at) : null;
-  const outcomeOf = (p: PrRow) => p.outcome ?? (p.stage === 'reverted' ? 'reverted' : 'open');
+  /** When it merged: a PR reverted later merged too. */
+  const mergeTime = (p: PrRow) => {
+    const logged = mergedAt.get(prKey(p.project_id, p.repo, p.number));
+    if (p.outcome === 'merged') return logged ?? p.updated_at;
+    return p.outcome === 'reverted' ? (logged ?? null) : null;
+  };
+  // outcome "escalated" is set when the human takes a PR over, and when an escalation nobody answered
+  // lets it leave the loop: the newest of those history entries says which. A PR waiting on the human
+  // has outcome null at stage "escalated".
+  const lastExit = new Map<string, 'taken over' | 'left the loop (nobody answered)'>();
+  for (const d of decisions) {
+    const took = TOOK_OVER.exec(d.text);
+    const left = took ? null : LEFT_LOOP.exec(d.text);
+    const m = took ?? left;
+    if (m)
+      lastExit.set(
+        prKey(d.project_id, m[1]!, Number(m[2])),
+        took ? 'taken over' : 'left the loop (nobody answered)',
+      );
+  }
+  const outcomeOf = (p: PrRow) =>
+    p.outcome === 'escalated'
+      ? (lastExit.get(prKey(p.project_id, p.repo, p.number)) ?? 'taken over')
+      : (p.outcome ?? (p.stage === 'escalated' ? 'escalated' : p.stage === 'reverted' ? 'reverted' : 'open'));
   const rounds = (p: PrRow) => Math.max(0, p.round - 1);
   const fixRounds = [0, 0, 0, 0, 0];
   for (const p of opened) fixRounds[Math.min(4, rounds(p))]!++;
@@ -537,7 +597,7 @@ export function collectRetro(db: RetroDb, options: RetroOptions): RetroData {
   const escalations = matching(ESCALATED);
   for (const d of escalations) {
     const m = ESCALATED.exec(d.text)!;
-    const ev = prRef(m[1]!, m[2]!);
+    const ev = prRef(d, m[1]!, m[2]!);
     addReason(m[3]!, 'escalation', ev);
     const job = JOB_FAILED.exec(m[3]!);
     if (job) {
@@ -549,7 +609,7 @@ export function collectRetro(db: RetroDb, options: RetroOptions): RetroData {
   }
   for (const d of matching(CLOSED)) {
     const m = CLOSED.exec(d.text)!;
-    addReason(`closed: ${m[3]!}`, 'closed', prRef(m[1]!, m[2]!));
+    addReason(`closed: ${m[3]!}`, 'closed', prRef(d, m[1]!, m[2]!));
   }
 
   // Production Guardian
@@ -650,14 +710,15 @@ export function collectRetro(db: RetroDb, options: RetroOptions): RetroData {
       usageLimitFallbacks: matching(USAGE_LIMIT).filter((d) => /switched from claude\//.test(d.text)).length,
       agentGone: sessionRefs(AGENT_GONE),
       // Written by the runner's automatic resume of sessions whose agent went away.
-      autoResumes: sessionRefs(/^Auto-resume:/),
+      autoResumes: sessionRefs(AUTO_RESUMED),
+      autoResumeFailed: sessionRefs(AUTO_RESUME_FAILED),
       autoResumeGaveUp: sessionRefs(/^Auto-resume stopped/),
       modelMoves: sessionRefs(MODEL_MOVED),
     },
     prs: {
       opened: opened.length,
       byOutcome: count(opened.map(outcomeOf)),
-      mergedInWindow: prs.filter((p) => inWindow(mergeTime(p), w)).length,
+      mergedInWindow: prs.filter((p) => !isRevertPr(p) && inWindow(mergeTime(p), w)).length,
       fixRounds,
       fixRoundStats: stats(opened.map(rounds)),
       mostRounds: [...opened]
@@ -666,9 +727,21 @@ export function collectRetro(db: RetroDb, options: RetroOptions): RetroData {
         .slice(0, LIST_MAX)
         .map((p) => ({ pr: prEvidence(p), rounds: rounds(p), outcome: outcomeOf(p) })),
       tookOver: prRefs(TOOK_OVER),
+      leftLoop: prRefs(LEFT_LOOP),
       returned: prRefs(RETURNED),
       skippedChecks: prRefs(SKIPPED),
-      reverted: prRefs(REVERTED),
+      reverted: matching(REVERTED).map((d) => {
+        const m = REVERTED.exec(d.text)!;
+        const pr = prRef(d, m[1]!, m[2]!);
+        return { ...pr, label: `${pr.label} (reverted by #${m[3]!})` };
+      }),
+      revertPrs: prs
+        .filter((p) => inWindow(p.created_at, w) && isRevertPr(p))
+        .map((p) => {
+          const original = originalOf(p);
+          const of = original ? prEvidence(original).label : 'an unknown PR';
+          return { ...prEvidence(p), label: `${prEvidence(p).label} (revert of ${of})` };
+        }),
       costUsd: opened.reduce((a, p) => a + p.cost_usd, 0),
       tokensIn: opened.reduce((a, p) => a + p.tokens_in, 0),
       tokensOut: opened.reduce((a, p) => a + p.tokens_out, 0),
@@ -685,7 +758,7 @@ export function collectRetro(db: RetroDb, options: RetroOptions): RetroData {
       otherFailures,
       escalations: escalations.map((d) => {
         const m = ESCALATED.exec(d.text)!;
-        return prRef(m[1]!, m[2]!);
+        return prRef(d, m[1]!, m[2]!);
       }),
     },
     reasons: [...reasons.values()]
@@ -763,11 +836,13 @@ function topProblems(d: RetroData, x: ProblemInputs): Problem[] {
   add('PRs needed 3 or more fix rounds', x.manyRounds);
   add('PRs sent to the human (escalated)', d.stages.escalations);
   add('the human took a PR over', d.prs.tookOver);
+  add('PRs that left the loop because nobody answered', d.prs.leftLoop);
   add('deploys reverted', d.prs.reverted);
   add('Production Guardian failed or errored after a deploy', x.guardianFailed);
   add('Claude usage limit reached', d.pauses.usageLimit);
   add('an agent exited or its window closed', d.pauses.agentGone);
   add('auto-resume gave up on a session', d.pauses.autoResumeGaveUp);
+  add('automatic resume tries that failed', d.pauses.autoResumeFailed);
   add('a session moved to another model', d.pauses.modelMoves);
   add('questions nobody answered (the default was taken)', x.defaulted);
   add('answers that took over an hour', x.slowAnswers);

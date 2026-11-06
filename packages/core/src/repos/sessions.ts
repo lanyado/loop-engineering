@@ -169,32 +169,37 @@ export class SessionRepo {
     const status = input.status ?? 'active';
     const pauseReason = pauseReasonFor(status, input.pauseReason);
     const now = isoNow(this.clock);
-    const info = this.db
-      .prepare(
-        `INSERT INTO sessions
+    const insert = () =>
+      this.db
+        .prepare(
+          `INSERT INTO sessions
            (project_id, title, status, pause_reason, provider, model, effort, tmux_target, agent_session_id,
             branch, worktrees, created_at, ended_at)
          VALUES
            (@projectId, @title, @status, @pauseReason, @provider, @model, @effort, @tmuxTarget, @agentSessionId,
             @branch, @worktrees, @now, @endedAt)`,
-      )
-      .run({
-        projectId: input.projectId,
-        title: input.title,
-        status,
-        pauseReason,
-        provider: input.provider ?? 'claude',
-        model: input.model,
-        effort: input.effort ?? null,
-        tmuxTarget: input.tmuxTarget ?? null,
-        agentSessionId: input.agentSessionId ?? null,
-        branch: input.branch,
-        worktrees: JSON.stringify(worktrees),
-        now,
-        endedAt: status === 'ended' ? now : null,
-      });
-    const id = Number(info.lastInsertRowid);
-    if (pauseReason) this.logPause(input.projectId, id, pausedText(id, pauseReason));
+        )
+        .run({
+          projectId: input.projectId,
+          title: input.title,
+          status,
+          pauseReason,
+          provider: input.provider ?? 'claude',
+          model: input.model,
+          effort: input.effort ?? null,
+          tmuxTarget: input.tmuxTarget ?? null,
+          agentSessionId: input.agentSessionId ?? null,
+          branch: input.branch,
+          worktrees: JSON.stringify(worktrees),
+          now,
+          endedAt: status === 'ended' ? now : null,
+        });
+    // A session made paused gets its pause log entry in the same transaction.
+    const id = this.db.transaction(() => {
+      const created = Number(insert().lastInsertRowid);
+      if (pauseReason) this.logPause(input.projectId, created, pausedText(created, pauseReason));
+      return created;
+    })();
     return this.require(id);
   }
 

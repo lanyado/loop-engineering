@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FakeClock, openStore } from '@loop-engineering/core';
@@ -42,6 +42,11 @@ function seed(path: string): void {
     text: 'PR web#4 merged (squash) as abcdef1.',
   });
   store.sessions.update(s, { status: 'ended' });
+  store.requests.create({
+    projectId: shop,
+    text: 'Use plainsecretvalue42 and see [the docs](https://docs.example/x) *now*',
+    source: 'email',
+  });
   store.close();
 }
 
@@ -146,14 +151,12 @@ describe('loop retro', () => {
     expect(await runRetroCli(['--db', db, '--stdout'], io)).toBe(0);
     expect(server.posted).toEqual([]);
 
-    // Two projects and no target: it asks for one instead of guessing.
-    expect(await runRetroCli(['--db', db, '--stdout', '--file-request'], io)).toBe(1);
-    expect(err.at(-1)).toMatch(/needs --request-project/);
+    // A report of every project would carry them all to one builder: it needs --project.
+    expect(await runRetroCli(['--db', db, '--stdout', '--file-request'], io)).toBe(2);
+    expect(err.at(-1)).toMatch(/^--file-request needs --project/);
 
     out = [];
-    expect(
-      await runRetroCli(['--db', db, '--stdout', '--file-request', '--request-project', 'shop'], io),
-    ).toBe(0);
+    expect(await runRetroCli(['--db', db, '--stdout', '--file-request', '--project', 'shop'], io)).toBe(0);
     expect(server.posted).toHaveLength(1);
     const body = server.posted[0]!.body as {
       projectId: number;
@@ -164,10 +167,33 @@ describe('loop retro', () => {
     expect(body.text.length).toBeLessThanOrEqual(4000);
     expect(body.text).toContain('propose improvements to the pipeline');
     expect(body.attachments).toHaveLength(1);
-    expect(body.attachments[0]!.name).toBe('2026-10.md');
+    expect(body.attachments[0]!.name).toBe('2026-10-shop.md');
     expect(Buffer.from(body.attachments[0]!.data, 'base64').toString('utf8')).toBe(`${out[0]}\n`);
     expect(out).toHaveLength(1);
     expect(err.at(-1)).toBe('Filed request 7 in shop: a builder will propose improvements from the retro.');
+
+    // It only goes to the project the report is about: there is no flag to send it elsewhere.
+    expect(
+      await runRetroCli(['--db', db, '--file-request', '--project', 'shop', '--request-project', 'blog'], io),
+    ).toBe(2);
+    expect(server.posted).toHaveLength(1);
+  });
+
+  it('reads --db from the current folder, writes the report 0600 over a stale temp file, masks secrets', async () => {
+    withDb();
+    io.env.INIT_CWD = join(dir, 'data');
+    io.env.SHOP_API_TOKEN = 'plainsecretvalue42';
+    const retros = join(dir, 'data', 'retros');
+    mkdirSync(retros);
+    writeFileSync(join(retros, '2026-10.md.tmp'), 'stale', { mode: 0o644 });
+    expect(await runRetroCli(['--db', 'loop.db'], io)).toBe(0);
+    const path = join(retros, '2026-10.md');
+    expect(out).toEqual([path]);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    const md = readFileSync(path, 'utf8');
+    expect(md).not.toContain('plainsecretvalue42');
+    // Link and emphasis syntax from the database is escaped, not rendered.
+    expect(md).toContain('see \\[the docs\\](https://docs.example/x) \\*now\\*');
   });
 
   it('files nothing for a quiet window', async () => {
@@ -176,7 +202,18 @@ describe('loop retro', () => {
     io.fetch = server.fetch;
     expect(
       await runRetroCli(
-        ['--db', db, '--stdout', '--file-request', '--since', '2026-01-01', '--until', '2026-01-31'],
+        [
+          '--db',
+          db,
+          '--stdout',
+          '--file-request',
+          '--project',
+          'shop',
+          '--since',
+          '2026-01-01',
+          '--until',
+          '2026-01-31',
+        ],
         io,
       ),
     ).toBe(0);

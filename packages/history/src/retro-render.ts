@@ -2,15 +2,24 @@ import { PAUSE_REASONS, redactSecrets } from '@loop-engineering/core';
 import { byText, type Evidence, type RequestOutcome, type RetroData, type Stats } from './retro.js';
 import { describeWindow } from './retro-window.js';
 
-/** One line of untrusted text for Markdown: secrets and addresses masked, cut to `max`, no table breaks. */
-export function cleanText(text: string, max = 120): string {
-  const line = redactSecrets(text)
+/**
+ * One line of untrusted text for Markdown: token shapes, `secrets` (the server's and the projects'
+ * secret values) and addresses masked, cut to `max`, and every character that Markdown or HTML would
+ * read as markup (links, emphasis, code, table cells, tags) escaped; `markdown: false` leaves the
+ * markup alone, for plain text.
+ */
+export function cleanText(text: string, max = 120, secrets: readonly string[] = [], markdown = true): string {
+  const line = redactSecrets(text, secrets)
     .replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, '<email>')
     .replace(/[\p{Cc}\p{Cf}]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   const cut = line.length > max ? `${line.slice(0, max - 1)}…` : line;
-  return cut.replace(/\|/g, '\\|').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  if (!markdown) return cut;
+  return cut
+    .replace(/[\\`*_[\]|]/g, '\\$&')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 export function formatDuration(ms: number | null): string {
@@ -49,8 +58,14 @@ const OUTCOME_LABEL: Record<RequestOutcome, string> = {
   unrouted: 'never routed to a project',
 };
 
+export interface RenderOptions {
+  /** Secret values to mask besides token shapes (secretValues of the env, the projects' env files). */
+  secrets?: readonly string[];
+}
+
 /** The report as Markdown. Deterministic: the same data gives the same text. */
-export function renderRetro(d: RetroData): string {
+export function renderRetro(d: RetroData, options: RenderOptions = {}): string {
+  const clean = (text: string, max: number) => cleanText(text, max, options.secrets);
   const out: string[] = [];
   const p = (line = '') => out.push(line);
   const pausedTotal = PAUSE_REASONS.reduce((a, r) => a + d.pauses.byReason[r].pausedMs, 0);
@@ -59,7 +74,7 @@ export function renderRetro(d: RetroData): string {
   p(`# Loop retro: ${describeWindow(d.window)}`);
   p();
   p(
-    `${d.project ? `Project **${cleanText(d.project.name, 80)}**` : 'All projects'}. Made by \`loop retro\` at ` +
+    `${d.project ? `Project **${clean(d.project.name, 80)}**` : 'All projects'}. Made by \`loop retro\` at ` +
       `${d.generatedAt.slice(0, 16).replace('T', ' ')} UTC from the loop's database (SQL and code only, no model). ` +
       'What each number means is at the end.',
   );
@@ -86,7 +101,7 @@ export function renderRetro(d: RetroData): string {
   p();
   if (d.problems.length === 0) p('Nothing went wrong that the database records.');
   d.problems.forEach((x, i) =>
-    p(`${i + 1}. **${cleanText(x.title, 160)}**: ${x.count}. Evidence: ${links(x.evidence)}`),
+    p(`${i + 1}. **${clean(x.title, 160)}**: ${x.count}. Evidence: ${links(x.evidence)}`),
   );
   p();
 
@@ -101,7 +116,7 @@ export function renderRetro(d: RetroData): string {
 
   p('## Pauses');
   p();
-  p('| Reason | Pauses | Sessions | Time paused |');
+  p('| Reason | Pauses started | Sessions paused | Time paused |');
   p('| --- | --- | --- | --- |');
   for (const r of PAUSE_REASONS) {
     const x = d.pauses.byReason[r];
@@ -121,6 +136,7 @@ export function renderRetro(d: RetroData): string {
   );
   ev('Agent exited or its window closed', d.pauses.agentGone);
   ev('Automatic resumes', d.pauses.autoResumes);
+  ev('Automatic resume tries that failed', d.pauses.autoResumeFailed);
   ev('Automatic resume gave up', d.pauses.autoResumeGaveUp);
   ev('Moved to another model', d.pauses.modelMoves);
   if (d.pauses.longest.length) {
@@ -151,9 +167,11 @@ export function renderRetro(d: RetroData): string {
       `- Slowest from request to merge: ${d.prs.slowest.map((x) => `${link(x.pr)} ${formatDuration(x.ms)}`).join(', ')}.`,
     );
   ev('The human took over', d.prs.tookOver);
+  ev('Left the loop because nobody answered its escalation', d.prs.leftLoop);
   ev('Given back to the loop', d.prs.returned);
   ev('A check skipped by the human', d.prs.skippedChecks);
-  ev('Reverted', d.prs.reverted);
+  ev('Reverted after merging', d.prs.reverted);
+  ev('Revert PRs (left out of the numbers above)', d.prs.revertPrs);
   p(
     `- Loop cost of these PRs: ${usd(d.prs.costUsd)}, ${d.prs.tokensIn.toLocaleString('en-US')} tokens in, ${d.prs.tokensOut.toLocaleString('en-US')} out.`,
   );
@@ -167,7 +185,7 @@ export function renderRetro(d: RetroData): string {
     p('| --- | --- | --- | --- |');
     for (const r of d.stages.rows)
       p(
-        `| ${cleanText(r.stage, 40)} | ${r.failures} | ${r.jobFailures} | ${links([...r.evidence, ...r.jobEvidence], 6)} |`,
+        `| ${clean(r.stage, 40)} | ${r.failures} | ${r.jobFailures} | ${links([...r.evidence, ...r.jobEvidence], 6)} |`,
       );
   }
   p();
@@ -185,7 +203,7 @@ export function renderRetro(d: RetroData): string {
     p('| Times | Where | Example | Evidence |');
     p('| --- | --- | --- | --- |');
     for (const g of d.reasons)
-      p(`| ${g.count} | ${g.sources.join(', ')} | ${cleanText(g.example, 200)} | ${links(g.evidence, 5)} |`);
+      p(`| ${g.count} | ${g.sources.join(', ')} | ${clean(g.example, 200)} | ${links(g.evidence, 5)} |`);
   }
   p();
 
@@ -196,8 +214,7 @@ export function renderRetro(d: RetroData): string {
     p();
     p('| Area | Failed | Could not run | Flaky |');
     p('| --- | --- | --- | --- |');
-    for (const a of d.guardian.areas)
-      p(`| ${cleanText(a.area, 40)} | ${a.failed} | ${a.errored} | ${a.flaky} |`);
+    for (const a of d.guardian.areas) p(`| ${clean(a.area, 40)} | ${a.failed} | ${a.errored} | ${a.flaky} |`);
   }
   p();
 
@@ -217,7 +234,7 @@ export function renderRetro(d: RetroData): string {
     p();
     for (const q of d.questions.longest)
       p(
-        `- question ${q.questionId} (session ${q.sessionId}, ${q.origin}, ${q.status}): ${formatDuration(q.waitMs)}: "${cleanText(q.text, 100)}"`,
+        `- question ${q.questionId} (session ${q.sessionId}, ${q.origin}, ${q.status}): ${formatDuration(q.waitMs)}: "${clean(q.text, 100)}"`,
       );
   }
   p();
@@ -234,7 +251,7 @@ export function renderRetro(d: RetroData): string {
     p();
     for (const r of d.requests.unfinished.slice(0, 15))
       p(
-        `- request ${r.id} (${r.source}, ${r.createdAt.slice(0, 10)}${r.sessionId === null ? '' : `, session ${r.sessionId}`}): ${OUTCOME_LABEL[r.outcome]}: "${cleanText(r.text, 100)}"`,
+        `- request ${r.id} (${r.source}, ${r.createdAt.slice(0, 10)}${r.sessionId === null ? '' : `, session ${r.sessionId}`}): ${OUTCOME_LABEL[r.outcome]}: "${clean(r.text, 100)}"`,
       );
     if (d.requests.unfinished.length > 15) p(`- and ${d.requests.unfinished.length - 15} more`);
   }
@@ -246,9 +263,11 @@ export function renderRetro(d: RetroData): string {
     [
       '- Times are UTC. Things that started in the window count; their state (merged, open) is as of now.',
       "- Sessions are the runner's own (imported past conversations are left out); the router's reserved project is left out of everything but questions.",
-      "- Pauses come from the pause log (one history entry per pause and resume); only the part of a pause inside the window counts, and pauses under a minute (a relaunch passes through one) are left out. Usage limit, agent exits and automatic resumes are counted from the runner's history entries.",
+      '- Pauses come from the pause log (one history entry per pause, change of reason and resume). "Pauses started" counts those that began in the window; "Sessions paused" and "Time paused" also include pauses carried in from before it, for their part inside the window. Pauses under a minute (a relaunch passes through one) are left out. Usage limit, agent exits and automatic resumes are counted from the runner\'s history entries.',
+      '- Medians and p90s are nearest-rank: with an even count the median is the lower of the two middle values.',
+      '- PRs: "escalated" is waiting on the human, "taken over" is the human\'s now, "left the loop" was escalated and nobody answered; a PR merged and then reverted counts as merged (and as reverted), and the loop\'s own revert PRs are left out.',
       "- Fix rounds are the PR's round minus one: each new head after the first went through the checks again.",
-      '- Stage failures are the "… failed" comments the loop posted (one per failed verdict); "job kept failing" counts escalations because the job itself crashed or gave no verdict.',
+      '- Stage failures are the "… failed" comments the loop posted (one per failed verdict) on PRs opened in the window; "job kept failing" counts escalations dated in the window because the job itself crashed or gave no verdict, whenever its PR was opened.',
       '- A request is finished when a PR from it (or from a part of it) merged, or its session merged a PR after it arrived. Thank-you notes and questions that need no PR show as not finished.',
       '- Failure reasons group texts that differ only in numbers, links or hashes: escalations, closures, loop errors and Production Guardian findings.',
       '- Top problems rank every kind of problem by how often it happened; each names its evidence (PRs link to GitHub).',
@@ -261,15 +280,17 @@ export function renderRetro(d: RetroData): string {
 export const RETRO_REQUEST_MAX = 3_800;
 
 /** The request `loop retro --file-request` files: the task, the headline numbers, the top problems. */
-export function retroRequestText(d: RetroData, fileName: string): string {
+export function retroRequestText(d: RetroData, fileName: string, options: RenderOptions = {}): string {
+  // Plain text (the request is not rendered as Markdown): secrets masked, no escaping.
+  const clean = (text: string, max: number) => cleanText(text, max, options.secrets, false);
   const head = [
-    `Retro of the loop for ${describeWindow(d.window)}${d.project ? ` (${d.project.name})` : ''}: propose improvements to the pipeline and its prompts.`,
+    `Retro of the loop for ${describeWindow(d.window)}${d.project ? ` (${clean(d.project.name, 80)})` : ''}: propose improvements to the pipeline and its prompts.`,
     '',
     `The full report is attached (${fileName}); it was made from the loop's database by \`loop retro\`. Read it, then propose concrete changes to the pipeline (its stages, their order, their prompts, the rigor and model choices) that would have prevented the top problems below. Tie each proposal to the evidence in the report (PR numbers, session ids) and say what number it should move next month. If this project has its own pipeline (a .loop-engineering/ folder), make the changes there in one PR; otherwise open no PR and reply with the proposals. Do not change product code for this.`,
     '',
     'Top problems:',
   ];
-  const problems = d.problems.map((x, i) => `${i + 1}. ${cleanText(x.title, 160)}: ${x.count}`);
+  const problems = d.problems.map((x, i) => `${i + 1}. ${clean(x.title, 160)}: ${x.count}`);
   if (problems.length === 0) problems.push('none recorded');
   let text = [...head, ...problems].join('\n');
   if (text.length > RETRO_REQUEST_MAX) text = `${text.slice(0, RETRO_REQUEST_MAX - 1)}…`;
