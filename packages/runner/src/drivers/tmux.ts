@@ -31,6 +31,14 @@ export interface TmuxDriver {
   kill(target: string): Promise<void>;
   /** Windows of `session`; empty when the session or the tmux server does not exist. */
   list(session: string): Promise<TmuxWindow[]>;
+  /** The running tmux server; null when none runs. */
+  server(): Promise<TmuxServer | null>;
+}
+
+export interface TmuxServer {
+  pid: number;
+  /** Epoch ms, as tmux reports it (whole seconds). */
+  startedAt: number;
 }
 
 const TARGET_FORMAT = '#{session_name}:#{window_id}';
@@ -142,5 +150,17 @@ export class RealTmuxDriver implements TmuxDriver {
         const [target = '', name = '', dead = '0'] = l.split('\t');
         return { target, name, dead: dead === '1' };
       });
+  }
+
+  async server(): Promise<TmuxServer | null> {
+    let out: string;
+    try {
+      out = await this.tmux(['display-message', '-p', '#{pid} #{start_time}']);
+    } catch (err) {
+      if (isMissing(err)) return null;
+      throw err;
+    }
+    const [pid, start] = out.trim().split(' ').map(Number);
+    return pid && pid > 0 && start ? { pid, startedAt: start * 1000 } : null;
   }
 }

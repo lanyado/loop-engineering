@@ -1,7 +1,7 @@
 // In-memory fakes for the runner's drivers. Exported so other packages' tests can drive a runner.
 import type { Fs } from './drivers/fs.js';
 import type { GitDriver } from './drivers/git.js';
-import type { NewWindow, TmuxDriver, TmuxWindow } from './drivers/tmux.js';
+import type { NewWindow, TmuxDriver, TmuxServer, TmuxWindow } from './drivers/tmux.js';
 import { inputBoxText, plainPane } from './input-box.js';
 
 /** The bottom of an idle Claude Code screen: an empty input box. New fake windows start with it. */
@@ -69,6 +69,13 @@ export class FakeTmuxDriver implements TmuxDriver {
         .filter((w) => w.session === session)
         .map((w) => ({ target: w.target, name: w.name, dead: w.dead })),
     );
+  }
+
+  /** What server() reports: set it to null (and drop the windows) to simulate the server dying. */
+  serverInfo: TmuxServer | null = { pid: 4242, startedAt: Date.parse('2026-10-18T08:00:00.000Z') };
+
+  server(): Promise<TmuxServer | null> {
+    return Promise.resolve(this.serverInfo);
   }
 
   /** Sets the pane text of `target`. */

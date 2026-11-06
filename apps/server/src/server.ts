@@ -107,6 +107,8 @@ export function createServer(options: CreateServerOptions): LoopServer {
           onLimitResumed: (session) =>
             log(`[runner] session ${session.id} resumed on Claude after its usage limit`),
           log,
+          // Nobody watches the terminals: an agent that went away by itself is resumed, a few times.
+          autoResume: true,
           onAlert: (session, text) => {
             try {
               questions.ask({

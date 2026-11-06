@@ -341,3 +341,23 @@ describe.skipIf(!hasTmux())('runner with real tmux (fake agents)', () => {
     },
   );
 });
+
+describe.skipIf(!hasTmux())("the tmux server's pid and start time (real tmux)", () => {
+  // Its own server, never the default one or the other tests'.
+  const socket = `loop-test-server-${process.pid}`;
+  afterAll(async () => {
+    await run('tmux', ['-L', socket, 'kill-server']).catch(() => undefined);
+  });
+
+  it('reads them while the server runs, and null once it is gone', async () => {
+    const tmux = new RealTmuxDriver({ socketName: socket });
+    expect(await tmux.server()).toBeNull();
+    await tmux.newWindow({ session: 'probe', name: 'w', cwd: tmpdir(), command: 'sleep 30' });
+    const server = await tmux.server();
+    const { stdout } = await run('tmux', ['-L', socket, 'display-message', '-p', '#{pid}']);
+    expect(server?.pid).toBe(Number(stdout.trim()));
+    expect(Math.abs((server?.startedAt ?? 0) - Date.now())).toBeLessThan(60_000);
+    await run('tmux', ['-L', socket, 'kill-server']);
+    expect(await tmux.server()).toBeNull();
+  });
+});

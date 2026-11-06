@@ -37,7 +37,7 @@ import {
 import { buildContinuationPrompt, type RepoState } from './continuation.js';
 import type { Fs } from './drivers/fs.js';
 import type { GitDriver } from './drivers/git.js';
-import type { TmuxDriver, TmuxWindow } from './drivers/tmux.js';
+import type { TmuxDriver, TmuxServer, TmuxWindow } from './drivers/tmux.js';
 import { sessionInstructions } from './instructions.js';
 import { renderLaunchScript, shellQuote } from './launch.js';
 import { inputBoxHasText, inputBoxHolds, inputBoxText } from './input-box.js';
@@ -132,6 +132,22 @@ export interface ResumeOptions {
   /** Launch on the session's default model and effort, ignoring the builder's pick and the rigor level's effort. */
   defaults?: boolean;
 }
+
+/** A tmux server found gone or replaced while it held agents: what was known of it. */
+export interface TmuxServerDeath {
+  pid: number;
+  /** Epoch ms. */
+  startedAt: number;
+  /** When a pass last found it alive (epoch ms): it died after this. */
+  lastSeenAt: number;
+  /** The pid of the server running now, if one is. */
+  replacedBy: number | null;
+}
+
+type SeenTmuxServer = TmuxServer & { seenAt: number; savedAt: number };
+
+/** How often a server that is still there has its last sighting saved. */
+const TMUX_SEEN_SAVE_MS = 5 * 60_000;
 
 export interface EndOptions {
   /** Remove worktrees even with uncommitted changes (they are lost). */
@@ -330,6 +346,18 @@ export class SessionRunner {
    */
   resume(sessionId: number, options: ResumeOptions = {}): Promise<Session> {
     return this.withLock(sessionId, () => this.resumeNow(sessionId, options));
+  }
+
+  /**
+   * resume() only when the session is still paused for `reason` once its lock is free: null when it
+   * is not (another resume, a pause by the human or its end got there first), so nothing launches twice.
+   */
+  resumePaused(sessionId: number, reason: PauseReason, options: ResumeOptions = {}): Promise<Session | null> {
+    return this.withLock(sessionId, async () => {
+      const s = this.deps.store.sessions.require(sessionId);
+      if (s.status !== 'paused' || s.pauseReason !== reason) return null;
+      return this.resumeNow(sessionId, { ...options, ifReason: reason });
+    });
   }
 
   /** resume() without taking the session's lock: for callers that already hold it. */
@@ -881,6 +909,81 @@ export class SessionRunner {
       if (result) paused.push(result);
     }
     return paused;
+  }
+
+  /**
+   * Compares the tmux server with the one last seen alive (kept in the state folder, so a restart
+   * remembers it). A server gone or replaced is reported only when `lost` (this pass found agents
+   * gone): a server that exits with its last window, or one started for the next session, is normal.
+   * tmux keeps no log, so this is the only evidence of how long it ran and when it was last seen.
+   */
+  async checkTmuxServer(lost: boolean, now = this.now()): Promise<TmuxServerDeath | null> {
+    let current: TmuxServer | null;
+    try {
+      current = await this.deps.tmux.server();
+    } catch (err) {
+      this.log(`could not read the tmux server: ${errorMessage(err)}`);
+      return null;
+    }
+    const known = await this.knownTmuxServer();
+    if (current && known && current.pid === known.pid && current.startedAt === known.startedAt) {
+      known.seenAt = now;
+      if (now - known.savedAt >= TMUX_SEEN_SAVE_MS) await this.saveTmuxServer(known);
+      return null;
+    }
+    // Gone with no agent lost: it may have exited with its last window, or died just after this
+    // pass's reconcile. Either way keep what was seen until a pass finds agents gone.
+    if (!current && !lost) return null;
+    const death =
+      known && lost
+        ? {
+            pid: known.pid,
+            startedAt: known.startedAt,
+            lastSeenAt: known.seenAt,
+            replacedBy: current?.pid ?? null,
+          }
+        : null;
+    this.tmuxSeen = current && { ...current, seenAt: now, savedAt: 0 };
+    await this.saveTmuxServer(this.tmuxSeen);
+    return death;
+  }
+
+  /** The tmux server last seen alive; undefined until read from the state folder. */
+  private tmuxSeen: SeenTmuxServer | null | undefined;
+
+  private async knownTmuxServer(): Promise<SeenTmuxServer | null> {
+    if (this.tmuxSeen !== undefined) return this.tmuxSeen;
+    this.tmuxSeen = null;
+    try {
+      const saved = JSON.parse(await this.deps.fs.readFile(this.tmuxServerFile())) as Partial<SeenTmuxServer>;
+      if (
+        typeof saved.pid === 'number' &&
+        typeof saved.startedAt === 'number' &&
+        typeof saved.seenAt === 'number'
+      )
+        this.tmuxSeen = { pid: saved.pid, startedAt: saved.startedAt, seenAt: saved.seenAt, savedAt: 0 };
+    } catch {
+      // None saved yet, or unreadable: nothing was seen.
+    }
+    return this.tmuxSeen;
+  }
+
+  private async saveTmuxServer(seen: SeenTmuxServer | null): Promise<void> {
+    try {
+      if (!seen) {
+        await this.deps.fs.remove(this.tmuxServerFile());
+        return;
+      }
+      seen.savedAt = seen.seenAt;
+      const { pid, startedAt, seenAt } = seen;
+      await this.deps.fs.writeFile(this.tmuxServerFile(), `${JSON.stringify({ pid, startedAt, seenAt })}\n`);
+    } catch (err) {
+      this.log(`could not save the tmux server's last sighting: ${errorMessage(err)}`);
+    }
+  }
+
+  private tmuxServerFile(): string {
+    return join(this.stateDir, 'tmux-server.json');
   }
 
   /** Origin's fresh tip of the default branch, so a session never starts from stale code; the local branch if the fetch fails. */
