@@ -306,7 +306,7 @@ export function demoData(now: Date): DemoData {
       recommendedOption: 'BM25',
       status: 'answered',
       answer: 'BM25',
-      answeredVia: 'telegram',
+      answeredVia: 'email',
       createdAt: at(70 * MIN),
       deadline: at(55 * MIN),
       answeredAt: at(64 * MIN),
@@ -338,10 +338,10 @@ export function demoData(now: Date): DemoData {
       'dashboard',
       at(4 * MIN),
     ),
-    request(13, 2, 201, 'Add an RSS feed and a dark mode', 'telegram', at(50 * MIN)),
-    request(12, 1, 101, 'Support Apple Pay at checkout', 'telegram', at(3 * HOUR + 15 * MIN)),
+    request(13, 2, 201, 'Add an RSS feed and a dark mode', 'email', at(50 * MIN)),
+    request(12, 1, 101, 'Support Apple Pay at checkout', 'email', at(3 * HOUR + 15 * MIN)),
     request(11, 1, 102, 'Search results feel random for short queries', 'dashboard', at(26 * HOUR)),
-    request(10, 2, 202, 'Serve blog images from the CDN', 'telegram', at(9 * HOUR)),
+    request(10, 2, 202, 'Serve blog images from the CDN', 'email', at(9 * HOUR)),
     request(9, 1, 103, 'Let admins export orders as CSV', 'dashboard', at(4 * 24 * HOUR)),
   ];
   const byId = new Map(requests.map((r) => [r.id, r]));
@@ -521,7 +521,6 @@ export function demoData(now: Date): DemoData {
     settings: {
       sessionModel: 'opus',
       fallbackModel: 'opencode/glm-5.3-flash-free',
-      telegramAllowlist: [184_220_917, 902_118_334],
       claudeEnabled: true,
       opencodeEnabled: true,
       opencodeBackupModels: ['opencode/big-pickle'],

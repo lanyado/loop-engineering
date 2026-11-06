@@ -89,7 +89,7 @@ function seed() {
     options: ['SQLite', 'Postgres'],
     recommendedOption: 'SQLite',
   });
-  const request = store.requests.create({ projectId: shop.id, text: 'Add Apple Pay', source: 'telegram' });
+  const request = store.requests.create({ projectId: shop.id, text: 'Add Apple Pay', source: 'email' });
   const pr = store.pullRequests.create({
     projectId: shop.id,
     repo: 'web',
@@ -756,7 +756,7 @@ describe('requests', () => {
       { text: 'x'.repeat(4001) },
       { text: 'x', projectId: 'shop' },
       { text: 'x', projectId: 0 },
-      { text: 'x', source: 'telegram' },
+      { text: 'x', source: 'email' },
       { text: 'x', sessionId: 'checkout' },
       { text: 'x', sessionId: 0 },
     ]) {
@@ -842,7 +842,6 @@ describe('settings', () => {
     expect((await call('GET', '/settings')).json.settings).toEqual({
       sessionModel: 'opus',
       fallbackModel: 'opencode/glm-5.3-flash-free',
-      telegramAllowlist: [],
       claudeEnabled: true,
       opencodeEnabled: true,
       opencodeBackupModels: expect.any(Array),
@@ -851,13 +850,11 @@ describe('settings', () => {
     const res = await call('PATCH', '/settings', {
       sessionModel: 'claude-opus-5-5',
       fallbackModel: ' opencode/other ',
-      telegramAllowlist: [123, 456, 123],
       claudeEnabled: false,
     });
     expect(res.json.settings).toEqual({
       sessionModel: 'claude-opus-5-5',
       fallbackModel: 'opencode/other',
-      telegramAllowlist: [123, 456],
       claudeEnabled: false,
       opencodeEnabled: true,
       opencodeBackupModels: expect.any(Array),
@@ -876,11 +873,8 @@ describe('settings', () => {
       {},
       { fallbackModel: '' },
       { fallbackModel: 'x'.repeat(201) },
-      { telegramAllowlist: ['123'] },
-      { telegramAllowlist: [1.5] },
-      { telegramAllowlist: [-4] },
-      { telegramAllowlist: 123 },
-      { telegramAllowlist: Array.from({ length: 201 }, (_, i) => i + 1) },
+      // The Telegram allowlist is gone: a client still sending it is told so.
+      { telegramAllowlist: [123] },
       { sessionModel: '' },
       { sessionModel: 'x', unknown: 1 },
       { dashboardLayout: [] },

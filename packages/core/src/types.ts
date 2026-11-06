@@ -129,13 +129,21 @@ export const QUESTION_ORIGINS = ['agent', 'router', 'system'] as const;
 export type QuestionOrigin = (typeof QUESTION_ORIGINS)[number];
 export type QuestionStatus = (typeof QUESTION_STATUSES)[number];
 
-export const ANSWER_CHANNELS = ['telegram', 'dashboard', 'email', 'timeout'] as const;
+export const ANSWER_CHANNELS = ['dashboard', 'email', 'timeout'] as const;
 export type AnswerChannel = (typeof ANSWER_CHANNELS)[number];
 /** Channels a human can answer through; "timeout" is set only by the store. */
 export type HumanChannel = Exclude<AnswerChannel, 'timeout'>;
 
-export const REQUEST_SOURCES = ['telegram', 'dashboard', 'email'] as const;
+export const REQUEST_SOURCES = ['dashboard', 'email'] as const;
 export type RequestSource = (typeof REQUEST_SOURCES)[number];
+
+/**
+ * Channels that were removed (Telegram, replaced by email). Questions answered and requests sent
+ * through one keep it as they were written, and the database still accepts it for them; nothing
+ * writes it any more.
+ */
+export const RETIRED_CHANNELS = ['telegram'] as const;
+export type RetiredChannel = (typeof RETIRED_CHANNELS)[number];
 
 /**
  * Where a PR is in the loop. check: a custom stage from a stage file (loopState.check names it).
@@ -176,8 +184,6 @@ export interface Settings {
    * its current one (after the last, back to fallbackModel).
    */
   opencodeBackupModels: string[];
-  /** Chat user IDs a channel add-in may accept besides the owner; the name stays for stored settings. */
-  telegramAllowlist: number[];
   /** Agent CLIs the loop may use; at least one is on. Both on: Claude, with OpenCode as the fallback. */
   claudeEnabled: boolean;
   opencodeEnabled: boolean;
@@ -304,7 +310,8 @@ export interface Question {
   recommendedOption: string;
   status: QuestionStatus;
   answer: string | null;
-  answeredVia: AnswerChannel | null;
+  /** A retired channel only on questions answered before it was removed. */
+  answeredVia: AnswerChannel | RetiredChannel | null;
   createdAt: Iso;
   deadline: Iso;
   answeredAt: Iso | null;
@@ -330,7 +337,7 @@ export function ownTask(text: string): string {
 /** A task the human sent (from the dashboard or another channel). The reviewer checks PRs against its text. */
 export interface Request {
   id: number;
-  /** Project the router picked; null until routed (a task from a chat channel arrives without one). */
+  /** Project the router picked; null until routed (a task from a channel that names no project arrives without one). */
   projectId: number | null;
   /** Session the router delivered it to; null until routed. */
   sessionId: number | null;
@@ -339,7 +346,8 @@ export interface Request {
   /** The request this one is a part of (the router split it); null for the human's own requests. */
   parentRequestId: number | null;
   text: string;
-  source: RequestSource;
+  /** A retired channel only on requests sent before it was removed. */
+  source: RequestSource | RetiredChannel;
   createdAt: Iso;
 }
 

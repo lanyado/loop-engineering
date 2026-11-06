@@ -646,6 +646,13 @@ export const MIGRATIONS: readonly Migration[] = [
     sql: `ALTER TABLE projects DROP COLUMN marked_for_direct_input;
           ALTER TABLE projects DROP COLUMN permission_mode;`,
   },
+  {
+    version: 26,
+    name: 'settings: drop telegram_allowlist (the Telegram channel is gone; email has its own allowlist)',
+    // Questions answered and requests sent by Telegram keep answered_via/source 'telegram': the
+    // CHECKs still accept it for them (types.ts RETIRED_CHANNELS), and the code never writes it again.
+    sql: `ALTER TABLE settings DROP COLUMN telegram_allowlist;`,
+  },
 ];
 
 /** Applies every migration newer than the database's user_version, each in its own transaction. */

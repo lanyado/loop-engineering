@@ -75,7 +75,7 @@ const JOB_SETTINGS = JSON.stringify({ disableAllHooks: true });
 
 /**
  * Variables a job inherits from the server (the toolchain and the model provider's login); nothing
- * else, so DASHBOARD_TOKEN, MCP_TOKEN, TELEGRAM_*, GH_TOKEN, cloud keys and SSH_AUTH_SOCK never reach it.
+ * else, so DASHBOARD_TOKEN, MCP_TOKEN, EMAIL_APP_PASSWORD, GH_TOKEN, cloud keys and SSH_AUTH_SOCK never reach it.
  */
 export const JOB_ENV_ALLOWLIST = [
   'PATH',

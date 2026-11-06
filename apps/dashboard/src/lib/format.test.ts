@@ -9,7 +9,6 @@ import {
   formatPrMetrics,
   formatTokens,
   newestFinishedFirst,
-  parseIdList,
   pauseLabel,
   roundLabel,
   sessionRuntime,
@@ -51,15 +50,6 @@ describe('format', () => {
     expect(roundLabel(6, 10)).toBe('round 6/10'); // after "Continue 5 more"
     expect(roundLabel(3, 7, 'light')).toBe('round 3');
     expect(roundLabel(1, 5, 'thorough')).toBe('round 1/5');
-  });
-
-  it('parses the allowlist box', () => {
-    expect(parseIdList('123, 456\n789 123')).toEqual({ ids: [123, 456, 789], invalid: [] });
-    expect(parseIdList('12a -4 0 1.5 99999999999999999')).toEqual({
-      ids: [],
-      invalid: ['12a', '-4', '0', '1.5', '99999999999999999'],
-    });
-    expect(parseIdList('  ')).toEqual({ ids: [], invalid: [] });
   });
 
   it('formats the day a session happened', () => {

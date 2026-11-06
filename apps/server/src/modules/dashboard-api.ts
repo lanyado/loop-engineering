@@ -77,7 +77,7 @@ import { attachments, saveAttachments } from './attachments.js';
  *   GET    /history?q=[&projectId=&kind=&limit=]  { results: [{ entryId, sessionId, kind, createdAt,
  *                                              snippet }] }, best match first; every word of q must match
  *   GET    /settings                         { settings }
- *   PATCH  /settings                         any of { sessionModel, fallbackModel, telegramAllowlist,
+ *   PATCH  /settings                         any of { sessionModel, fallbackModel,
  *                                              claudeEnabled, opencodeEnabled, opencodeBackupModels,
  *                                              dashboardLayout (a JSON object of 4 KB at most) };
  *                                              400 turning both CLIs off
@@ -124,7 +124,7 @@ function defaultProtectedRoots(ctx: ServerContext): string[] {
   return roots.filter((r) => r.startsWith('/'));
 }
 
-const LIMITS = { name: 100, path: 1000, remote: 500, branch: 200, model: 200, request: 4000, allowlist: 200 };
+const LIMITS = { name: 100, path: 1000, remote: 500, branch: 200, model: 200, request: 4000 };
 
 const text = (max: number) => z.string().trim().min(1).max(max);
 const absolutePath = text(LIMITS.path).refine((p) => p.startsWith('/'), 'must be an absolute path');
@@ -182,9 +182,6 @@ const settingsPatch = z
   .strictObject({
     sessionModel: text(LIMITS.model),
     fallbackModel: text(LIMITS.model),
-    telegramAllowlist: z
-      .array(z.number().int().positive().max(Number.MAX_SAFE_INTEGER))
-      .max(LIMITS.allowlist),
     claudeEnabled: z.boolean(),
     opencodeEnabled: z.boolean(),
     opencodeBackupModels: z.array(text(200)).max(10),

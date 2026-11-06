@@ -221,7 +221,6 @@ const loopStatusSchema = z.object({ offlineSince: iso.nullable().default(null) }
 export const settingsSchema = z.object({
   sessionModel: z.string(),
   fallbackModel: z.string(),
-  telegramAllowlist: z.array(z.number()),
   claudeEnabled: z.boolean().default(true),
   opencodeEnabled: z.boolean().default(true),
   opencodeBackupModels: z.array(z.string()).default([]),
@@ -308,7 +307,7 @@ export const responses = {
 };
 
 // Inputs the dashboard sends. The server validates again; these keep junk from leaving the page.
-export const LIMITS = { answer: 2000, request: 4000, model: 200, allowlist: 200 } as const;
+export const LIMITS = { answer: 2000, request: 4000, model: 200 } as const;
 
 export const answerInput = z.object({
   questionId: z.number().int().positive(),
@@ -379,16 +378,10 @@ export const sessionMessageInput = z.object({
   text: z.string().trim().min(1, 'Write a message').max(LIMITS.request),
   attachments: attachmentsInput.optional(),
 });
-export const telegramId = z.coerce
-  .number({ message: 'A channel user ID is a number' })
-  .int('A channel user ID is a whole number')
-  .positive('A channel user ID is positive')
-  .max(Number.MAX_SAFE_INTEGER);
 export const settingsInput = z
   .object({
     sessionModel: z.string().trim().min(1, 'Name a model').max(LIMITS.model),
     fallbackModel: z.string().trim().min(1, 'Name a model').max(LIMITS.model),
-    telegramAllowlist: z.array(telegramId).max(LIMITS.allowlist),
     claudeEnabled: z.boolean(),
     opencodeEnabled: z.boolean(),
     opencodeBackupModels: z

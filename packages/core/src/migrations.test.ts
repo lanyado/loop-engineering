@@ -465,6 +465,50 @@ describe('migrations', () => {
     db.close();
   });
 
+  it('migration 26 drops the Telegram allowlist; what came by Telegram stays readable and is never written again', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'loop-store-'));
+    try {
+      const path = join(dir, 'loop.db');
+      const db = new Database(path);
+      migrate(
+        db,
+        MIGRATIONS.filter((m) => m.version < 26),
+      );
+      db.exec(`
+        UPDATE settings SET telegram_allowlist = '[11, 22]', session_model = 'kept';
+        INSERT INTO projects (name, created_at) VALUES ('p', 't');
+        INSERT INTO sessions (project_id, title, model, branch, created_at) VALUES (1, 's', 'opus', 'b', 't');
+        INSERT INTO requests (project_id, session_id, text, source, created_at) VALUES (1, 1, 'old task', 'telegram', 't');
+        INSERT INTO questions (session_id, text, options, recommended_option, status, answer, answered_via, created_at, deadline)
+          VALUES (1, 'q', '["a","b"]', 'a', 'answered', 'b', 'telegram', 't', 't');
+        INSERT INTO questions (session_id, text, options, recommended_option, created_at, deadline)
+          VALUES (1, 'open', '["a"]', 'a', 't', '2999-01-01T00:00:00.000Z');
+      `);
+      db.close();
+
+      const store = openStore({ path });
+      expect(store.settings.get()).not.toHaveProperty('telegramAllowlist');
+      expect(store.settings.get().sessionModel).toBe('kept');
+      expect(store.requests.get(1)).toMatchObject({ text: 'old task', source: 'telegram' });
+      expect(store.questions.get(1)).toMatchObject({ answer: 'b', answeredVia: 'telegram' });
+      // Nothing writes the retired channel again, but a part the router splits off keeps its request's.
+      expect(() => store.requests.create({ projectId: 1, text: 'x', source: 'telegram' })).toThrow(
+        /requests come from dashboard or email/,
+      );
+      expect(
+        store.requests.create({ projectId: 1, parentRequestId: 1, text: 'part', source: 'telegram' }).source,
+      ).toBe('telegram');
+      expect(() => store.questions.answer(2, 'a', 'telegram' as 'email')).toThrow(/answers come via/);
+      store.close();
+      const after = new Database(path);
+      const columns = after.prepare('PRAGMA table_info(settings)').all() as { name: string }[];
+      expect(columns.map((c) => c.name)).not.toContain('telegram_allowlist');
+      after.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('migration 15 drops cloud and calendar/travel data: old pause reasons become manual, nothing is deleted', () => {
     const db = new Database(':memory:');
     db.pragma('foreign_keys = ON');

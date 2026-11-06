@@ -7,7 +7,7 @@ describe('dashboardEnvFrom', () => {
     'SERVER_URL=http://127.0.0.1:8787',
     'DASHBOARD_TOKEN=abc123abc123abc123',
     'MCP_TOKEN=not-for-the-dashboard',
-    'TELEGRAM_BOT_TOKEN=also-not',
+    'EMAIL_APP_PASSWORD=also-not',
     'DASHBOARD_AUTH=',
   ].join('\n');
 

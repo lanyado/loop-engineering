@@ -78,7 +78,7 @@ beforeEach(() => {
   });
   sessionId = session.id;
   store.subagents.create({ sessionId, title: 'tests', model: 'sonnet', effort: 'high' });
-  const request = store.requests.create({ projectId: project.id, text: 'Apple Pay', source: 'telegram' });
+  const request = store.requests.create({ projectId: project.id, text: 'Apple Pay', source: 'email' });
   const pr = store.pullRequests.create({
     projectId: project.id,
     repo: 'web',
@@ -265,12 +265,10 @@ describe('HttpBackend against the real server', () => {
     expect(await backend.updateProject(project!.id, { autoMerge: true })).toMatchObject({
       autoMerge: true,
     });
-    expect(await backend.updateSettings({ telegramAllowlist: [5, 6], sessionModel: 'sonnet' })).toMatchObject(
-      {
-        telegramAllowlist: [5, 6],
-        sessionModel: 'sonnet',
-      },
-    );
+    expect(await backend.updateSettings({ sessionModel: 'sonnet', claudeEnabled: true })).toMatchObject({
+      sessionModel: 'sonnet',
+      claudeEnabled: true,
+    });
     expect(await backend.createRequest({ text: 'Dark mode', projectId: project!.id })).toMatchObject({
       projectId: project!.id,
       source: 'dashboard',

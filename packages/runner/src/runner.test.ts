@@ -158,7 +158,7 @@ describe('startSession', () => {
 
   it('uses a request the router already recorded', async () => {
     const h = harness();
-    const req = h.store.requests.create({ projectId: h.shop.id, text: 'Fix checkout', source: 'telegram' });
+    const req = h.store.requests.create({ projectId: h.shop.id, text: 'Fix checkout', source: 'email' });
     const s = await h.runner.startSession(h.shop.id, { requestId: req.id });
     expect(h.store.requests.require(req.id).sessionId).toBe(s.id);
     expect(h.script(h.window(s.tmuxTarget))).toContain("'--' 'Fix checkout'");
@@ -305,7 +305,7 @@ describe('startSession', () => {
     expect(h.store.requests.list()).toEqual([]); // no request left assigned to the ended session
 
     vi.spyOn(h.tmux, 'newWindow').mockRejectedValueOnce(new Error('tmux down'));
-    const req = h.store.requests.create({ projectId: h.shop.id, text: 'y', source: 'telegram' });
+    const req = h.store.requests.create({ projectId: h.shop.id, text: 'y', source: 'email' });
     await expect(h.runner.startSession(h.shop.id, { requestId: req.id })).rejects.toThrow('tmux down');
     expect(h.git.worktrees.size).toBe(0);
     expect(h.store.requests.require(req.id).sessionId).toBeNull();

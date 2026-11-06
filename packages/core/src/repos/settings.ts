@@ -5,7 +5,6 @@ import type { Settings } from '../types.js';
 interface SettingsRow {
   session_model: string;
   fallback_model: string;
-  telegram_allowlist: string;
   claude_enabled: number;
   opencode_enabled: number;
   opencode_backup_models: string;
@@ -21,7 +20,6 @@ export class SettingsRepo {
     return {
       sessionModel: row.session_model,
       fallbackModel: row.fallback_model,
-      telegramAllowlist: parseJson<number[]>(row.telegram_allowlist),
       claudeEnabled: toBool(row.claude_enabled),
       opencodeEnabled: toBool(row.opencode_enabled),
       opencodeBackupModels: parseJson<string[]>(row.opencode_backup_models),
@@ -50,9 +48,6 @@ export class SettingsRepo {
     if (patch.sessionModel !== undefined && patch.sessionModel.trim() === '') {
       throw new ValidationError('sessionModel must not be empty');
     }
-    if (patch.telegramAllowlist?.some((id) => !Number.isSafeInteger(id))) {
-      throw new ValidationError('telegramAllowlist must contain integer user IDs');
-    }
     if (patch.opencodeBackupModels?.some((m) => m.trim() === '' || /\s/.test(m.trim()))) {
       throw new ValidationError('opencodeBackupModels must be model names like opencode/big-pickle');
     }
@@ -63,11 +58,9 @@ export class SettingsRepo {
     ) {
       throw new ValidationError('keep Claude Code or OpenCode on: the loop needs one of them');
     }
-    const allowlist = patch.telegramAllowlist && [...new Set(patch.telegramAllowlist)];
     const columns = {
       session_model: patch.sessionModel,
       fallback_model: patch.fallbackModel,
-      telegram_allowlist: toJson(allowlist),
       claude_enabled: fromBool(patch.claudeEnabled),
       opencode_enabled: fromBool(patch.opencodeEnabled),
       dashboard_layout: toJson(patch.dashboardLayout),

@@ -348,13 +348,13 @@ test('answers with free text', async ({ page }) => {
 test('a question answered elsewhere disappears live', async ({ page }) => {
   await open(page);
   const { question } = await testRoute<{ question: { id: number } }>('/test/ask', {
-    text: 'Telegram will answer this one',
+    text: 'Email will answer this one',
     options: ['A', 'B'],
     recommended: 'A',
   });
-  const card = page.getByTestId('question').filter({ hasText: 'Telegram will answer this one' });
+  const card = page.getByTestId('question').filter({ hasText: 'Email will answer this one' });
   await expect(card).toBeVisible();
-  // Another channel (here: the API, as an add-in channel would through the bus) answers first.
+  // Another channel (here: the API, as the email channel would through the bus) answers first.
   await api(`/questions/${question.id}/answer`, { method: 'POST', body: JSON.stringify({ answer: 'B' }) });
   await expect(card).toBeHidden();
 });
@@ -379,9 +379,6 @@ test('project toggles and settings save to the server', async ({ page }, info) =
       async () => (await api<{ settings: { fallbackModel: string } }>('/settings')).settings.fallbackModel,
     )
     .toBe('opencode/qwen-free');
-
-  // The chat allowlist is managed outside the dashboard now; the sheet has no editor for it.
-  await expect(page.getByTestId('allowlist')).toHaveCount(0);
 
   // Everything survives a reload, because it came from the server.
   await page.reload();

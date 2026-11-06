@@ -38,8 +38,8 @@ const config = (dbPath = ':memory:'): ServerConfig => ({
 });
 
 /** A second channel, plugged in the way an add-in does: a server module attaching a channel to the bus. */
-class FakeTelegram implements QuestionChannel, ServerModule {
-  readonly name = 'telegram' as const;
+class FakeEmail implements QuestionChannel, ServerModule {
+  readonly name = 'email' as const;
   posted: Question[] = [];
   confirmations: string[] = [];
   won: string[] = [];
@@ -61,7 +61,7 @@ let clock: FakeClock;
 let timers: FakeTimers;
 let store: Store;
 let sessionId: number;
-let telegram: FakeTelegram;
+let email: FakeEmail;
 let server: LoopServer;
 let url: string;
 let cleanup: (() => Promise<void> | void)[];
@@ -73,8 +73,8 @@ async function boot(dbPath?: string) {
     store.sessions.list({ projectId: project.id })[0] ??
     store.sessions.create({ projectId: project.id, title: 's', model: 'opus', branch: 'b' })
   ).id;
-  telegram = new FakeTelegram();
-  server = createServer({ config: config(dbPath), store, timers, modules: [telegram] });
+  email = new FakeEmail();
+  server = createServer({ config: config(dbPath), store, timers, modules: [email] });
   ({ url } = await server.start());
   const [s, st] = [server, store];
   cleanup.push(async () => {
@@ -153,7 +153,7 @@ describe('ask_human end to end', () => {
     const call = askHuman(agent, { context: 'Single-user app.' });
     const question = await pendingQuestion();
     expect(question).toMatchObject({ text: 'Which database?', context: 'Single-user app.', sessionId });
-    expect(telegram.posted.map((q) => q.id)).toEqual([question.id]);
+    expect(email.posted.map((q) => q.id)).toEqual([question.id]);
 
     const res = await answerViaDashboard(question.id, 'Postgres');
     expect(res.status).toBe(200);
@@ -167,7 +167,7 @@ describe('ask_human end to end', () => {
       defaulted: false,
       note: 'The human chose "Postgres" (via dashboard).',
     });
-    expect(telegram.confirmations).toEqual(['answered: Postgres (via dashboard)']);
+    expect(email.confirmations).toEqual(['answered: Postgres (via dashboard)']);
     expect(server.ctx.questions.waitingCount).toBe(0);
   });
 
@@ -198,7 +198,7 @@ describe('ask_human end to end', () => {
     expect((result.structuredContent as { note: string }).note).toContain(
       'you went with your recommended option "SQLite"',
     );
-    expect(telegram.confirmations).toEqual(['no answer in 15 min, went with the recommended option: SQLite']);
+    expect(email.confirmations).toEqual(['no answer in 15 min, went with the recommended option: SQLite']);
 
     const late = await answerViaDashboard(question.id, 'Postgres');
     expect(late.status).toBe(409);
@@ -206,33 +206,33 @@ describe('ask_human end to end', () => {
   });
 
   describe('first answer wins across channels', () => {
-    it('telegram first: the dashboard answer is refused and the agent gets the telegram answer', async () => {
+    it('email first: the dashboard answer is refused and the agent gets the email answer', async () => {
       const agent = await connectAgent();
       const call = askHuman(agent);
       const question = await pendingQuestion();
 
-      expect(server.ctx.questions.answer(question.id, 'Postgres', 'telegram').accepted).toBe(true);
+      expect(server.ctx.questions.answer(question.id, 'Postgres', 'email').accepted).toBe(true);
       const res = await answerViaDashboard(question.id, 'SQLite');
       expect(res.status).toBe(409);
-      expect(await res.json()).toMatchObject({ question: { answer: 'Postgres', answeredVia: 'telegram' } });
+      expect(await res.json()).toMatchObject({ question: { answer: 'Postgres', answeredVia: 'email' } });
 
-      expect((await call).structuredContent).toMatchObject({ answer: 'Postgres', answeredVia: 'telegram' });
-      expect(telegram.won).toEqual(['Postgres']);
-      expect(telegram.confirmations).toEqual([]);
+      expect((await call).structuredContent).toMatchObject({ answer: 'Postgres', answeredVia: 'email' });
+      expect(email.won).toEqual(['Postgres']);
+      expect(email.confirmations).toEqual([]);
     });
 
-    it('dashboard first: telegram is refused and posts the confirmation', async () => {
+    it('dashboard first: email is refused and posts the confirmation', async () => {
       const agent = await connectAgent();
       const call = askHuman(agent);
       const question = await pendingQuestion();
 
       expect((await answerViaDashboard(question.id, 'SQLite')).status).toBe(200);
-      expect(server.ctx.questions.answer(question.id, 'Postgres', 'telegram')).toMatchObject({
+      expect(server.ctx.questions.answer(question.id, 'Postgres', 'email')).toMatchObject({
         accepted: false,
         question: { answer: 'SQLite' },
       });
       expect((await call).structuredContent).toMatchObject({ answer: 'SQLite', answeredVia: 'dashboard' });
-      expect(telegram.confirmations).toEqual(['answered: SQLite (via dashboard)']);
+      expect(email.confirmations).toEqual(['answered: SQLite (via dashboard)']);
     });
 
     it('a burst of simultaneous answers has exactly one winner', async () => {
@@ -242,13 +242,13 @@ describe('ask_human end to end', () => {
 
       const responses = await Promise.all([
         ...['A', 'B', 'C', 'D'].map((a) => answerViaDashboard(question.id, a)),
-        Promise.resolve().then(() => server.ctx.questions.answer(question.id, 'T', 'telegram')),
+        Promise.resolve().then(() => server.ctx.questions.answer(question.id, 'T', 'email')),
       ]);
       const winners = responses.filter((r) => (r instanceof Response ? r.status === 200 : r.accepted));
       expect(winners).toHaveLength(1);
       const final = store.questions.require(question.id);
       expect((await call).structuredContent).toMatchObject({ answer: final.answer });
-      expect(telegram.won.length + telegram.confirmations.length).toBe(1);
+      expect(email.won.length + email.confirmations.length).toBe(1);
     });
   });
 
@@ -327,7 +327,7 @@ describe('ask_human end to end', () => {
     const second = askHuman(agent); // e.g. the same "merge now?" for the next PR
     const q2 = await pendingQuestion();
     expect(q2.id).not.toBe(q1.id);
-    expect(telegram.posted.map((q) => q.id)).toEqual([q1.id, q2.id]);
+    expect(email.posted.map((q) => q.id)).toEqual([q1.id, q2.id]);
     await answerViaDashboard(q2.id, 'SQLite');
     expect((await second).structuredContent).toMatchObject({ questionId: q2.id, answer: 'SQLite' });
   });
@@ -352,7 +352,7 @@ describe('ask_human end to end', () => {
 
     timers.advance(60_000); // the sweep runs now and finds nothing left to announce
     expect(resolved).toHaveLength(1);
-    expect(telegram.confirmations).toEqual(['no answer in 15 min, went with the recommended option: SQLite']);
+    expect(email.confirmations).toEqual(['no answer in 15 min, went with the recommended option: SQLite']);
   });
 
   it('reports a bad question to the agent as a tool error', async () => {
@@ -485,7 +485,7 @@ describe('REST API', () => {
       options: ['y'],
       recommendedOption: 'y',
     });
-    server.ctx.questions.answer(a.id, 'x', 'telegram');
+    server.ctx.questions.answer(a.id, 'x', 'email');
     const ids = async (query: string) =>
       ((await (await api(`/api/questions${query}`)).json()) as { questions: Question[] }).questions.map(
         (q) => q.id,

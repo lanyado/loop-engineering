@@ -44,7 +44,6 @@ describe('settings', () => {
     expect(store.settings.get()).toEqual({
       sessionModel: 'opus',
       fallbackModel: 'opencode/glm-5.3-flash-free',
-      telegramAllowlist: [],
       claudeEnabled: true,
       opencodeEnabled: true,
       opencodeBackupModels: [
@@ -55,10 +54,9 @@ describe('settings', () => {
       ],
       dashboardLayout: {},
     });
-    expect(store.settings.update({ telegramAllowlist: [11, 22, 11] })).toEqual({
+    expect(store.settings.update({ claudeEnabled: true })).toEqual({
       sessionModel: 'opus',
       fallbackModel: 'opencode/glm-5.3-flash-free',
-      telegramAllowlist: [11, 22],
       claudeEnabled: true,
       opencodeEnabled: true,
       opencodeBackupModels: [
@@ -69,7 +67,6 @@ describe('settings', () => {
       ],
       dashboardLayout: {},
     });
-    expect(store.settings.update({}).telegramAllowlist).toEqual([11, 22]);
     expect(store.settings.update({ sessionModel: 'fable' }).sessionModel).toBe('fable');
     expect(store.settings.update({ dashboardLayout: { topbar: ['brand'] } }).dashboardLayout).toEqual({
       topbar: ['brand'],
@@ -90,7 +87,6 @@ describe('settings', () => {
   it('rejects bad values', () => {
     expect(() => store.settings.update({ fallbackModel: ' ' })).toThrow(ValidationError);
     expect(() => store.settings.update({ sessionModel: '' })).toThrow(ValidationError);
-    expect(() => store.settings.update({ telegramAllowlist: [1.5] })).toThrow(ValidationError);
   });
 });
 
@@ -636,7 +632,7 @@ describe('pull requests and metrics', () => {
       projectId: project.id,
       sessionId: session.id,
       text: 'Add Apple Pay',
-      source: 'telegram',
+      source: 'email',
     });
     const pr = store.pullRequests.create({
       projectId: project.id,
@@ -735,7 +731,7 @@ describe('requests', () => {
       projectId: project.id,
       sessionId: session.id,
       text: 'Also RTL',
-      source: 'telegram',
+      source: 'email',
     });
     expect(store.requests.list({ sessionId: session.id }).map((r) => r.id)).toEqual([request.id, second.id]);
     expect(store.requests.list({ projectId: 999 })).toEqual([]);
@@ -784,24 +780,24 @@ describe('requests', () => {
   });
 
   it('validates', () => {
-    expect(() => store.requests.create({ projectId: project.id, text: ' ', source: 'telegram' })).toThrow(
+    expect(() => store.requests.create({ projectId: project.id, text: ' ', source: 'email' })).toThrow(
       ValidationError,
     );
-    expect(() => store.requests.create({ projectId: 999, text: 'x', source: 'telegram' })).toThrow(
+    expect(() => store.requests.create({ projectId: 999, text: 'x', source: 'email' })).toThrow(
       NotFoundError,
     );
     expect(() =>
-      store.requests.create({ projectId: project.id, text: 'x', source: 'sms' as 'telegram' }),
-    ).toThrow(/CHECK/);
+      store.requests.create({ projectId: project.id, text: 'x', source: 'sms' as 'email' }),
+    ).toThrow(ValidationError);
     expect(() => store.requests.assignSession(999, 1)).toThrow(NotFoundError);
   });
 
   it('stores an unrouted request and routes it later', () => {
-    const request = store.requests.create({ text: 'Fix the login bug', source: 'telegram' });
-    expect(request).toMatchObject({ projectId: null, sessionId: null, source: 'telegram' });
+    const request = store.requests.create({ text: 'Fix the login bug', source: 'email' });
+    expect(request).toMatchObject({ projectId: null, sessionId: null, source: 'email' });
     store.requests.create({ projectId: project.id, text: 'routed', source: 'dashboard' });
     expect(store.requests.list({ projectId: null }).map((r) => r.id)).toEqual([request.id]);
-    expect(() => store.requests.create({ text: 'x', source: 'telegram', sessionId: 1 })).toThrow(
+    expect(() => store.requests.create({ text: 'x', source: 'email', sessionId: 1 })).toThrow(
       ValidationError,
     );
 
@@ -810,7 +806,7 @@ describe('requests', () => {
     expect(() => store.requests.assignProject(request.id, other.id)).toThrow(/already routed/);
 
     // assignSession on an unrouted request takes the session's project.
-    const unrouted = store.requests.create({ text: 'Another', source: 'telegram' });
+    const unrouted = store.requests.create({ text: 'Another', source: 'email' });
     const session = store.sessions.create({ projectId: other.id, title: 's', model: 'm', branch: 'b' });
     expect(store.requests.assignSession(unrouted.id, session.id)).toMatchObject({
       projectId: other.id,

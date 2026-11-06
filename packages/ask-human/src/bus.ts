@@ -1,4 +1,4 @@
-import type { AnswerChannel, Question, Request, Session } from '@loop-engineering/core';
+import type { Question, Request, Session } from '@loop-engineering/core';
 
 /** A new question is waiting for the human. Channels post it. */
 export interface QuestionCreatedEvent {
@@ -14,15 +14,16 @@ export interface QuestionResolvedEvent {
   type: 'question.resolved';
   question: Question;
   answer: string;
-  answeredVia: AnswerChannel;
+  /** A retired channel only when an old question answered through it is resolved again. */
+  answeredVia: NonNullable<Question['answeredVia']>;
   defaulted: boolean;
 }
 
 export type QuestionEvent = QuestionCreatedEvent | QuestionResolvedEvent;
 
 /**
- * The human sent a new task (the dashboard or another channel) and RequestService stored it. Chat
- * tasks have no project yet; a dashboard task may name one. The router (M5) subscribes with
+ * The human sent a new task (the dashboard, email or another channel) and RequestService stored it.
+ * A task may name its project or not yet. The router (M5) subscribes with
  * `bus.on('request.created', ...)`, picks the project and session, and records them with
  * store.requests.assignProject/assignSession.
  */
