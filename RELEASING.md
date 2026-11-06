@@ -104,14 +104,15 @@ journalctl --user -u loop-server -n 50 --no-pager
 
 Running builders are not stopped by a server restart (the tmux server is left alone, see [the guide](docs/unattended.md#services)). They keep the instructions they started with until their next resume. Running PR jobs are interrupted and start again after the restart.
 
-**To roll back**, stop the services and the timers that open the database (leave out the timers you didn't install), `git checkout v<previous>`, `npm ci && npm run build`, and, if the newer version ran a migration, restore the backup before starting. Remove the write-ahead files before copying: a stale WAL would be replayed onto the restored file and migrate it again.
+**To roll back**, stop the services and the timers that open the database (leave out the timers you didn't install), `git checkout v<previous>`, `npm ci && npm run build`, and, if the newer version ran a migration, restore the backup with SQLite itself before starting. Don't copy the file back: after an unclean stop, `loop.db-wal` and `-shm` remain, and SQLite would replay them onto a copied file, which would still have the new schema.
 
 ```sh
 systemctl --user stop loop-server loop-dashboard loop-backup.timer loop-retro.timer
 git checkout vPREVIOUS && npm ci && npm run build
-rm -f data/loop.db-wal data/loop.db-shm
-cp data/loop.db.pre-vX.Y.Z data/loop.db
+sqlite3 data/loop.db ".restore data/loop.db.pre-vX.Y.Z"
 systemctl --user start loop-server loop-dashboard loop-backup.timer loop-retro.timer
 ```
+
+With email on, a rollback also rewinds how far the inbox was read: every mail taken since the backup is handled again, so a task mailed in that window starts a second time.
 
 Older code refuses a newer database (`Database schema version N is newer than this code (M)`), so the restore is not optional after a migration. Anything recorded between the upgrade and the rollback is lost with it: sessions started since are no longer known, so their PRs leave the loop (they stay open on GitHub) and their tmux windows keep running until you close them (`tmux attach -t loop`). Roll back soon, or not at all.

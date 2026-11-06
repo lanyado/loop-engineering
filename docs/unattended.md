@@ -25,7 +25,7 @@ One machine runs everything: the server, the dashboard, the agents in tmux, and 
 ## The machine
 
 - **A user of its own.** Run Loop as one OS user (say `loop`) that holds only what the agents need: its Claude login, a `gh` login, git credentials for the repos it works on, and the projects' test credentials. Sessions and PR jobs run as this user with its real `HOME`, so they can reach anything it can ([SECURITY.md](../SECURITY.md)).
-- **Tools.** Node 20.19 or later, Git 2.31 or later (`git --version`), tmux, [Claude Code](https://docs.claude.com/en/docs/claude-code) logged in as that user, and [`gh`](https://cli.github.com) logged in (`gh auth login`) for the PR loop. `flock` (util-linux) and `pgrep` (procps) for `scripts/heavy`: without `flock` heavy runs have no limit, and without `pgrep` a run stopped at its time limit leaves its browsers running. `sqlite3` for backups. Git's version matters: the runner's guard over git in builders' repos needs `GIT_CONFIG_COUNT` (Git 2.31). On Git 2.26 to 2.30 the guard silently does nothing, and on older Git every git call the runner makes fails. Optional: OpenCode for the free fallback, `jq` for the usage meters, `ttyd` for the terminals under each pipeline.
+- **Tools.** Node 20.19 or later, Git 2.31 or later (`git --version`), tmux, [Claude Code](https://docs.claude.com/en/docs/claude-code) logged in as that user, and [`gh`](https://cli.github.com) logged in (`gh auth login`) for the PR loop. `flock` (util-linux) and `pgrep` (procps) for `scripts/heavy`: without `flock` heavy runs have no limit, and without `pgrep` a run stopped at its time limit leaves its browsers running. `sqlite3` for backups. Git's version matters: below 2.31, git ignores `GIT_CONFIG_COUNT`, so the runner can no longer override a builder repo's own filters, drivers and credential helpers ([below](#what-agents-can-see)). The server logs a warning at start when that happens. Optional: OpenCode for the free fallback, `jq` for the usage meters, `ttyd` for the terminals under each pipeline.
 - **Git over HTTPS.** `gh auth setup-git` lets git use gh's login, so pushes and the loop's `gh` calls share one credential and one transport. An SSH outage at GitHub then can't stop pushes while the API works. The loop treats SSH failures as network failures and waits them out either way.
 - **Size.** What loads the machine is test and browser runs, not sessions: builders and PR jobs each run them. Before the [slot limit](#limits-on-load) existed, the load average reached 56–67 on 12 CPUs and QA jobs ran out of time.
 
@@ -136,9 +136,12 @@ Agents never inherit the server's environment, which holds all of `.env`. Each a
 
 `DASHBOARD_TOKEN`, the shared `MCP_TOKEN`, `EMAIL_APP_PASSWORD` and the dashboard password and secret stay out of their environment and out of tmux's global environment. The full list is in [What agents can see](reference.md#what-agents-can-see).
 
-A variable an agent needs that isn't on the list doesn't reach it, and the agent fails when it looks for it, not at launch. Name extra variables in `.env` with `AGENT_ENV_EXTRA`, comma-separated names or prefixes, such as `AGENT_ENV_EXTRA=AWS_*,OPENROUTER_API_KEY`. The server refuses to start if an entry covers one of its own secrets.
+A variable an agent needs that isn't on the list doesn't reach it, and the agent fails when it looks for it, not at launch. Name extra variables in `.env` with `AGENT_ENV_EXTRA`, comma-separated names or prefixes, such as `AGENT_ENV_EXTRA=AWS_*,OPENROUTER_API_KEY`. The server refuses to start if an entry covers one of its own secrets (`DASHBOARD_TOKEN`, `DASHBOARD_PASSWORD`, `DASHBOARD_SESSION_SECRET`, `MCP_TOKEN`, `EMAIL_APP_PASSWORD`), so those can never be passed through.
 
-The runner's own git commands in builders' repos (`status`, `diff`, `fetch`, `push`, `worktree`) run with only what pushing needs, with time limits. Hooks, filters, credential helpers and similar settings from the repo's own config are switched off. This needs Git 2.31 or later ([the machine](#the-machine)).
+The runner's own git commands in builders' repos (`status`, `diff`, `fetch`, `push`, `worktree`) run with only what pushing needs, with time limits.
+
+- **On every command:** `-c` options turn off hooks, `fsmonitor`, the `ext::` transport, submodule recursion and signature checks, and `GIT_PROXY_COMMAND` is set empty.
+- **The repo's own config:** its filters, diff and merge drivers, pagers, editors, `core.sshCommand` and credential helpers are overridden through `GIT_CONFIG_COUNT`. That override needs Git 2.31 or later; older Git keeps everything else.
 
 > [!WARNING]
 > **This is not a sandbox.** Agents run as the Loop user with its real `HOME`. An agent that goes looking can still read `.env` from the repo folder, read the environment of processes started with the server's full environment (`/proc/<pid>/environ`), and read the other agents' panes. Some practical limits:
@@ -309,15 +312,18 @@ systemctl --user daemon-reload && systemctl --user enable --now loop-backup.time
 
 It keeps 14 days. Copy `data/` off the machine as well (`rsync`, your backup tool): a backup on the same disk doesn't survive the disk.
 
-To restore, stop everything that opens the database, remove its write-ahead files **before** copying (a stale WAL would be replayed onto the restored file), copy, and start again. Leave out the timers you didn't install:
+To restore, stop everything that opens the database, restore with SQLite itself, and start again. Leave out the timers you didn't install:
 
 ```sh
 cd ~/loop-engineering
 systemctl --user stop loop-server loop-dashboard loop-backup.timer loop-retro.timer
-rm -f data/loop.db-wal data/loop.db-shm
-cp data/backups/loop-YYYY-MM-DD.db data/loop.db
+sqlite3 data/loop.db ".restore data/backups/loop-YYYY-MM-DD.db"
 systemctl --user start loop-server loop-dashboard loop-backup.timer loop-retro.timer
 ```
+
+Don't copy the file back instead: after an unclean stop, `loop.db-wal` and `-shm` remain, and SQLite would replay them onto a copied file.
+
+A restore also rewinds the email state (how far the inbox was read, the threads) to the backup. Every mail taken since then is handled again: a task mailed in that window starts a second time.
 
 ## Upgrades
 

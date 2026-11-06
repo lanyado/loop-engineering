@@ -106,7 +106,7 @@ describe('a title as wide as the pane', () => {
       '',
       '  ⏵⏵ auto mode on (shift+tab to cycle) · PR #14',
     ].join('\n');
-  const hebrew = ' בדף ההגדרות: להחליף את הכפתור שבראש הדף בכפתור חדש, כלומר רק';
+  const hebrew = ' בדף ההגדרות: להחליף את הכפתור שבראש הדף בכפתור חדש, כלומר רק ';
   const english = ' From the owner. The files the requester attached to the email have now reach… ─';
 
   it('still shows the box, empty or holding text', () => {

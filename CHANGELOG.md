@@ -35,8 +35,12 @@ Planned as **0.1.0**, the first tagged release. It will hold everything on `main
 
 ### Security
 
-- **Agents no longer inherit the server's environment.** Before, `.env`'s secrets reached every builder through tmux (`DASHBOARD_TOKEN`, the shared `MCP_TOKEN`, `EMAIL_APP_PASSWORD`, the dashboard password and secret). Now each agent runs under `env -i` with an allowlist, plus the names or prefixes in the new `AGENT_ENV_EXTRA` (the server refuses one that covers its own secrets). tmux itself runs with no credentials, and the secret names are removed from a tmux server that already holds them. The runner's own git in builders' repos runs with only what pushing needs, with time limits. Through `GIT_CONFIG_COUNT`, it switches off the repo's hooks, filters, drivers, `core.sshCommand`, credential helpers and proxy command, and fails closed when it can't read the repo's config. It is not a sandbox: agents can still read `.env` from disk as the same user ([What agents can see](docs/reference.md#what-agents-can-see)) (#44).
-- Email sender checks: a From header with two addresses is not trusted, the domain is taken after the last `@`, `EMAIL_ALLOWLIST` refuses many more public-provider domains, and a mail that copies the attachments list can only ever list files inside the channel's own folder (#40).
+- **Agents no longer inherit the server's environment.** Before, `.env`'s secrets reached every builder through tmux (`DASHBOARD_TOKEN`, the shared `MCP_TOKEN`, `EMAIL_APP_PASSWORD`, the dashboard password and secret). Now each agent runs under `env -i` with an allowlist, plus the names or prefixes in the new `AGENT_ENV_EXTRA`. The server's own secrets (`DASHBOARD_TOKEN`, `DASHBOARD_PASSWORD`, `DASHBOARD_SESSION_SECRET`, `MCP_TOKEN` and `EMAIL_APP_PASSWORD`) can never be passed: the server refuses an `AGENT_ENV_EXTRA` entry that covers one. tmux itself runs with no credentials, and the secret names are removed from a tmux server that already holds them.
+  - **The runner's own git** in builders' repos runs with only what pushing needs, with time limits, and does nothing in a repo whose config it can't read.
+  - `-c` options turn off hooks (`core.hooksPath=/dev/null`), `core.fsmonitor`, the `ext::` transport, submodule recursion and signature checks.
+  - `GIT_PROXY_COMMAND` is set empty, so no `core.gitProxy` runs.
+  - `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` override the repo's own config: its filters, diff and merge drivers, pagers, editors, `core.sshCommand` and credential helpers. It is not a sandbox: agents can still read `.env` from disk as the same user ([What agents can see](docs/reference.md#what-agents-can-see)) (#44).
+- Email sender checks: a From header with two addresses is not trusted, the domain is taken after the last `@`, `EMAIL_ALLOWLIST` refuses many more public-provider domains, and a mail that copies the attachments list (or a look-alike of its heading) can only ever list files inside the channel's own folder. Each saved file is listed once, at the end of the request, with a content type that is a plain `type/subtype` or else `application/octet-stream` (#40).
 - `nodemailer` 10.3.1 and `mailparser` 3.14.2, past the address-parser advisories of earlier versions (#40).
 
 ### Upgrade notes
@@ -46,7 +50,7 @@ Planned as **0.1.0**, the first tagged release. It will hold everything on `main
 - Reload open dashboard tabs after upgrading: an old bundle still expects `telegramAllowlist` in settings.
 - A tmux server started by an older version still holds `.env`'s secrets until it exits. The next session start removes them from its global environment. For a full clean, `tmux kill-server` when no builder is running ([the reference](docs/reference.md#what-agents-can-see)).
 - A variable an agent needs that is not on its allowlist (an OpenCode provider key, say) no longer reaches it: name it in `AGENT_ENV_EXTRA`.
-- **Git 2.31 or later is required.** The runner's git guard needs `GIT_CONFIG_COUNT`. On Git 2.26 to 2.30 the guard does nothing, and on older Git every git call the runner makes fails.
+- **Use Git 2.31 or later.** Older Git ignores `GIT_CONFIG_COUNT`, so the override of a repo's own filters, drivers and credential helpers is lost; the `-c` options and the empty `GIT_PROXY_COMMAND` still apply. The server logs a warning at start when Git is older.
 
 ### Since the initial public release (#1 to #37)
 
