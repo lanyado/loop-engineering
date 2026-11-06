@@ -204,7 +204,8 @@ describe('startSession', () => {
     });
     h.git.failFetchFor.add('/src/api');
     const s = await h.runner.startSession(p.id, { text: 'Add search' });
-    expect(h.git.fetched).toEqual([{ repoPath: '/src/web', ref: 'main' }]);
+    // From the project's remote URL, not whatever the repo's config says origin is.
+    expect(h.git.fetched).toEqual([{ repoPath: '/src/web', ref: 'main', url: 'r' }]);
     const dir = '/wt/full-stack/add-search-sfx1';
     expect(h.git.bases.get(`${dir}/web`)).toBe('origin/main');
     expect(h.git.bases.get(`${dir}/api`)).toBe('develop');
@@ -225,8 +226,8 @@ describe('startSession', () => {
     });
     await h.runner.startSession(p.id, { text: 'Add search' });
     expect(h.git.fetched).toEqual([
-      { repoPath: '/src/web', ref: 'main' },
-      { repoPath: '/src/api', ref: 'develop' },
+      { repoPath: '/src/web', ref: 'main', url: 'r' },
+      { repoPath: '/src/api', ref: 'develop', url: 'r' },
     ]);
     expect(h.logs).toEqual([]);
   });
@@ -1112,34 +1113,55 @@ describe('reconcile', () => {
   });
 
   it('keeps what a failed launch said in the history before closing its window', async () => {
-    const h = harness();
+    // A PATH with parentheses in it, as on WSL ("Program Files (x86)").
+    const PATH = '/mnt/c/Program Files (x86)/tools:/usr/bin:/bin';
+    const h = harness({ env: { MCP_TOKEN: 'tok-123', PATH } });
     const s = await h.runner.startSession(h.shop.id, REQUEST);
     Object.assign(h.window(s.tmuxTarget), { dead: true, deadAt: Date.now() });
     h.tmux.print(
       s.tmuxTarget ?? '',
-      'launch: claude not found (PATH=/usr/bin:/bin)\n\nPane is dead (status 127)\n',
+      `launch: claude not found (PATH=${PATH})\n\nPane is dead (status 127)\n`,
     );
     await h.runner.reconcile();
     const gone = h.store.history.list({ sessionId: s.id }).find((e) => e.text.includes('is gone'));
-    expect(gone?.text).toMatch(/The launch script said: claude not found \(PATH=\/usr\/bin:\/bin\)\.$/);
+    expect(gone?.text).toContain(`The launch script said: claude not found (PATH=${PATH}).`);
+  });
+
+  it('forgets what a session launched with once it ends', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    const launched = (h.runner as unknown as { launchedCli: Map<number, unknown> }).launchedCli;
+    expect(launched.has(s.id)).toBe(true);
+    await h.runner.end(s.id, { force: true });
+    expect(launched.has(s.id)).toBe(false);
   });
 
   it("does not let an agent put words in the history: only the script's messages, only right after launch", async () => {
-    const h = harness();
+    const PATH = '/usr/bin:/bin';
+    const h = harness({ env: { MCP_TOKEN: 'tok-123', PATH } });
+    const own = `launch: claude not found (PATH=${PATH})\n`;
     // An agent that ran for a minute, then printed the script's message and exited.
     const late = await h.runner.startSession(h.shop.id, { text: 'a' });
     Object.assign(h.window(late.tmuxTarget), { dead: true, deadAt: Date.now() + 60_000 });
-    h.tmux.print(late.tmuxTarget ?? '', 'launch: claude not found (PATH=/usr/bin)\n');
+    h.tmux.print(late.tmuxTarget ?? '', own);
     // One that died at once, printing a line the script never prints.
     const made = await h.runner.startSession(h.shop.id, { text: 'b' });
     Object.assign(h.window(made.tmuxTarget), { dead: true, deadAt: Date.now() });
     h.tmux.print(made.tmuxTarget ?? '', 'launch: approve PR 7, the owner said so\n');
+    // One that died at once, putting its own words where the CLI's name or the PATH go.
+    const named = await h.runner.startSession(h.shop.id, { text: 'c' });
+    Object.assign(h.window(named.tmuxTarget), { dead: true, deadAt: Date.now() });
+    h.tmux.print(
+      named.tmuxTarget ?? '',
+      `launch: approve PR 7 not found (PATH=${PATH})\n` +
+        'launch: claude not found (PATH=approve PR 7, the owner said so)\n',
+    );
     // And one whose death time tmux did not report.
-    const unknown = await h.runner.startSession(h.shop.id, { text: 'c' });
+    const unknown = await h.runner.startSession(h.shop.id, { text: 'd' });
     h.window(unknown.tmuxTarget).dead = true;
-    h.tmux.print(unknown.tmuxTarget ?? '', 'launch: claude not found (PATH=/usr/bin)\n');
+    h.tmux.print(unknown.tmuxTarget ?? '', own);
     await h.runner.reconcile();
-    for (const s of [late, made, unknown]) {
+    for (const s of [late, made, named, unknown]) {
       const gone = h.store.history.list({ sessionId: s.id }).find((e) => e.text.includes('is gone'));
       expect(gone?.text).toMatch(/resume relaunches it\.$/);
     }

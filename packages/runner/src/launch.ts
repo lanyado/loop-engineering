@@ -11,26 +11,37 @@ const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 /** Starts every line the script prints about its own failure; launchFailure() finds them in the pane. */
 const LAUNCH_PREFIX = 'launch:';
 
-/** The script's own failure messages, exactly as it prints them (after "launch: "). */
-const LAUNCH_MESSAGES = [
-  /^\/usr\/bin\/env not found$/,
-  /^cannot enter the working folder$/,
-  /^\S.* not found \(PATH=[^()]*\)$/,
-];
+/** The script's own failure messages that name nothing of the session's (after "launch: "). */
+const FIXED_MESSAGES = ['/usr/bin/env not found', 'cannot enter the working folder'];
+
+/** What the launch script ran: its CLI (argv[0]) and the PATH it gave the agent. */
+export interface LaunchedCli {
+  cli: string;
+  path: string;
+}
+
+/** The script's message for a CLI missing from PATH, exactly as it prints it (after "launch: "). */
+function notFound({ cli, path }: LaunchedCli): string {
+  return `${cli} not found (PATH=${path})`;
+}
 
 /**
  * What the launch script said about why the agent never started, from the dead pane's text: its
- * own messages, as one line, or null. Lines the script does not print are ignored, so an agent
- * printing "launch: ..." gets nothing in; the runner also reads it only for a pane that died right
- * after its launch. The runner puts it in the session history, since the window is killed next.
+ * own messages, as one line, or null. Only the exact lines the script prints count: the fixed ones,
+ * and "<cli> not found (PATH=<path>)" for the CLI and PATH it actually ran with (`launched`; without
+ * it, that message is not accepted), so an agent printing "launch: ..." gets no words of its own in.
+ * The runner also reads it only for a pane that died right after its launch, and puts it in the
+ * session history, since the window is killed next.
  */
-export function launchFailure(pane: string): string | null {
+export function launchFailure(pane: string, launched?: LaunchedCli): string | null {
+  const own = new Set(FIXED_MESSAGES);
+  if (launched) own.add(sanitizeLine(notFound(launched)));
   const said = pane
     .split('\n')
     .map((l) => sanitizeLine(l))
     .filter((l) => l.startsWith(`${LAUNCH_PREFIX} `))
     .map((l) => l.slice(LAUNCH_PREFIX.length + 1))
-    .filter((l) => LAUNCH_MESSAGES.some((m) => m.test(l)));
+    .filter((l) => own.has(l));
   if (said.length === 0) return null;
   const text = [...new Set(said)].join('; ');
   return text.length > 300 ? `${text.slice(0, 299)}…` : text;

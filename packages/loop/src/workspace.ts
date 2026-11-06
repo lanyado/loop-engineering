@@ -1,7 +1,18 @@
 import { appendFile, copyFile, mkdir, readFile, rm, stat } from 'node:fs/promises';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 import { isSafeRelativePath, ValidationError, type EnvFile, type Repo } from '@loop-engineering/core';
-import { CommandError, runCommand, type Runner, type RunResult } from '@loop-engineering/runner';
+import {
+  CommandError,
+  ExecError,
+  GIT_LONG_TIMEOUT_MS,
+  GIT_TIMEOUT_MS,
+  GitConfigError,
+  gitEnvironment as runnerGitEnvironment,
+  safeGit,
+  safeWorktreeAdd,
+  type RunResult,
+  type SafeGitOptions,
+} from '@loop-engineering/runner';
 import type { LocalBranchResult, PushResult, RemoteBranchResult, Workspace } from './ports.js';
 
 /**
@@ -11,36 +22,51 @@ import type { LocalBranchResult, PushResult, RemoteBranchResult, Workspace } fro
 const LOOP_IDENTITY = ['-c', 'user.name=loop-engineering', '-c', 'user.email=loop-engineering@localhost'];
 
 /**
- * On every git command the loop runs: no hooks and no fsmonitor. A job can write .git/hooks or
- * core.fsmonitor into the repo config it shares, and the loop's own git (with the user's
- * credentials) must never run them.
+ * The loop's own commits are never signed (with `commit --no-gpg-sign` too): signing would run the
+ * repo's signing program or key command, which a job can set, and with those emptied by the guard a
+ * job asking for signing would make every commit of the loop fail.
  */
-const SAFE_GIT = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false'];
+const NO_SIGNING = ['-c', 'commit.gpgSign=false', '-c', 'tag.gpgSign=false'];
 
-/** Environment of the loop's git commands: enough to push as the user, none of the server's secrets. */
-const GIT_ENV_ALLOWLIST = [
+/** Like runCommand did before: output past this is cut off, the command still counts. */
+const MAX_OUTPUT = 32 * 1024 * 1024;
+
+/**
+ * Environment of the loop's git commands: what git needs to fetch and push as the user over SSH or
+ * HTTPS (toolchain, locale, the SSH agent, `GIT_SSH`/`GIT_SSH_COMMAND`, CA bundles, proxies), and no
+ * more: no GitHub tokens, no gh config folder, no desktop-session variables. A job (reviewer,
+ * tester) runs without GitHub access; this keeps the variables out of whatever git ends up running.
+ * HOME stays (git needs the user's config and `~/.ssh`), so files under it, gh's stored login
+ * included, stay readable to anything that runs as the user (see docs/reference.md).
+ */
+const JOB_GIT_ENV_ALLOWLIST = [
   'PATH',
   'HOME',
   'USER',
   'LOGNAME',
   'LANG',
-  'LC_ALL',
-  'LC_CTYPE',
   'TMPDIR',
   'TZ',
   'XDG_CONFIG_HOME',
   'SSH_AUTH_SOCK',
   'SSH_AGENT_PID',
+  'GIT_SSH',
   'GIT_SSH_COMMAND',
+  'GIT_SSL_CAINFO',
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'ALL_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'no_proxy',
+  'all_proxy',
 ] as const;
 
 export function gitEnvironment(source: Record<string, string | undefined>): Record<string, string> {
-  const env: Record<string, string> = { GIT_TERMINAL_PROMPT: '0' };
-  for (const name of GIT_ENV_ALLOWLIST) {
-    const value = source[name];
-    if (value) env[name] = value;
-  }
-  return env;
+  return runnerGitEnvironment(source, JOB_GIT_ENV_ALLOWLIST);
 }
 
 /**
@@ -68,28 +94,54 @@ const exists = (p: string) =>
  */
 export class GitWorkspace implements Workspace {
   private readonly root: string;
-  private readonly run: Runner;
   private readonly gitBin: string;
   private readonly env: Record<string, string>;
+  private readonly configTimeoutMs: number | undefined;
 
   constructor(
     root: string,
-    options: { run?: Runner; git?: string; sourceEnv?: Record<string, string | undefined> } = {},
+    options: { git?: string; sourceEnv?: Record<string, string | undefined>; configTimeoutMs?: number } = {},
   ) {
     if (!isAbsolute(root)) throw new ValidationError('the jobs folder must be an absolute path');
     this.root = resolve(root);
-    this.run = options.run ?? runCommand;
     this.gitBin = options.git ?? 'git';
     this.env = gitEnvironment(options.sourceEnv ?? process.env);
+    this.configTimeoutMs = options.configTimeoutMs;
   }
 
-  /** Every git command goes through here: hooks and fsmonitor off, a scrubbed environment. */
-  private exec(cwd: string, args: string[]): Promise<RunResult> {
-    return this.run(this.gitBin, [...SAFE_GIT, '-C', cwd, ...args], { env: this.env, cleanEnv: true });
+  /**
+   * Every git command goes through here, in the builder's repo or a job checkout of it, whose .git a
+   * job can write: the runner's safeGit (no hooks or fsmonitor, the repo's own filters, drivers and
+   * credential helpers neutralized, no core.gitProxy, nothing run when its config cannot be read, a
+   * time limit that stops git and everything it started) with a scrubbed environment. Resolves with
+   * git's exit code. Rejects when git could not run or finish (its repo's config unreadable, a
+   * timeout or signal, no git): a caller asking "is this an ancestor?" or "did the push go?" must
+   * not read that as "no", so the engine's step fails and is tried again instead.
+   */
+  private options(timeoutMs = GIT_TIMEOUT_MS): SafeGitOptions {
+    return {
+      bin: this.gitBin,
+      env: this.env,
+      timeoutMs,
+      maxBuffer: MAX_OUTPUT,
+      overflow: 'truncate',
+      ...(this.configTimeoutMs !== undefined ? { configTimeoutMs: this.configTimeoutMs } : {}),
+    };
   }
 
-  private async git(cwd: string, args: string[]): Promise<string> {
-    const result = await this.exec(cwd, args);
+  private async exec(cwd: string, args: string[], timeoutMs = GIT_TIMEOUT_MS): Promise<RunResult> {
+    try {
+      const { stdout, stderr } = await safeGit(cwd, args, this.options(timeoutMs));
+      return { code: 0, stdout, stderr };
+    } catch (err) {
+      if (err instanceof ExecError && !(err instanceof GitConfigError) && typeof err.code === 'number')
+        return { code: err.code, stdout: err.stdout, stderr: err.stderr };
+      throw err;
+    }
+  }
+
+  private async git(cwd: string, args: string[], timeoutMs?: number): Promise<string> {
+    const result = await this.exec(cwd, args, timeoutMs);
     if (result.code !== 0) throw new CommandError(`git ${args.join(' ')}`, result);
     return result.stdout;
   }
@@ -106,13 +158,27 @@ export class GitWorkspace implements Workspace {
       throw new ValidationError(`job folder ${path} is outside ${this.root}`);
     await this.remove(input.repo, path);
     await mkdir(this.root, { recursive: true });
-    await this.git(input.repo.path, [
-      'fetch',
-      '--quiet',
-      'origin',
-      `+refs/heads/${input.branch}:refs/remotes/origin/${input.branch}`,
-    ]);
-    await this.git(input.repo.path, ['worktree', 'add', '--detach', '--force', '--', path, input.sha]);
+    // From the project's remote URL, like the push: never a remote name the repo's config defines
+    // (`remote.origin.url`, `.uploadpack` and `.vcs` are read first-wins and cannot be overridden).
+    await this.git(
+      input.repo.path,
+      [
+        'fetch',
+        '--quiet',
+        '--',
+        input.repo.remote,
+        `+refs/heads/${input.branch}:refs/remotes/origin/${input.branch}`,
+      ],
+      GIT_LONG_TIMEOUT_MS,
+    );
+    // The checkout runs as the new worktree, guarded from there (see safeWorktreeAdd).
+    await safeWorktreeAdd(
+      input.repo.path,
+      ['--detach', '--force'],
+      path,
+      input.sha,
+      this.options(GIT_LONG_TIMEOUT_MS),
+    );
     for (const config of JOB_CONFIG_PATHS) await rm(join(path, config), { recursive: true, force: true });
     const excludes: string[] = [];
     for (const file of input.envFiles.filter((f) => f.repo === input.repo.name)) {
@@ -151,21 +217,35 @@ export class GitWorkspace implements Workspace {
     // Also exclude test-result.json which the tester may write as a temporary output file.
     const excluded = [...JOB_CONFIG_PATHS.map((p) => `:(exclude)${p}`), ':(exclude)test-result.json'];
     await this.git(path, ['add', '-A', '--', '.', ...excluded]);
-    if ((await this.exec(path, ['diff', '--cached', '--quiet'])).code !== 0) {
+    // --no-ext-diff: a diff.external the guard emptied would make git fail to run it.
+    if ((await this.exec(path, ['diff', '--no-ext-diff', '--cached', '--quiet'])).code !== 0) {
       const identity = (await this.hasIdentity(path)) ? [] : LOOP_IDENTITY;
-      await this.git(path, [...identity, 'commit', '-q', '--no-verify', '-m', input.message]);
+      await this.git(path, [
+        ...identity,
+        ...NO_SIGNING,
+        'commit',
+        '-q',
+        '--no-verify',
+        '--no-gpg-sign',
+        '-m',
+        input.message,
+      ]);
     }
     const head = (await this.git(path, ['rev-parse', 'HEAD'])).trim();
     if (head === input.baseSha) return { status: 'none' };
     // To the remote URL itself (not a remote name the checkout could redefine), and only while the
     // branch is still where the job started: a builder push in the meantime wins.
-    const push = await this.exec(path, [
-      'push',
-      '--no-verify',
-      `--force-with-lease=refs/heads/${input.branch}:${input.baseSha}`,
-      repo.remote,
-      `HEAD:refs/heads/${input.branch}`,
-    ]);
+    const push = await this.exec(
+      path,
+      [
+        'push',
+        '--no-verify',
+        `--force-with-lease=refs/heads/${input.branch}:${input.baseSha}`,
+        repo.remote,
+        `HEAD:refs/heads/${input.branch}`,
+      ],
+      GIT_LONG_TIMEOUT_MS,
+    );
     if (push.code !== 0)
       return { status: 'rejected', reason: (push.stderr || push.stdout).trim().slice(0, 500) };
     return { status: 'pushed', sha: head };
@@ -181,18 +261,26 @@ export class GitWorkspace implements Workspace {
   }
 
   async deleteRemoteBranch(repo: Repo, branch: string, expectedSha: string): Promise<RemoteBranchResult> {
-    const ls = await this.git(repo.path, ['ls-remote', '--heads', repo.remote, `refs/heads/${branch}`]);
+    const ls = await this.git(
+      repo.path,
+      ['ls-remote', '--heads', repo.remote, `refs/heads/${branch}`],
+      GIT_LONG_TIMEOUT_MS,
+    );
     const current = ls.trim().split(/\s+/)[0];
     if (!current) return 'gone';
     if (current !== expectedSha) return 'moved';
-    const push = await this.exec(repo.path, [
-      'push',
-      '--no-verify',
-      `--force-with-lease=refs/heads/${branch}:${expectedSha}`,
-      repo.remote,
-      '--delete',
-      `refs/heads/${branch}`,
-    ]);
+    const push = await this.exec(
+      repo.path,
+      [
+        'push',
+        '--no-verify',
+        `--force-with-lease=refs/heads/${branch}:${expectedSha}`,
+        repo.remote,
+        '--delete',
+        `refs/heads/${branch}`,
+      ],
+      GIT_LONG_TIMEOUT_MS,
+    );
     if (push.code === 0) return 'deleted';
     if (/stale info|rejected/i.test(push.stderr)) return 'moved';
     if (/remote ref does not exist/i.test(push.stderr)) return 'gone';

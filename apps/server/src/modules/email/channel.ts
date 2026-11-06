@@ -283,12 +283,17 @@ export class EmailChannel implements QuestionChannel {
       // A new task: its whole body (a forwarded mail included), else its subject.
       const text = withFileList(ownWords(mail.text.trim() || mail.subject.trim()), files.lines);
       if (!text) return;
-      const created = store.email.createThread({
-        sender: mail.from,
-        subject: mail.subject.replace(/^(re|fwd?):\s*/i, '').trim() || words(languageOf(text)).defaultSubject,
-        mailThreadId: mail.threadId,
+      // In one transaction: a thread left without its first mail would read the next mail as a reply.
+      const created = store.transaction(() => {
+        const thread = store.email.createThread({
+          sender: mail.from,
+          subject:
+            mail.subject.replace(/^(re|fwd?):\s*/i, '').trim() || words(languageOf(text)).defaultSubject,
+          mailThreadId: mail.threadId,
+        });
+        store.email.addMessage({ threadId: thread.id, messageId: mail.messageId, direction: 'in', text });
+        return thread;
       });
-      store.email.addMessage({ threadId: created.id, messageId: mail.messageId, direction: 'in', text });
       this.log(`[email] new task from ${mail.from}: "${created.subject}"`);
       await this.tellUnread(created, files.unread);
       return;

@@ -130,7 +130,7 @@ export const GIT_ENV_ALLOWLIST = [
 ] as const;
 
 /**
- * The server's own secrets, and the mail add-in's password (it reads and sends the owner's mail).
+ * The server's own secrets, and the email channel's password (it reads and sends the owner's mail).
  * Never given to an agent, never accepted in AGENT_ENV_EXTRA (by name, or by a prefix such as
  * EMAIL_* or EM*), and removed from the tmux server's global environment.
  */
@@ -214,10 +214,17 @@ export function tmuxClientEnvironment(source: Record<string, string | undefined>
 }
 
 /**
- * The environment the runner's git commands run with, read from `source` (the server's). No prompts,
- * and GIT_PROXY_COMMAND set but empty: git then ignores every core.gitProxy (which it reads first-wins,
- * so a repo's could not be overridden otherwise) and uses no proxy for git:// remotes.
+ * The environment the runner's git commands run with, read from `source` (the server's): `names`
+ * (default GIT_ENV_ALLOWLIST; the PR loop passes a narrower list). No prompts, and GIT_PROXY_COMMAND
+ * set but empty: git then ignores every core.gitProxy (which it reads first-wins, so a repo's could
+ * not be overridden otherwise) and uses no proxy for git:// remotes. A global core.gitProxy is
+ * ignored too, so git:// remotes that need a proxy do not work for the server's git.
  */
-export function gitEnvironment(source: Record<string, string | undefined>): Record<string, string> {
-  return { ...pick(source, GIT_ENV_ALLOWLIST), GIT_TERMINAL_PROMPT: '0', GIT_PROXY_COMMAND: '' };
+export function gitEnvironment(
+  source: Record<string, string | undefined>,
+  names: readonly string[] = GIT_ENV_ALLOWLIST,
+): Record<string, string> {
+  const env = pick(source, names);
+  for (const secret of SERVER_SECRET_ENV) delete env[secret];
+  return { ...env, GIT_TERMINAL_PROMPT: '0', GIT_PROXY_COMMAND: '' };
 }

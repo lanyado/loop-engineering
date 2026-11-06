@@ -3,6 +3,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
@@ -11,11 +12,22 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { QuestionBus, QuestionService, RequestService } from '@loop-engineering/ask-human';
 import { FakeClock, openStore, type Store } from '@loop-engineering/core';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { answerFor, EmailChannel, safeFileName, type Clarifier, type ClarifyMail } from './channel.js';
 import { FakeMailbox } from './fake.js';
 
 const BOSS = 'dana@acme.com';
+
+/** Temp folders a test made (saved files, alert state), removed after each test. */
+const tempDirs: string[] = [];
+function tempDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
 
 let store: Store;
 let bus: QuestionBus;
@@ -59,7 +71,7 @@ beforeEach(async () => {
   logs = [];
   answers = [];
   seen = [];
-  filesDir = join(mkdtempSync(join(tmpdir(), 'loop-mail-files-')), 'files');
+  filesDir = join(tempDir('loop-mail-files-'), 'files');
   channel = new EmailChannel({
     mailbox,
     store,
@@ -93,6 +105,18 @@ function route() {
 }
 
 describe('a task by email', () => {
+  it('keeps no thread without its first mail when saving that mail fails', async () => {
+    const save = vi.spyOn(store.email, 'addMessage').mockImplementationOnce(() => {
+      throw new Error('disk I/O error');
+    });
+    mailbox.deliver({ from: BOSS, subject: 'Dark mode', text: 'Please add a dark mode.' });
+    answers = [{ questions: ['Which pages?'] }];
+    await channel.poll();
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(store.email.threads()).toEqual([]);
+    expect(logs.some((l) => l.includes('disk I/O error'))).toBe(true);
+  });
+
   it('asks its questions, sends the plan, and starts the work from it', async () => {
     const task = mailbox.deliver({ from: BOSS, subject: 'Dark mode', text: 'Please add a dark mode.' });
     answers = [{ questions: ['Which pages?', 'Follow the OS setting?'] }];
@@ -550,7 +574,7 @@ describe('while the work runs', () => {
       });
 
     beforeEach(() => {
-      file = join(mkdtempSync(join(tmpdir(), 'alerts-')), 'alerts.json');
+      file = join(tempDir('alerts-'), 'alerts.json');
     });
 
     it('emails a stuck job once, with what to decide and where, and leaves the requester out', async () => {
@@ -1074,7 +1098,7 @@ describe('files that come with a mail', () => {
 
   it('takes a relative folder as the absolute one, so its files still count as saved', async () => {
     await channel.stop();
-    const dir = join(mkdtempSync(join(tmpdir(), 'loop-mail-rel-')), 'files');
+    const dir = join(tempDir('loop-mail-rel-'), 'files');
     channel = new EmailChannel({
       mailbox,
       store,

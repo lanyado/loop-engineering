@@ -17,8 +17,9 @@ import { ConfigError, type ServerConfig } from './config.js';
 
 /**
  * A warning when git is older than 2.31: the runner hands its git guard (a repo's own filters,
- * credential helpers and drivers neutralized) to git as GIT_CONFIG_COUNT, which older git ignores.
- * Null when git is new enough or its version is unknown.
+ * credential helpers and drivers neutralized) to git as GIT_CONFIG_COUNT, which older git ignores;
+ * below 2.26 the guard cannot read a repo's config at all and refuses every command. Null when git
+ * is new enough or its version is unknown.
  */
 export function gitVersionWarning(versionOutput: string | null): string | null {
   const m = /git version (\d+)\.(\d+)(?:\.(\d+))?/.exec(versionOutput ?? '');
@@ -26,6 +27,12 @@ export function gitVersionWarning(versionOutput: string | null): string | null {
   const [major, minor] = [Number(m[1]), Number(m[2])];
   if (major > 2 || (major === 2 && minor >= 31)) return null;
   const version = [m[1], m[2], m[3]].filter((p) => p !== undefined).join('.');
+  // Below 2.26 git cannot list config scopes (config --show-scope), so the guard refuses every command.
+  if (major < 2 || minor < 26)
+    return (
+      `warning: git ${version} is older than 2.26, so it cannot list config scopes (config --show-scope) ` +
+      "and the runner's git guard refuses to run: no session can start; upgrade git to 2.31 or later"
+    );
   return (
     `warning: git ${version} is older than 2.31, so the runner's git cannot neutralize a repo's own ` +
     'filters, credential helpers and drivers (it needs GIT_CONFIG_COUNT); upgrade git'
@@ -75,7 +82,11 @@ export function runnerFromEnv(
   const unsetGlobalEnv = hiddenTmuxEnv(envFileNames);
   let gitVersion: string | null = null;
   try {
-    gitVersion = execFileSync('git', ['--version'], { encoding: 'utf8', env: { PATH: env.PATH ?? '' } });
+    gitVersion = execFileSync('git', ['--version'], {
+      encoding: 'utf8',
+      env: { PATH: env.PATH ?? '' },
+      timeout: 5000,
+    });
   } catch {
     // No git at all: the first session start says so.
   }

@@ -70,7 +70,13 @@ describe('env', () => {
 
   it("warns when git is too old for the runner's config guard (GIT_CONFIG_COUNT, git 2.31)", () => {
     expect(gitVersionWarning('git version 2.30.9\n')).toMatch(/git 2\.30\.9 is older than 2\.31/);
-    expect(gitVersionWarning('git version 1.9.0')).toMatch(/git 1\.9\.0 /);
+    expect(gitVersionWarning('git version 1.9.0')).toMatch(
+      /git 1\.9\.0 is older than 2\.26.*no session can start/,
+    );
+    expect(gitVersionWarning('git version 2.25.1')).toMatch(
+      /git 2\.25\.1 is older than 2\.26.*no session can start/,
+    );
+    expect(gitVersionWarning('git version 2.26.0')).toMatch(/git 2\.26\.0 is older than 2\.31/);
     expect(gitVersionWarning('git version 2.31.0')).toBeNull();
     expect(gitVersionWarning('git version 2.47.3 (Apple Git-154)')).toBeNull();
     expect(gitVersionWarning('git version 3.0.0')).toBeNull();

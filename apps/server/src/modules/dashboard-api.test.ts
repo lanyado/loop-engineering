@@ -33,15 +33,25 @@ let store: Store;
 let server: LoopServer;
 let clock: FakeClock;
 
+let uploads: string;
+
 beforeEach(() => {
   clock = new FakeClock('2026-10-18T09:00:00.000Z');
   store = openStore({ clock });
+  // Files attached to tasks go here, not into the OS temp folder, and go with the test.
+  uploads = mkdtempSync(join(tmpdir(), 'loop-api-uploads-'));
   // Not started: app.request() drives the routes in-process.
-  server = createServer({ config, store, timers: new FakeTimers(clock), modules: [dashboardApi()] });
+  server = createServer({
+    config,
+    store,
+    timers: new FakeTimers(clock),
+    modules: [dashboardApi({ uploadsDir: uploads })],
+  });
 });
 afterEach(async () => {
   await server.close();
   store.close();
+  rmSync(uploads, { recursive: true, force: true });
 });
 
 async function call(method: string, path: string, body?: unknown, token: string | null = TOKEN) {

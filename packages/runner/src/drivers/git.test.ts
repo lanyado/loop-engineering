@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -301,5 +301,106 @@ describe('RealGitDriver: credential helpers, git:// proxies, alternates, and a c
     // Written directly: git config would try to read the FIFO too.
     appendFileSync(join(repo, '.git/config'), `[include]\n\tpath = ${fifo}\n`);
     await expect(driver.status(repo)).rejects.toThrow(/cannot read the git config in .*runs no git there/);
+  });
+});
+
+describe('RealGitDriver: config that applies only where a command runs (conditional includes)', () => {
+  let dir: string;
+  let origin: string;
+  let repo: string;
+  let canary: string;
+  const fired = () => readdirSync(canary).sort();
+  const touch = (name: string) => `touch '${join(canary, name)}'`;
+  /**
+   * Included config that defines the filter `name`, firing a canary of that name. Each include has
+   * a filter of its own (and a file that asks for it), so neutralizing one never hides another.
+   */
+  const FILTERS = ['gitdir', 'gitdir-i', 'onbranch', 'hasconfig', 'include'];
+  const evil = (name: string) => {
+    const file = join(dir, `${name}.inc`);
+    writeFileSync(
+      file,
+      `[filter "${name}"]\n\tclean = ${touch(`${name}-clean`)}; cat\n\tsmudge = ${touch(`${name}-smudge`)}; cat\n`,
+    );
+    return file;
+  };
+
+  beforeAll(async () => {
+    dir = await realpath(await mkdtemp(join(tmpdir(), 'loop-git-ctx-')));
+    canary = join(dir, 'canary');
+    mkdirSync(canary);
+    origin = join(dir, 'origin.git');
+    repo = join(dir, 'repo');
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin]);
+    execFileSync('git', ['clone', '-q', origin, repo]);
+    writeFileSync(join(repo, '.gitattributes'), FILTERS.map((f) => `*.${f} filter=${f}\n`).join(''));
+    writeFileSync(join(repo, 'a.txt'), 'one\n');
+    for (const f of FILTERS) writeFileSync(join(repo, `a.${f}`), `${f}\n`);
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-q', '-m', 'first');
+    git(repo, 'push', '-q', '-u', 'origin', 'main');
+    // Each is false in the main checkout, where a guard read there would look, and true in a
+    // worktree (its git dir is .git/worktrees/<name>) or on the session's branch.
+    appendFileSync(
+      join(repo, '.git/config'),
+      `[includeIf "gitdir:**/worktrees/**"]\n\tpath = ${evil('gitdir')}\n` +
+        `[includeIf "gitdir/i:**/WORKTREES/**"]\n\tpath = ${evil('gitdir-i')}\n` +
+        `[includeIf "onbranch:loop/**"]\n\tpath = ${evil('onbranch')}\n` +
+        `[includeIf "hasconfig:remote.*.url:**/decoy.git"]\n\tpath = ${evil('hasconfig')}\n` +
+        `[include]\n\tpath = ${evil('include')}\n`,
+    );
+    // A remote named origin pointing elsewhere, with its own upload-pack: read only when fetching "origin".
+    const decoy = join(dir, 'decoy.git');
+    execFileSync('git', ['clone', '-q', '--bare', origin, decoy]);
+    git(repo, 'config', 'remote.origin.url', decoy);
+    git(repo, 'config', 'remote.origin.uploadpack', `${touch('uploadpack')}; git-upload-pack`);
+  });
+  afterAll(() => rm(dir, { recursive: true, force: true }));
+
+  it('adds, checks and removes a worktree on a branch with no conditional filter firing', async () => {
+    const driver = new RealGitDriver({ sourceEnv: { PATH: process.env.PATH, HOME: process.env.HOME } });
+    await driver.fetch(repo, 'main', origin);
+    const wt = join(dir, 'wt');
+    await driver.addWorktree(repo, wt, 'loop/ctx', 'origin/main');
+    expect(await readFile(join(wt, 'a.gitdir'), 'utf8')).toBe('gitdir\n');
+    expect(await driver.status(wt)).toBe('');
+    // Files whose timestamps moved: git's clean check has to run their filters to compare them.
+    const later = new Date(Date.now() + 60_000);
+    for (const f of FILTERS) utimesSync(join(wt, `a.${f}`), later, later);
+    await driver.removeWorktree(repo, wt);
+    expect(existsSync(wt)).toBe(false);
+    expect(fired()).toEqual([]);
+  });
+
+  it('still refuses to remove a worktree with changes unless forced', async () => {
+    const driver = new RealGitDriver({ sourceEnv: { PATH: process.env.PATH, HOME: process.env.HOME } });
+    const wt = join(dir, 'wt-dirty');
+    await driver.addWorktree(repo, wt, 'loop/dirty', 'main');
+    writeFileSync(join(wt, 'new.txt'), 'x\n');
+    await expect(driver.removeWorktree(repo, wt)).rejects.toThrow(/contains modified or untracked files/);
+    await driver.removeWorktree(repo, wt, { force: true });
+    expect(existsSync(wt)).toBe(false);
+    expect(fired()).toEqual([]);
+  });
+
+  it('takes a failed checkout back out, worktree and all', async () => {
+    const driver = new RealGitDriver({ sourceEnv: { PATH: process.env.PATH, HOME: process.env.HOME } });
+    const wt = join(dir, 'wt-bad');
+    await expect(driver.addWorktree(repo, wt, 'loop/bad', 'no-such-ref')).rejects.toThrow();
+    expect(existsSync(wt)).toBe(false);
+    expect(git(repo, 'worktree', 'list', '--porcelain')).not.toContain('wt-bad');
+  });
+
+  it('empties the ssh signing key command and the tools Loop never runs', () => {
+    const entries = [
+      'gpg.ssh.defaultkeycommand',
+      'core.askpass',
+      'mergetool.x.cmd',
+      'difftool.x.path',
+      'trailer.t.command',
+    ];
+    expect(repoConfigGuard(entries.map((key) => ({ scope: 'local', key, value: 'evil' })))).toEqual(
+      entries.map((key) => [key, '']),
+    );
   });
 });

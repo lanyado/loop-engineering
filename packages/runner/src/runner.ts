@@ -40,7 +40,7 @@ import type { Fs } from './drivers/fs.js';
 import type { GitDriver } from './drivers/git.js';
 import type { TmuxDriver, TmuxServer, TmuxWindow } from './drivers/tmux.js';
 import { sessionInstructions } from './instructions.js';
-import { launchFailure, renderLaunchScript, shellQuote } from './launch.js';
+import { launchFailure, renderLaunchScript, shellQuote, type LaunchedCli } from './launch.js';
 import { inputBoxHasText, inputBoxHolds, inputBoxText } from './input-box.js';
 import { sanitizeLine } from './sanitize.js';
 import { transcriptHas } from './transcript.js';
@@ -224,6 +224,8 @@ export class SessionRunner {
   private readonly relaunchedAt = new Map<number, number>();
   /** When each session's agent was last launched (the input box wait is longer just after). */
   private readonly launchedAt = new Map<number, number>();
+  /** The CLI and PATH each session's launch script last ran with: its "not found" line names them. */
+  private readonly launchedCli = new Map<number, LaunchedCli>();
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
 
@@ -741,6 +743,7 @@ export class SessionRunner {
       }
       await this.removeSessionDir(s.worktrees);
       await fs.remove(this.configDir(sessionId));
+      this.launchedCli.delete(sessionId);
       return ended;
     }
   }
@@ -923,7 +926,10 @@ export class SessionRunner {
           window.deadAt - launched <= LAUNCH_FAILURE_WINDOW_MS;
         const said =
           diedAtLaunch && window
-            ? launchFailure(await this.deps.tmux.capture(window.target, 40).catch(() => ''))
+            ? launchFailure(
+                await this.deps.tmux.capture(window.target, 40).catch(() => ''),
+                this.launchedCli.get(s.id),
+              )
             : null;
         const why = said ? ` The launch script said: ${said}.` : '';
         await this.killOwnWindow(s);
@@ -1061,7 +1067,7 @@ export class SessionRunner {
   /** Origin's fresh tip of the default branch, so a session never starts from stale code; the local branch if the fetch fails. */
   private async baseRef(repo: Repo): Promise<string> {
     try {
-      await this.deps.git.fetch(repo.path, repo.defaultBranch);
+      await this.deps.git.fetch(repo.path, repo.defaultBranch, repo.remote);
       return `origin/${repo.defaultBranch}`;
     } catch (err) {
       this.log(
@@ -1408,6 +1414,7 @@ export class SessionRunner {
     }
     const scriptPath = join(configDir, `launch-${this.ids.suffix()}.sh`);
     await fs.writeFile(scriptPath, renderLaunchScript(argv, env, cwd), { mode: 0o600 });
+    this.launchedCli.set(sessionId, { cli: argv[0] ?? '', path: env.PATH ?? '' });
     try {
       const target = await tmux.newWindow({
         session: this.tmuxSession,

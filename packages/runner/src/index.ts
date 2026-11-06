@@ -30,17 +30,24 @@ export {
   tmuxClientEnvironment,
 } from './agent-env.js';
 export { buildContinuationPrompt, type ContinuationInput, type RepoState } from './continuation.js';
-export { exec, ExecError, type ExecResult } from './drivers/exec.js';
+export { exec, ExecError, type ExecOptions, type ExecResult } from './drivers/exec.js';
 export { nodeFs, type Fs } from './drivers/fs.js';
 export {
+  GIT_LONG_TIMEOUT_MS,
+  GIT_TIMEOUT_MS,
+  GitConfigError,
   gitConfigEnv,
   parseConfigList,
   RealGitDriver,
   repoConfigGuard,
   SAFE_GIT,
+  safeGit,
+  safeWorktreeAdd,
+  safeWorktreeRemove,
   type ConfigEntry,
   type GitDriver,
   type RealGitOptions,
+  type SafeGitOptions,
 } from './drivers/git.js';
 export {
   RealTmuxDriver,
@@ -60,7 +67,7 @@ export {
   type InstructionsInput,
 } from './instructions.js';
 export { parseClaudeOutput, parseOpencodeOutput, type HeadlessResult } from './headless-output.js';
-export { launchFailure, renderLaunchScript, shellQuote } from './launch.js';
+export { launchFailure, renderLaunchScript, shellQuote, type LaunchedCli } from './launch.js';
 export {
   AbortedError,
   CommandError,

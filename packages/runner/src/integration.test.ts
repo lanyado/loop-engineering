@@ -575,7 +575,13 @@ describe.skipIf(!hasTmux())("an agent never sees the server's secrets (real tmux
     async () => {
       // Someone else's session, started from a shell holding the server's .env.
       await run('tmux', ['-L', socket, 'new-session', '-d', '-s', 'theirs', 'sleep 60'], {
-        env: { PATH: process.env.PATH, HOME: process.env.HOME, ...secrets },
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          // The same socket folder as every other tmux call here, and as dropServer() cleans.
+          ...(process.env.TMUX_TMPDIR ? { TMUX_TMPDIR: process.env.TMUX_TMPDIR } : {}),
+          ...secrets,
+        },
       });
       expect(await globalEnv()).toContain(secrets.DASHBOARD_TOKEN);
       const tmux = new RealTmuxDriver({

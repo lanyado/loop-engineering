@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { FakeTimers } from '@loop-engineering/ask-human';
 import { FakeClock, openStore, type Store } from '@loop-engineering/core';
 import { FileStageLibrary, ProjectStageFiles } from '@loop-engineering/loop';
@@ -18,6 +21,8 @@ let store: Store;
 let server: LoopServer;
 let backend: HttpBackend;
 let sessionId: number;
+/** Files attached to tasks go here, not into the OS temp folder, and go with the test. */
+let uploads: string;
 
 const inProcessFetch =
   (s: LoopServer): typeof fetch =>
@@ -29,6 +34,7 @@ const inProcessFetch =
 beforeEach(() => {
   const clock = new FakeClock('2026-10-18T09:00:00.000Z');
   store = openStore({ clock });
+  uploads = mkdtempSync(join(tmpdir(), 'loop-backend-uploads-'));
   server = createServer({
     config: {
       host: '127.0.0.1',
@@ -42,7 +48,7 @@ beforeEach(() => {
     store,
     timers: new FakeTimers(clock),
     modules: [
-      dashboardApi(),
+      dashboardApi({ uploadsDir: uploads }),
       // No stage files: the built-ins (nothing writes here).
       pipelineModule({
         stages: new ProjectStageFiles(new FileStageLibrary('/nonexistent/stages', () => undefined)),
@@ -91,6 +97,7 @@ beforeEach(() => {
 afterEach(async () => {
   await server.close();
   store.close();
+  rmSync(uploads, { recursive: true, force: true });
 });
 
 const ask = (text = 'Which DB?') =>

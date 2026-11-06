@@ -1,20 +1,26 @@
+import { existsSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { gitEnvironment } from '../agent-env.js';
-import { exec, ExecError } from './exec.js';
+import { exec, ExecError, type ExecResult } from './exec.js';
 
 /** An unreachable remote must not stall a session start. */
 const FETCH_TIMEOUT_MS = 30_000;
 /**
  * Every other git command has a limit too: a repo's config can make git wait forever (an include.path
- * naming a FIFO), and the runner must not hang with it.
+ * naming a FIFO), and the runner must not hang with it. A timeout stops git and everything it started.
  */
-const GIT_TIMEOUT_MS = 120_000;
-const PUSH_TIMEOUT_MS = 600_000;
+export const GIT_TIMEOUT_MS = 120_000;
+/** A push, or a fetch or checkout that may move a whole repo. */
+export const GIT_LONG_TIMEOUT_MS = 600_000;
 const CONFIG_TIMEOUT_MS = 30_000;
 
 export interface GitDriver {
-  /** `git fetch --quiet origin <ref>` in the repo checkout, updating `origin/<ref>`. Rejects when it fails or times out. */
-  fetch(repoPath: string, ref: string): Promise<void>;
+  /**
+   * Fetches branch `ref` into `origin/<ref>` in the repo checkout: from `url` when given (the
+   * project's remote, so a repo's own `remote.origin.*` config is never read), else from `origin`.
+   * Rejects when it fails or times out.
+   */
+  fetch(repoPath: string, ref: string, url?: string): Promise<void>;
   /** `git worktree add --no-track -b <branch> -- <worktreePath> <baseRef>` in the repo checkout at `repoPath`. */
   addWorktree(repoPath: string, worktreePath: string, branch: string, baseRef: string): Promise<void>;
   removeWorktree(repoPath: string, worktreePath: string, options?: { force?: boolean }): Promise<void>;
@@ -71,8 +77,26 @@ export const SAFE_GIT = [
  * reads first-wins (remote.*.uploadpack/receivepack, url.*.insteadOf) cannot be overridden; whatever
  * it runs gets only the git environment, no server secret (see docs/reference.md).
  */
-const OVERRIDDEN =
-  /^(filter\..+\.(clean|smudge|process)|diff\.external|diff\..+\.(textconv|command)|merge\..+\.driver|gpg\.(.+\.)?program|core\.(sshcommand|alternaterefscommand|pager|editor)|pager\..+|sequence\.editor)$/i;
+const OVERRIDDEN = new RegExp(
+  '^(' +
+    [
+      'filter\\..+\\.(clean|smudge|process)',
+      'diff\\.external',
+      'diff\\..+\\.(textconv|command)',
+      'merge\\..+\\.driver',
+      // Signing: the program per format, and the command ssh signing asks for its key.
+      'gpg\\.(.+\\.)?program',
+      'gpg\\.ssh\\.defaultkeycommand',
+      'core\\.(sshcommand|alternaterefscommand|pager|editor|askpass)',
+      'pager\\..+',
+      'sequence\\.editor',
+      // Run only by commands Loop never runs (difftool, mergetool, interpret-trailers), emptied anyway.
+      '(diff|merge)tool\\..+\\.(cmd|path)',
+      'trailer\\..+\\.(command|cmd)',
+    ].join('|') +
+    ')$',
+  'i',
+);
 /** Credential helpers, general or for a URL: a list, which an empty value resets. */
 const CREDENTIAL_HELPER = /^credential\.(.+\.)?helper$/i;
 /** Filters made empty must not be required, or git refuses the file. */
@@ -152,6 +176,131 @@ export function gitConfigEnv(pairs: [string, string][]): Record<string, string> 
   return env;
 }
 
+/** Thrown when a repo's config cannot be read: then no git command runs there (fails closed). */
+export class GitConfigError extends ExecError {
+  override name = 'GitConfigError';
+}
+
+export interface SafeGitOptions {
+  /** Default "git". */
+  bin?: string;
+  /** Exactly the environment git gets (gitEnvironment), nothing from process.env. */
+  env: Record<string, string>;
+  /** Limit for the command itself. Default 2 min. */
+  timeoutMs?: number;
+  /** Limit for reading the repo's config first. Default 30 s. */
+  configTimeoutMs?: number;
+  /** Output limit for the command itself (exec's maxBuffer and overflow). The config read always fails past 16 MB. */
+  maxBuffer?: number;
+  overflow?: 'fail' | 'truncate';
+}
+
+/**
+ * The guard for the repo at `cwd` (repoConfigGuard), as environment variables. Reading config runs
+ * nothing. Fails closed: when the config cannot be read, GitConfigError, and no git command runs.
+ */
+async function guardEnv(bin: string, cwd: string, options: SafeGitOptions): Promise<Record<string, string>> {
+  let out: string;
+  try {
+    out = (
+      await exec(bin, [...SAFE_GIT, '-C', cwd, 'config', '--list', '--show-scope', '-z'], undefined, {
+        env: options.env,
+        timeoutMs: options.configTimeoutMs ?? CONFIG_TIMEOUT_MS,
+      })
+    ).stdout;
+  } catch (err) {
+    const why = err instanceof ExecError ? err.stderr.trim() || String(err.code) : String(err);
+    throw new GitConfigError(
+      `${bin} config --list`,
+      err instanceof ExecError ? err.code : null,
+      `cannot read the git config in ${cwd}, so Loop runs no git there (${why})`,
+    );
+  }
+  return gitConfigEnv(repoConfigGuard(parseConfigList(out)));
+}
+
+/**
+ * Runs git in `cwd`, in a repo an agent can write (its config, its hooks): with SAFE_GIT, the repo's
+ * command-running config neutralized (repoConfigGuard, read first; nothing runs if it cannot be),
+ * exactly `options.env`, and a time limit that stops git and whatever it started. The runner's git
+ * (RealGitDriver) and the PR loop's job checkouts (GitWorkspace) both run git through this.
+ * Rejects with ExecError (GitConfigError when the config could not be read).
+ */
+export async function safeGit(cwd: string, args: string[], options: SafeGitOptions): Promise<ExecResult> {
+  const bin = options.bin ?? 'git';
+  const env = { ...options.env, ...(await guardEnv(bin, cwd, options)) };
+  return exec(bin, [...SAFE_GIT, '-C', cwd, ...args], undefined, {
+    env,
+    timeoutMs: options.timeoutMs ?? GIT_TIMEOUT_MS,
+    ...(options.maxBuffer !== undefined ? { maxBuffer: options.maxBuffer } : {}),
+    ...(options.overflow !== undefined ? { overflow: options.overflow } : {}),
+  });
+}
+
+/**
+ * `git worktree add` without its checkout, then the checkout as a command of its own in the new
+ * worktree. The guard reads a repo's config from where the command runs, and `worktree add` checks
+ * out as the new worktree (its own git dir, its branch): config that applies only there
+ * (`includeIf "gitdir:…/worktrees/…"`, `includeIf "onbranch:…"`) would get past a guard read in the
+ * main checkout. Run from the new worktree, the checkout's guard sees what the checkout sees. A
+ * checkout that fails takes its worktree with it. `flags` go before `--` (e.g. `-b <branch>`).
+ */
+export async function safeWorktreeAdd(
+  repoPath: string,
+  flags: string[],
+  worktreePath: string,
+  commitish: string,
+  options: SafeGitOptions,
+): Promise<void> {
+  await safeGit(
+    repoPath,
+    ['worktree', 'add', '--no-checkout', ...flags, '--', worktreePath, commitish],
+    options,
+  );
+  try {
+    await safeGit(worktreePath, ['reset', '--hard', '--quiet'], options);
+  } catch (err) {
+    await safeGit(repoPath, ['worktree', 'remove', '--force', '--', worktreePath], options).catch(
+      () => undefined,
+    );
+    throw err;
+  }
+}
+
+/**
+ * `git worktree remove`. Unforced, git first checks the worktree is clean with a `git status` of its
+ * own, run as the worktree (config that applies only there gets past a guard read in the main
+ * checkout): so that check runs here instead, guarded from inside the worktree, and the removal
+ * itself is forced. A worktree whose folder is gone has nothing to check.
+ */
+export async function safeWorktreeRemove(
+  repoPath: string,
+  worktreePath: string,
+  force: boolean,
+  options: SafeGitOptions,
+): Promise<void> {
+  let forced = force;
+  if (!force && existsSync(worktreePath)) {
+    const status = await safeGit(
+      worktreePath,
+      ['status', '--porcelain', '--ignore-submodules=none'],
+      options,
+    );
+    if (status.stdout.trim() !== '')
+      throw new ExecError(
+        `git worktree remove ${worktreePath}`,
+        128,
+        `fatal: '${worktreePath}' contains modified or untracked files, use --force to delete it`,
+      );
+    forced = true;
+  }
+  await safeGit(
+    repoPath,
+    ['worktree', 'remove', ...(forced ? ['--force'] : []), '--', worktreePath],
+    options,
+  );
+}
+
 export interface RealGitOptions {
   bin?: string;
   /** Where the git environment (gitEnvironment) is read from. Default process.env. */
@@ -169,57 +318,39 @@ export interface RealGitOptions {
 export class RealGitDriver implements GitDriver {
   private readonly bin: string;
   /** Exactly this, nothing from process.env. */
-  private readonly env: NodeJS.ProcessEnv;
+  private readonly env: Record<string, string>;
   private readonly configTimeoutMs: number;
 
   constructor(options: RealGitOptions | string = {}) {
     const o = typeof options === 'string' ? { bin: options } : options;
     this.bin = o.bin ?? 'git';
     this.configTimeoutMs = o.configTimeoutMs ?? CONFIG_TIMEOUT_MS;
-    // The cast: unneeded here, but an app that types NODE_ENV as required (the dashboard) needs it.
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-    this.env = gitEnvironment(o.sourceEnv ?? process.env) as NodeJS.ProcessEnv;
+    this.env = gitEnvironment(o.sourceEnv ?? process.env);
   }
 
-  /**
-   * The guard for the repo at `cwd` (repoConfigGuard), as environment variables. Reading config runs
-   * nothing. Fails closed: when the config cannot be read, no git command runs there.
-   */
-  private async guard(cwd: string): Promise<Record<string, string>> {
-    let out: string;
-    try {
-      out = (
-        await exec(this.bin, [...SAFE_GIT, '-C', cwd, 'config', '--list', '--show-scope', '-z'], undefined, {
-          env: this.env,
-          timeoutMs: this.configTimeoutMs,
-        })
-      ).stdout;
-    } catch (err) {
-      const why = err instanceof ExecError ? err.stderr.trim() || String(err.code) : String(err);
-      throw new ExecError(
-        `${this.bin} config --list`,
-        err instanceof ExecError ? err.code : null,
-        `cannot read the git config in ${cwd}, so the runner runs no git there (${why})`,
-      );
-    }
-    return gitConfigEnv(repoConfigGuard(parseConfigList(out)));
+  private options(timeoutMs = GIT_TIMEOUT_MS): SafeGitOptions {
+    return { bin: this.bin, env: this.env, timeoutMs, configTimeoutMs: this.configTimeoutMs };
   }
 
   private async run(cwd: string, args: string[], timeoutMs = GIT_TIMEOUT_MS): Promise<string> {
-    const env = { ...this.env, ...(await this.guard(cwd)) };
-    return (await exec(this.bin, [...SAFE_GIT, '-C', cwd, ...args], undefined, { env, timeoutMs })).stdout;
+    return (await safeGit(cwd, args, this.options(timeoutMs))).stdout;
   }
 
   private git(cwd: string, args: string[]): Promise<string> {
     return this.run(cwd, args);
   }
 
-  async fetch(repoPath: string, ref: string): Promise<void> {
-    await this.run(repoPath, ['fetch', '--quiet', 'origin', '--', ref], FETCH_TIMEOUT_MS);
+  async fetch(repoPath: string, ref: string, url?: string): Promise<void> {
+    // By URL with an explicit refspec: `remote.origin.url`, `.uploadpack` and `.vcs`, which a repo's
+    // config could set (first-wins, so never overridden), are not read at all.
+    const args = url
+      ? ['fetch', '--quiet', '--', url, `+refs/heads/${ref}:refs/remotes/origin/${ref}`]
+      : ['fetch', '--quiet', 'origin', '--', ref];
+    await this.run(repoPath, args, FETCH_TIMEOUT_MS);
   }
 
   async addWorktree(repoPath: string, worktreePath: string, branch: string, baseRef: string): Promise<void> {
-    await this.git(repoPath, ['worktree', 'add', '--no-track', '-b', branch, '--', worktreePath, baseRef]);
+    await safeWorktreeAdd(repoPath, ['--no-track', '-b', branch], worktreePath, baseRef, this.options());
   }
 
   async removeWorktree(
@@ -227,13 +358,7 @@ export class RealGitDriver implements GitDriver {
     worktreePath: string,
     options: { force?: boolean } = {},
   ): Promise<void> {
-    await this.git(repoPath, [
-      'worktree',
-      'remove',
-      ...(options.force ? ['--force'] : []),
-      '--',
-      worktreePath,
-    ]);
+    await safeWorktreeRemove(repoPath, worktreePath, options.force === true, this.options());
   }
 
   async branchExists(repoPath: string, branch: string): Promise<boolean> {
@@ -276,7 +401,7 @@ export class RealGitDriver implements GitDriver {
   }
 
   async push(path: string, branch: string): Promise<void> {
-    await this.run(path, ['push', '-u', 'origin', '--', branch], PUSH_TIMEOUT_MS);
+    await this.run(path, ['push', '-u', 'origin', '--', branch], GIT_LONG_TIMEOUT_MS);
   }
 
   async excludeFile(path: string): Promise<string> {

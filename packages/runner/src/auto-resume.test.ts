@@ -515,6 +515,27 @@ describe('several agents going at once', () => {
     expect(tries(id)[0]?.text).toContain(huge);
   });
 
+  it("keeps a big pass's alert within ask_human's limit as it counts (an emoji is two), and says a killed command was killed", async () => {
+    const { h, clock, ids, onAlert, monitor, vanish } = await setup(12);
+    const m = monitor();
+    for (const id of ids) vanish(id);
+    await m.checkOnce();
+    // A command stopped by a signal (a timeout) has no exit code.
+    h.tmux.newWindow = () => Promise.reject(new ExecError('tmux new-window', null, '\u{1F600}'.repeat(1000)));
+    for (let i = 0; i < 8; i++) {
+      clock.advance(5 * MINUTE);
+      await m.checkOnce();
+    }
+    const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    const texts = onAlert.mock.calls.map(([, text]) => String(text));
+    expect(texts.some((t) => t.includes('\u{1F600} (killed)'))).toBe(true);
+    for (const text of texts) {
+      expect(text.length).toBeLessThanOrEqual(2500);
+      expect(text).not.toMatch(lone);
+      expect(text).not.toContain('exit null');
+    }
+  });
+
   it('does not alert for agents that exited by themselves, or for one window closing', async () => {
     const { ids, onAlert, monitor, vanish, exit } = await setup(3);
     const m = monitor();

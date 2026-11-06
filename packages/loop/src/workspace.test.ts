@@ -1,6 +1,6 @@
 // GitWorkspace against real git: a bare "remote", a clone, and job checkouts.
 import { execFile } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -114,7 +114,142 @@ describe('GitWorkspace', () => {
     expect(await exists(marker)).toBe(false);
   });
 
-  it('gives git only what a push needs, none of the server secrets', () => {
+  it('never runs anything a job planted in the shared repo config: filters, drivers, signing, tools, includes', async () => {
+    // The PR's files ask for filters by name, one with "=" in it (no `-c key=value` can name that).
+    const path0 = repo.path;
+    // And filters only included config defines, each its own, so neutralizing one never hides another.
+    const included = ['gitdir', 'hasconfig', 'include'];
+    await writeFile(
+      join(path0, '.gitattributes'),
+      `* filter=evil diff=evil\n*.eq filter=x=y\n${included.map((f) => `*.${f} filter=${f}\n`).join('')}`,
+    );
+    await writeFile(join(path0, 'b.eq'), 'b\n');
+    for (const f of included) await writeFile(join(path0, `c.${f}`), `${f}\n`);
+    await git(path0, 'add', '.');
+    await git(path0, 'commit', '-q', '-m', 'attributes');
+    await git(path0, 'push', '-q', 'origin', 'main:refs/heads/feature');
+    const sha = await git(path0, 'rev-parse', 'HEAD');
+    // What a job could write into the .git its checkout shares with the builder's repo.
+    const canary = join(dir, 'canary');
+    await mkdir(canary);
+    const touch = (name: string) => `touch '${join(canary, name)}'`;
+    await git(path0, 'config', 'filter.evil.clean', `${touch('filter-clean')}; cat`);
+    await git(path0, 'config', 'filter.evil.smudge', `${touch('filter-smudge')}; cat`);
+    await git(path0, 'config', 'filter.evil.required', 'true');
+    await git(path0, 'config', 'diff.evil.textconv', `${touch('textconv')}; cat`);
+    await git(path0, 'config', 'credential.helper', `!${touch('credential')}`);
+    await git(path0, 'config', 'core.sshCommand', touch('ssh'));
+    await git(path0, 'config', 'core.pager', touch('pager'));
+    await appendFile(
+      join(path0, '.git', 'config'),
+      `[filter "x=y"]\n\tclean = ${touch('eq-clean')}; cat\n\tsmudge = ${touch('eq-smudge')}; cat\n\trequired = true\n`,
+    );
+    // Signing in ssh format with a key command, signing and editing programs, tools Loop never runs.
+    const planted: [string, string][] = [
+      ['commit.gpgSign', 'true'],
+      ['tag.gpgSign', 'true'],
+      ['gpg.format', 'ssh'],
+      ['gpg.ssh.defaultKeyCommand', touch('ssh-key-command')],
+      ['gpg.ssh.program', touch('ssh-sign')],
+      ['gpg.program', touch('gpg')],
+      ['core.editor', touch('editor')],
+      ['sequence.editor', touch('sequence-editor')],
+      ['core.askPass', touch('askpass')],
+      ['diff.external', touch('diff-external')],
+      ['core.alternateRefsCommand', touch('alternate-refs')],
+      ['trailer.t.command', touch('trailer')],
+      ['mergetool.m.cmd', touch('mergetool')],
+    ];
+    for (const [key, value] of planted) await git(path0, 'config', key, value);
+    // A remote named origin pointing elsewhere, with its own upload-pack: the loop fetches by URL.
+    const decoy = join(dir, 'decoy.git');
+    await run('git', ['clone', '-q', '--bare', repo.remote, decoy]);
+    await git(path0, 'config', 'remote.origin.url', decoy);
+    await git(path0, 'config', 'remote.origin.uploadpack', `${touch('uploadpack')}; git-upload-pack`);
+    // On the remote's side git takes this only from the user's own config, never from a repo's.
+    await git(repo.remote, 'config', 'uploadpack.packObjectsHook', touch('pack-objects-hook'));
+    // Config that applies only as the job's worktree (whose git dir is .git/worktrees/<name>), or
+    // through an include.
+    const evil = async (name: string) => {
+      const file = join(dir, `${name}.inc`);
+      await writeFile(
+        file,
+        `[filter "${name}"]\n\tclean = ${touch(`${name}-clean`)}; cat\n\tsmudge = ${touch(`${name}-smudge`)}; cat\n`,
+      );
+      return file;
+    };
+    await appendFile(
+      join(path0, '.git', 'config'),
+      `[includeIf "gitdir:**/worktrees/**"]\n\tpath = ${await evil('gitdir')}\n` +
+        `[includeIf "hasconfig:remote.*.url:**/decoy.git"]\n\tpath = ${await evil('hasconfig')}\n` +
+        `[include]\n\tpath = ${await evil('include')}\n`,
+    );
+    const path = await workspace.checkout({ repo, branch: 'feature', sha, name: 'pr1-tests', envFiles: [] });
+    expect(await readFile(join(path, 'b.eq'), 'utf8')).toBe('b\n');
+    // The checkout runs as the new worktree, where the gitdir include applies: nothing fired yet.
+    expect(await readdir(canary)).toEqual([]);
+    await writeFile(join(path, 'a.txt'), 'changed\n');
+    await writeFile(join(path, 'b.eq'), 'changed\n');
+    for (const f of included) await writeFile(join(path, `c.${f}`), 'changed\n');
+    const result = await workspace.commitAndPush(repo, path, {
+      branch: 'feature',
+      baseSha: sha,
+      message: 'tests',
+    });
+    expect(result.status).toBe('pushed');
+    expect(await git(repo.remote, 'show', 'feature:b.eq')).toBe('changed');
+    // Unsigned, though the repo asks for signing.
+    expect(await git(repo.remote, 'cat-file', 'commit', 'feature')).not.toContain('gpgsig');
+    await workspace.remove(repo, path);
+    expect(await readdir(canary)).toEqual([]);
+  });
+
+  it('cannot be made to fail its commits by a job asking for signing with a program of its own', async () => {
+    const sha = await git(repo.path, 'rev-parse', 'HEAD');
+    const canary = join(dir, 'gpg-ran');
+    await git(repo.path, 'config', 'commit.gpgSign', 'true');
+    await git(repo.path, 'config', 'gpg.program', `touch '${canary}'`);
+    const path = await workspace.checkout({ repo, branch: 'feature', sha, name: 'pr1-tests', envFiles: [] });
+    await writeFile(join(path, 'd.test.txt'), 'test\n');
+    const result = await workspace.commitAndPush(repo, path, {
+      branch: 'feature',
+      baseSha: sha,
+      message: 'tests',
+    });
+    expect(result.status).toBe('pushed');
+    expect(await exists(canary)).toBe(false);
+  });
+
+  it('never fetches through an ext:: transport a job planted, whatever protocol.ext.allow it sets', async () => {
+    const sha = await git(repo.path, 'rev-parse', 'HEAD');
+    const canary = join(dir, 'ext-ran');
+    const script = join(dir, 'ext.sh');
+    await writeFile(script, `#!/bin/sh\ntouch '${canary}'\n`);
+    await chmod(script, 0o755);
+    await git(repo.path, 'config', 'protocol.ext.allow', 'always');
+    await git(repo.path, 'config', `url.ext::${script}.insteadOf`, repo.remote);
+    await expect(
+      workspace.checkout({ repo, branch: 'feature', sha, name: 'pr1-tests', envFiles: [] }),
+    ).rejects.toThrow(/ext/);
+    expect(await exists(canary)).toBe(false);
+  });
+
+  it('runs no git where the repo config cannot be read in time (fails closed)', async () => {
+    const sha = await git(repo.path, 'rev-parse', 'HEAD');
+    const fifo = join(dir, 'config.fifo');
+    await run('mkfifo', [fifo]);
+    // Written directly: git config would try to read the FIFO too.
+    await appendFile(join(repo.path, '.git', 'config'), `[include]\n\tpath = ${fifo}\n`);
+    const stuck = new GitWorkspace(join(dir, 'jobs'), { configTimeoutMs: 300 });
+    await expect(
+      stuck.checkout({ repo, branch: 'feature', sha, name: 'pr1-review', envFiles: [] }),
+    ).rejects.toThrow(/cannot read the git config in .*runs no git there/);
+    expect(await exists(join(dir, 'jobs', 'pr1-review'))).toBe(false);
+    // Not an answer of "no": the engine's step fails and is tried again.
+    await expect(stuck.isAncestor(repo, sha, 'HEAD')).rejects.toThrow(/cannot read the git config/);
+  });
+
+  it('gives git only what a push needs, none of the server secrets and no core.gitProxy', () => {
     expect(
       gitEnvironment({
         PATH: '/bin',
@@ -123,7 +258,20 @@ describe('GitWorkspace', () => {
         DASHBOARD_TOKEN: 'd',
         MCP_TOKEN: 'm',
         GH_TOKEN: 'g',
+        GITHUB_TOKEN: 'g',
+        GH_CONFIG_DIR: '/gh',
+        GH_HOST: 'github.example',
+        DBUS_SESSION_BUS_ADDRESS: 'unix:path=/bus',
+        XDG_DATA_HOME: '/d',
+        XDG_RUNTIME_DIR: '/r',
+        EMAIL_APP_PASSWORD: 'e',
       }),
-    ).toEqual({ PATH: '/bin', HOME: '/h', SSH_AUTH_SOCK: '/s', GIT_TERMINAL_PROMPT: '0' });
+    ).toEqual({
+      PATH: '/bin',
+      HOME: '/h',
+      SSH_AUTH_SOCK: '/s',
+      GIT_TERMINAL_PROMPT: '0',
+      GIT_PROXY_COMMAND: '',
+    });
   });
 });
