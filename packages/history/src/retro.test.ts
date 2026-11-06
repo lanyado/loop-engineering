@@ -208,8 +208,13 @@ function buildFixture(path: string): { shop: number; blog: number } {
 
   // Another project, and the next month: left out of a report of shop's October.
   store.sessions.create({ projectId: blog, title: 'b', model: 'opus', branch: 'b' });
+  // A pause across the window's end: 4 of its 6 hours count.
+  at('10-31T20:00');
+  store.sessions.update(s3, { status: 'paused', pauseReason: 'manual' });
   at('11-01T01:00');
   session('november');
+  at('11-01T02:00');
+  store.sessions.update(s3, { status: 'active' });
   store.close();
   return { shop, blog };
 }
@@ -240,7 +245,12 @@ describe('collectRetro on a month of made-up history', () => {
 
   it('adds up pauses from the pause log, inside the window only', () => {
     expect(d.pauses.logged).toBe(true);
-    expect(d.pauses.byReason.manual).toEqual({ pauses: 0, sessions: 1, pausedMs: 2 * HOUR });
+    expect(d.pauses.byReason.manual).toEqual({ pauses: 1, sessions: 2, pausedMs: 6 * HOUR });
+    expect(d.pauses.longest.find((p) => p.startedAt.startsWith('2026-10-31'))).toMatchObject({
+      reason: 'manual',
+      ms: 6 * HOUR,
+      ongoing: false,
+    });
     expect(d.pauses.byReason.usage_limit).toEqual({ pauses: 1, sessions: 1, pausedMs: 1.5 * HOUR });
     // Never resumed or ended: paused until the window's end.
     expect(d.pauses.byReason.agent_exited).toEqual({
@@ -384,6 +394,8 @@ describe('retro helpers', () => {
     expect(() => windowFromFlags({ until: '2026-10-01' }, now)).toThrow(/needs --since/);
     expect(() => windowFromFlags({ since: '2026-02-30' }, now)).toThrow(/not a date/);
     expect(() => windowFromFlags({ since: 'yesterday' }, now)).toThrow(/needs a date/);
+    expect(() => windowFromFlags({ since: '2026-10-01T10:00' }, now)).toThrow(/with its zone/);
+    expect(windowFromFlags({ since: '2026-10-01T10:00+02:00' }, now).since).toBe('2026-10-01T08:00:00.000Z');
     expect(() => windowFromFlags({ since: '2026-10-05', until: '2026-10-01' }, now)).toThrow(/before/);
   });
 

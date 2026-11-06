@@ -404,8 +404,8 @@ export function collectRetro(db: RetroDb, options: RetroOptions): RetroData {
   const open = new Map<number, { reason: PauseReason; at: string }>();
   const intervals: { sessionId: number; reason: PauseReason; from: string; to: string; ongoing: boolean }[] =
     [];
+  // Every entry up to now, not just the window: a pause that ends after the window still has its real end.
   for (const d of decisions) {
-    if (d.created_at >= w.until) break;
     const e = parsePauseLog(d.text);
     if (!e) continue;
     const prev = open.get(e.sessionId);
@@ -541,7 +541,8 @@ export function collectRetro(db: RetroDb, options: RetroOptions): RetroData {
     addReason(m[3]!, 'escalation', ev);
     const job = JOB_FAILED.exec(m[3]!);
     if (job) {
-      const r = row(job[1]!);
+      // A custom check's job is "check-<id>"; its failure comments are keyed by <id>.
+      const r = row(job[1]!.replace(/^check-/, ''));
       r.jobFailures++;
       r.jobEvidence.push(ev);
     }
@@ -644,10 +645,11 @@ export function collectRetro(db: RetroDb, options: RetroOptions): RetroData {
     pauses: {
       byReason,
       longest: longest.slice(0, LIST_MAX),
-      logged: longest.length > 0,
+      logged: intervals.some((i) => i.from < windowEnd && i.to > w.since),
       usageLimit: sessionRefs(USAGE_LIMIT),
       usageLimitFallbacks: matching(USAGE_LIMIT).filter((d) => /switched from claude\//.test(d.text)).length,
       agentGone: sessionRefs(AGENT_GONE),
+      // Written by the runner's automatic resume of sessions whose agent went away.
       autoResumes: sessionRefs(/^Auto-resume:/),
       autoResumeGaveUp: sessionRefs(/^Auto-resume stopped/),
       modelMoves: sessionRefs(MODEL_MOVED),

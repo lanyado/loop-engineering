@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FakeClock } from './clock.js';
-import { parsePauseLog, pausedText, resumedText } from './pause-log.js';
+import { endedPausedText, parsePauseLog, pausedText, resumedText } from './pause-log.js';
 import { openStore, type Store } from './store.js';
 
 describe('pause log', () => {
@@ -32,12 +32,15 @@ describe('pause log', () => {
     store.sessions.update(s.id, { title: 'renamed' }); // no status change: nothing
     clock.set('2026-10-01T04:00:00.000Z');
     store.sessions.update(s.id, { status: 'paused', pauseReason: 'agent_exited' });
-    store.sessions.update(s.id, { status: 'ended' }); // its endedAt closes the pause
+    clock.set('2026-10-01T05:00:00.000Z');
+    store.sessions.update(s.id, { status: 'ended' });
+    store.sessions.update(s.id, { status: 'ended' }); // already ended: nothing
     expect(log(s.id)).toEqual([
       ['01:00', `Session ${s.id} paused (usage_limit).`],
       ['02:00', `Session ${s.id} paused (manual), was usage_limit.`],
       ['03:00', `Session ${s.id} resumed after a pause (manual).`],
       ['04:00', `Session ${s.id} paused (agent_exited).`],
+      ['05:00', `Session ${s.id} ended during a pause (agent_exited).`],
     ]);
   });
 
@@ -61,6 +64,11 @@ describe('pause log', () => {
       kind: 'resumed',
       sessionId: 3,
       reason: 'agent_exited',
+    });
+    expect(parsePauseLog(endedPausedText(3, 'manual'))).toEqual({
+      kind: 'resumed',
+      sessionId: 3,
+      reason: 'manual',
     });
     expect(parsePauseLog('Session 3 paused (lunch).')).toBeNull();
     expect(parsePauseLog('Session 3 moved from opus to sonnet: limit.')).toBeNull();

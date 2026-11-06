@@ -23,8 +23,10 @@ function parseTime(value: string, flag: string, endOfDay: boolean): number {
       throw new Error(`${flag} ${value} is not a date`);
     return endOfDay ? t + DAY_MS : t;
   }
-  const t = v.includes('T') ? Date.parse(v) : NaN;
-  if (Number.isNaN(t)) throw new Error(`${flag} needs a date (YYYY-MM-DD) or an ISO time, not "${value}"`);
+  // A time needs its zone (Z or an offset): without one, Date.parse would read it as local time.
+  const t = /T.*(Z|[+-]\d{2}:?\d{2})$/i.test(v) ? Date.parse(v) : NaN;
+  if (Number.isNaN(t))
+    throw new Error(`${flag} needs a date (YYYY-MM-DD) or an ISO time with its zone, not "${value}"`);
   return t;
 }
 

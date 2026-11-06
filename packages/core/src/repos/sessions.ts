@@ -17,13 +17,12 @@ import {
   type SessionStatus,
   type Worktree,
 } from '../types.js';
-import { pausedText, resumedText } from '../pause-log.js';
+import { endedPausedText, pausedText, resumedText } from '../pause-log.js';
 import type { ProjectRepo } from './projects.js';
 
 /**
  * The pause log entry for moving `current` to `status` (pause reason `reason`, undefined when the
- * column is left alone): a pause, a new reason while paused, or a resume. Ending a paused session
- * writes nothing; its endedAt closes the pause.
+ * column is left alone): a pause, a new reason while paused, a resume, or an end while paused.
  */
 function pauseLogText(
   current: Session,
@@ -34,6 +33,7 @@ function pauseLogText(
   const next = reason === undefined ? current.pauseReason : reason;
   if (status === 'paused' && next && next !== was) return pausedText(current.id, next, was ?? undefined);
   if (was && status === 'active') return resumedText(current.id, was);
+  if (was && status === 'ended') return endedPausedText(current.id, was);
   return null;
 }
 
@@ -296,7 +296,7 @@ export class SessionRepo {
     if (patch.status === 'ended' && current.status !== 'ended') endedAt = isoNow(this.clock);
     if (patch.status !== undefined && patch.status !== 'ended') endedAt = null;
     const pauseLog = pauseLogText(current, patch.status ?? current.status, pauseReason);
-    this.db.transaction(() => {
+    const write = () => {
       updateById(this.db, 'sessions', 'session', id, {
         title: patch.title,
         status: patch.status,
@@ -315,7 +315,10 @@ export class SessionRepo {
         ended_at: endedAt,
       });
       if (pauseLog) this.logPause(current.projectId, id, pauseLog);
-    })();
+    };
+    // A transaction only when there are two writes to keep together.
+    if (pauseLog) this.db.transaction(write)();
+    else write();
     return this.require(id);
   }
 
