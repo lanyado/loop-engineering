@@ -50,7 +50,9 @@ Planned as **0.1.0**, the first tagged release. It will hold everything on `main
 - Reload open dashboard tabs after upgrading: an old bundle still expects `telegramAllowlist` in settings.
 - A tmux server started by an older version still holds `.env`'s secrets until it exits. The next session start removes them from its global environment. For a full clean, `tmux kill-server` when no builder is running ([the reference](docs/reference.md#what-agents-can-see)).
 - A variable an agent needs that is not on its allowlist (an OpenCode provider key, say) no longer reaches it: name it in `AGENT_ENV_EXTRA`.
-- **Use Git 2.31 or later.** Older Git ignores `GIT_CONFIG_COUNT`, so the override of a repo's own filters, drivers and credential helpers is lost; the `-c` options and the empty `GIT_PROXY_COMMAND` still apply. The server logs a warning at start when Git is older.
+- **Use Git 2.31 or later.**
+  - On Git 2.26 to 2.30, git ignores `GIT_CONFIG_COUNT`, so the override of a repo's own filters, drivers and credential helpers is lost. The `-c` options and the empty `GIT_PROXY_COMMAND` still apply, and the server logs a warning at start.
+  - Below 2.26 (Ubuntu 20.04 ships 2.25), `git config --list --show-scope` fails, so the guard refuses to run and every git command the runner makes fails: no session can start.
 
 ### Since the initial public release (#1 to #37)
 

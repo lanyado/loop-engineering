@@ -25,7 +25,9 @@ One machine runs everything: the server, the dashboard, the agents in tmux, and 
 ## The machine
 
 - **A user of its own.** Run Loop as one OS user (say `loop`) that holds only what the agents need: its Claude login, a `gh` login, git credentials for the repos it works on, and the projects' test credentials. Sessions and PR jobs run as this user with its real `HOME`, so they can reach anything it can ([SECURITY.md](../SECURITY.md)).
-- **Tools.** Node 20.19 or later, Git 2.31 or later (`git --version`), tmux, [Claude Code](https://docs.claude.com/en/docs/claude-code) logged in as that user, and [`gh`](https://cli.github.com) logged in (`gh auth login`) for the PR loop. `flock` (util-linux) and `pgrep` (procps) for `scripts/heavy`: without `flock` heavy runs have no limit, and without `pgrep` a run stopped at its time limit leaves its browsers running. `sqlite3` for backups. Git's version matters: below 2.31, git ignores `GIT_CONFIG_COUNT`, so the runner can no longer override a builder repo's own filters, drivers and credential helpers ([below](#what-agents-can-see)). The server logs a warning at start when that happens. Optional: OpenCode for the free fallback, `jq` for the usage meters, `ttyd` for the terminals under each pipeline.
+- **Tools.** Node 20.19 or later, Git 2.31 or later (`git --version`), tmux, [Claude Code](https://docs.claude.com/en/docs/claude-code) logged in as that user, and [`gh`](https://cli.github.com) logged in (`gh auth login`) for the PR loop. `flock` (util-linux) and `pgrep` (procps) for `scripts/heavy`: without `flock` heavy runs have no limit, and without `pgrep` a run stopped at its time limit leaves its browsers running. `sqlite3` for backups. Optional: OpenCode for the free fallback, `jq` for the usage meters, `ttyd` for the terminals under each pipeline. Git's version matters ([below](#what-agents-can-see)):
+  - **2.26 to 2.30:** git ignores `GIT_CONFIG_COUNT`, so the runner can no longer override a builder repo's own filters, drivers and credential helpers, and the server logs a warning at start.
+  - **Below 2.26** (Ubuntu 20.04 ships 2.25): the runner's git guard can't read config scopes and refuses to run, so no session can start.
 - **Git over HTTPS.** `gh auth setup-git` lets git use gh's login, so pushes and the loop's `gh` calls share one credential and one transport. An SSH outage at GitHub then can't stop pushes while the API works. The loop treats SSH failures as network failures and waits them out either way.
 - **Size.** What loads the machine is test and browser runs, not sessions: builders and PR jobs each run them. Before the [slot limit](#limits-on-load) existed, the load average reached 56–67 on 12 CPUs and QA jobs ran out of time.
 
@@ -141,7 +143,7 @@ A variable an agent needs that isn't on the list doesn't reach it, and the agent
 The runner's own git commands in builders' repos (`status`, `diff`, `fetch`, `push`, `worktree`) run with only what pushing needs, with time limits.
 
 - **On every command:** `-c` options turn off hooks, `fsmonitor`, the `ext::` transport, submodule recursion and signature checks, and `GIT_PROXY_COMMAND` is set empty.
-- **The repo's own config:** its filters, diff and merge drivers, pagers, editors, `core.sshCommand` and credential helpers are overridden through `GIT_CONFIG_COUNT`. That override needs Git 2.31 or later; older Git keeps everything else.
+- **The repo's own config:** its filters, diff and merge drivers, pagers, editors, `core.sshCommand` and credential helpers are overridden through `GIT_CONFIG_COUNT`. That override needs Git 2.31 or later; Git 2.26 to 2.30 keeps everything else. Below 2.26, git can't list config scopes (`git config --list --show-scope`), so the guard refuses to run: every git command the runner makes fails, and no session can start.
 
 > [!WARNING]
 > **This is not a sandbox.** Agents run as the Loop user with its real `HOME`. An agent that goes looking can still read `.env` from the repo folder, read the environment of processes started with the server's full environment (`/proc/<pid>/environ`), and read the other agents' panes. Some practical limits:
@@ -259,7 +261,7 @@ WantedBy=timers.target
 systemctl --user daemon-reload && systemctl --user enable --now loop-retro.timer
 ```
 
-The report lands in `data/retros/<YYYY-MM>.md`. Add `--file-request --request-project <name>` to `ExecStart` to have a builder propose pipeline and prompt changes from it each month. Try it first with `node scripts/loop.mjs retro --days 7 --stdout`.
+The report lands in `data/retros/<YYYY-MM>.md`. Add `--project <name> --file-request` to `ExecStart` to have that project's builder propose pipeline and prompt changes from its report each month. Try it first with `node scripts/loop.mjs retro --days 7 --stdout`.
 
 ## Backups
 
