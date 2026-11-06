@@ -33,6 +33,11 @@ export interface TmuxDriver {
   list(session: string): Promise<TmuxWindow[]>;
   /** The running tmux server; null when none runs. */
   server(): Promise<TmuxServer | null>;
+  /**
+   * Keeps the window, with a dead pane, when its process exits (remain-on-exit), so an agent that
+   * exited can be told from a window closed from outside. newWindow does this for its windows.
+   */
+  keepDeadPane(target: string): Promise<void>;
 }
 
 export interface TmuxServer {
@@ -88,7 +93,12 @@ export class RealTmuxDriver implements TmuxDriver {
     // The runner identifies windows by name too; keep the agent (terminal title escapes) from renaming it.
     await this.tmux(['set-option', '-w', '-t', target, 'allow-rename', 'off']).catch(() => undefined);
     await this.tmux(['set-option', '-w', '-t', target, 'automatic-rename', 'off']).catch(() => undefined);
+    await this.keepDeadPane(target).catch(() => undefined);
     return target;
+  }
+
+  async keepDeadPane(target: string): Promise<void> {
+    await this.tmux(['set-option', '-w', '-t', target, 'remain-on-exit', 'on']);
   }
 
   private async createWindow(spec: NewWindow): Promise<string> {

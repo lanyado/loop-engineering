@@ -361,3 +361,19 @@ describe.skipIf(!hasTmux())("the tmux server's pid and start time (real tmux)", 
     expect(await tmux.server()).toBeNull();
   });
 });
+
+describe.skipIf(!hasTmux())('an agent window keeps its dead pane (real tmux)', () => {
+  const socket = `loop-test-dead-${process.pid}`;
+  afterAll(async () => {
+    await run('tmux', ['-L', socket, 'kill-server']).catch(() => undefined);
+  });
+
+  it('stays with a dead pane when its process exits, so it reads as exited, not closed', async () => {
+    const tmux = new RealTmuxDriver({ socketName: socket });
+    const target = await tmux.newWindow({ session: 'probe', name: 'w', cwd: tmpdir(), command: 'sleep 0.3' });
+    const dead = await waitFor('the dead pane', async () => (await tmux.list('probe')).find((w) => w.dead));
+    expect(dead.target).toBe(target);
+    await tmux.kill(target);
+    expect(await tmux.list('probe')).toEqual([]);
+  });
+});
