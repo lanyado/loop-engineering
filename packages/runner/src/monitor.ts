@@ -111,9 +111,10 @@ export class UsageLimitMonitor {
   async checkOnce(): Promise<MonitorPass> {
     const pass: MonitorPass = { switched: [], exited: [], trustWaits: [], rotated: [] };
     try {
-      pass.exited = await this.runner.reconcile();
+      const { sessions, vanished } = await this.runner.reconcileReport();
+      pass.exited = sessions;
       for (const s of pass.exited) this.options.onAgentExited?.(s);
-      await this.autoResume?.afterReconcile(pass.exited);
+      await this.autoResume?.afterReconcile(pass.exited.filter((s) => vanished.has(s.id)));
     } catch (err) {
       this.options.onError?.(err, null);
     }

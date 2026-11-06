@@ -78,6 +78,15 @@ export class FakeTmuxDriver implements TmuxDriver {
     return Promise.resolve(this.serverInfo);
   }
 
+  /** Windows keepDeadPane was called for (fake windows made by newWindow always keep it). */
+  readonly keptDeadPanes: string[] = [];
+
+  keepDeadPane(target: string): Promise<void> {
+    this.require(target);
+    this.keptDeadPanes.push(target);
+    return Promise.resolve();
+  }
+
   /** Sets the pane text of `target`. */
   print(target: string, output: string): void {
     this.require(target).output = output;
