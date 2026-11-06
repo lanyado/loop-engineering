@@ -39,3 +39,37 @@ export {
   type TranscriptLine,
   type TranscriptFs,
 } from './transcript.js';
+export {
+  collectRetro,
+  reasonKey,
+  stats,
+  type Evidence,
+  type LongPause,
+  type LongWait,
+  type Problem,
+  type ReasonGroup,
+  type RequestOutcome,
+  type RetroData,
+  type RetroDb,
+  type RetroOptions,
+  type StageRow,
+  type Stats,
+  type UnfinishedRequest,
+} from './retro.js';
+export {
+  cleanText,
+  formatDuration,
+  renderRetro,
+  RETRO_REQUEST_MAX,
+  retroRequestText,
+} from './retro-render.js';
+export {
+  describeWindow,
+  previousMonth,
+  retroFileName,
+  slug,
+  windowFromFlags,
+  windowMonth,
+  type RetroWindow,
+  type WindowFlags,
+} from './retro-window.js';

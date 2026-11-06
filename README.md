@@ -157,6 +157,7 @@ printf '%s' "$input" | /path/to/loop-engineering/scripts/capture-claude-usage.sh
 | `npm start`                                     | Run the server and the dashboard (Ctrl-C stops both)                    |
 | `npm run add-project -- <path>`                 | Register a project (`--name`, `--branch`, `--folder`, `--outside-home`) |
 | `npm run loop -- init <path>`                   | Give a project its own pipeline (`loop init` after `npm link`)          |
+| `npm run loop -- retro`                         | Last month's numbers, from the database (`loop retro --help`)           |
 | `npm run build`                                 | Rebuild after pulling changes                                           |
 | `npm test`, `npm run typecheck`, `npm run lint` | The checks CI runs                                                      |
 | `npm run dev -w @loop-engineering/dashboard`    | Dashboard in development mode (`SERVER_URL=` for demo data)             |

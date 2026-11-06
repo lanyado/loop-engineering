@@ -17,7 +17,25 @@ import {
   type SessionStatus,
   type Worktree,
 } from '../types.js';
+import { endedPausedText, pausedText, resumedText } from '../pause-log.js';
 import type { ProjectRepo } from './projects.js';
+
+/**
+ * The pause log entry for moving `current` to `status` (pause reason `reason`, undefined when the
+ * column is left alone): a pause, a new reason while paused, a resume, or an end while paused.
+ */
+function pauseLogText(
+  current: Session,
+  status: SessionStatus,
+  reason: PauseReason | null | undefined,
+): string | null {
+  const was = current.status === 'paused' ? current.pauseReason : null;
+  const next = reason === undefined ? current.pauseReason : reason;
+  if (status === 'paused' && next && next !== was) return pausedText(current.id, next, was ?? undefined);
+  if (was && status === 'active') return resumedText(current.id, was);
+  if (was && status === 'ended') return endedPausedText(current.id, was);
+  return null;
+}
 
 export interface NewSession {
   projectId: number;
@@ -175,7 +193,9 @@ export class SessionRepo {
         now,
         endedAt: status === 'ended' ? now : null,
       });
-    return this.require(Number(info.lastInsertRowid));
+    const id = Number(info.lastInsertRowid);
+    if (pauseReason) this.logPause(input.projectId, id, pausedText(id, pauseReason));
+    return this.require(id);
   }
 
   /**
@@ -275,24 +295,41 @@ export class SessionRepo {
     let endedAt: string | null | undefined;
     if (patch.status === 'ended' && current.status !== 'ended') endedAt = isoNow(this.clock);
     if (patch.status !== undefined && patch.status !== 'ended') endedAt = null;
-    updateById(this.db, 'sessions', 'session', id, {
-      title: patch.title,
-      status: patch.status,
-      pause_reason: pauseReason,
-      provider: patch.provider,
-      model: patch.model,
-      effort: patch.effort,
-      tmux_target: patch.tmuxTarget,
-      agent_session_id: patch.agentSessionId,
-      branch: patch.branch,
-      worktrees: toJson(patch.worktrees),
-      rigor: patch.rigor,
-      // A level chosen here is the human's: it pins the level against the Planner.
-      rigor_source: patch.rigor === undefined ? undefined : 'human',
-      rigor_reason: patch.rigor === undefined ? undefined : null,
-      ended_at: endedAt,
-    });
+    const pauseLog = pauseLogText(current, patch.status ?? current.status, pauseReason);
+    const write = () => {
+      updateById(this.db, 'sessions', 'session', id, {
+        title: patch.title,
+        status: patch.status,
+        pause_reason: pauseReason,
+        provider: patch.provider,
+        model: patch.model,
+        effort: patch.effort,
+        tmux_target: patch.tmuxTarget,
+        agent_session_id: patch.agentSessionId,
+        branch: patch.branch,
+        worktrees: toJson(patch.worktrees),
+        rigor: patch.rigor,
+        // A level chosen here is the human's: it pins the level against the Planner.
+        rigor_source: patch.rigor === undefined ? undefined : 'human',
+        rigor_reason: patch.rigor === undefined ? undefined : null,
+        ended_at: endedAt,
+      });
+      if (pauseLog) this.logPause(current.projectId, id, pauseLog);
+    };
+    // A transaction only when there are two writes to keep together.
+    if (pauseLog) this.db.transaction(write)();
+    else write();
     return this.require(id);
+  }
+
+  /** One `decision` history entry (pause-log.ts), written here so every way of pausing is counted. */
+  private logPause(projectId: number, sessionId: number, text: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO history_entries (project_id, session_id, kind, text, created_at)
+         VALUES (?, ?, 'decision', ?, ?)`,
+      )
+      .run(projectId, sessionId, text, isoNow(this.clock));
   }
 
   /**

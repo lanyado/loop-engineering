@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { FakeClock, openStore, type Store } from '@loop-engineering/core';
+import { FakeClock, openStore, parsePauseLog, type Store } from '@loop-engineering/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { TranscriptIngester } from './ingest.js';
 import { compactTranscript, encodeProjectDir } from './transcript.js';
@@ -178,6 +178,7 @@ describe('TranscriptIngester', () => {
     expect(
       store.history
         .list({ sessionId: s.id })
+        .filter((e) => !parsePauseLog(e.text))
         .map((e) => e.kind)
         .sort(),
     ).toEqual(['decision', 'transcript']);

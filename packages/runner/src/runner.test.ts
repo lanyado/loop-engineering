@@ -9,7 +9,7 @@ import {
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { sessionToken } from '@loop-engineering/core';
+import { parsePauseLog, sessionToken } from '@loop-engineering/core';
 import { describe, expect, it, vi } from 'vitest';
 import { DefaultAgentCli } from './agent-cli.js';
 import { nodeFs } from './drivers/fs.js';
@@ -475,7 +475,8 @@ describe('pause / resume / stop / end', () => {
     const r = await h.runner.relaunch(s.id, 'x');
     expect(r.status).toBe('active');
     expect(h.script(h.window(r.tmuxTarget))).toContain("'--model' 'opus'");
-    expect(h.store.history.list({ sessionId: s.id }).map((e) => e.text)).toEqual([
+    const notes = h.store.history.list({ sessionId: s.id }).filter((e) => !parsePauseLog(e.text));
+    expect(notes.map((e) => e.text)).toEqual([
       expect.stringContaining('on sonnet failed (unknown model); it runs on its default model'),
     ]);
   });

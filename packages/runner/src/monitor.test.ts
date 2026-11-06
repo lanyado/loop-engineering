@@ -1,3 +1,4 @@
+import { parsePauseLog } from '@loop-engineering/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { UsageLimitMonitor } from './monitor.js';
 import { harness } from './test-support/harness.js';
@@ -105,7 +106,9 @@ describe('UsageLimitMonitor', () => {
     const script = h.script(h.window(h.store.sessions.require(a.id).tmuxTarget));
     expect(script).toContain("exec 'opencode' '--standalone' '--auto' '--prompt=");
     expect(script).not.toContain("'--continue'");
-    expect(h.store.history.list({ sessionId: a.id })[0]?.text).toContain(`from ${fallback} to opencode/b`);
+    expect(h.store.history.list({ sessionId: a.id }).find((e) => !parsePauseLog(e.text))?.text).toContain(
+      `from ${fallback} to opencode/b`,
+    );
 
     // b only animates its spinner: still the same screen. Hung after 30 minutes.
     now = 29 * 60_000;
@@ -113,7 +116,9 @@ describe('UsageLimitMonitor', () => {
     expect((await monitor.checkOnce()).rotated).toEqual([]);
     now = 31 * 60_000;
     expect((await monitor.checkOnce()).rotated.map((s) => [s.id, s.model])).toEqual([[b.id, 'opencode/b']]);
-    expect(h.store.history.list({ sessionId: b.id })[0]?.text).toContain('no progress for 31 minutes');
+    expect(h.store.history.list({ sessionId: b.id }).find((e) => !parsePauseLog(e.text))?.text).toContain(
+      'no progress for 31 minutes',
+    );
   });
 
   it('takes an extended pattern list', async () => {
