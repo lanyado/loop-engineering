@@ -14,3 +14,4 @@ Loop Engineering starts coding agents that can read and write files, run command
 - A project's env files are copied into every worktree and given to its jobs. Keep only test credentials in env files of repos the loop works on.
 - Add-ins in `local/` run inside the server with its access, like its own modules: only put code there you trust.
 - Secrets belong in `.env` (gitignored), which the server and the dashboard both read. `.env.example` lists the variables.
+- Agents do not inherit the server's environment (where `.env`'s secrets live): they get an allowlist, and the runner keeps those secrets out of tmux's global environment. They can still read `.env` from disk as your user. See [What agents can see](docs/reference.md#what-agents-can-see).

@@ -42,6 +42,13 @@ async function waitFor<T>(
   }
 }
 
+/** Kills a test's own tmux server and removes its socket file, which tmux leaves behind. */
+async function dropServer(socket: string): Promise<void> {
+  await run('tmux', ['-L', socket, 'kill-server']).catch(() => undefined);
+  const uid = process.getuid?.() ?? 0;
+  await rm(join(process.env.TMUX_TMPDIR || '/tmp', `tmux-${uid}`, socket), { force: true });
+}
+
 const exists = (p: string) =>
   stat(p).then(
     () => true,
@@ -59,7 +66,7 @@ describe.skipIf(!hasTmux())('runner with real tmux (fake agents)', () => {
 
   afterAll(async () => {
     store.close();
-    await run('tmux', ['-L', SOCKET, 'kill-server']).catch(() => undefined);
+    await dropServer(SOCKET);
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -346,7 +353,7 @@ describe.skipIf(!hasTmux())("the tmux server's pid and start time (real tmux)", 
   // Its own server, never the default one or the other tests'.
   const socket = `loop-test-server-${process.pid}`;
   afterAll(async () => {
-    await run('tmux', ['-L', socket, 'kill-server']).catch(() => undefined);
+    await dropServer(socket);
   });
 
   it('reads them while the server runs, and null once it is gone', async () => {
@@ -365,7 +372,7 @@ describe.skipIf(!hasTmux())("the tmux server's pid and start time (real tmux)", 
 describe.skipIf(!hasTmux())('an agent window keeps its dead pane (real tmux)', () => {
   const socket = `loop-test-dead-${process.pid}`;
   afterAll(async () => {
-    await run('tmux', ['-L', socket, 'kill-server']).catch(() => undefined);
+    await dropServer(socket);
   });
 
   it('stays with a dead pane when its process exits, so it reads as exited, not closed', async () => {
@@ -373,6 +380,8 @@ describe.skipIf(!hasTmux())('an agent window keeps its dead pane (real tmux)', (
     const target = await tmux.newWindow({ session: 'probe', name: 'w', cwd: tmpdir(), command: 'sleep 0.3' });
     const dead = await waitFor('the dead pane', async () => (await tmux.list('probe')).find((w) => w.dead));
     expect(dead.target).toBe(target);
+    // When it died, as tmux reports it (whole seconds): what tells a failed launch from a later exit.
+    expect(Math.abs((dead.deadAt ?? 0) - Date.now())).toBeLessThan(60_000);
     await tmux.kill(target);
     expect(await tmux.list('probe')).toEqual([]);
   });
@@ -398,7 +407,7 @@ describe.skipIf(!hasTmux())('a window that cannot be set up (real tmux)', () => 
     dir = await mkdtemp(join(tmpdir(), 'loop-tmux-bin-'));
   });
   afterAll(async () => {
-    await run('tmux', ['-L', socket, 'kill-server']).catch(() => undefined);
+    await dropServer(socket);
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -454,4 +463,139 @@ describe.skipIf(!hasTmux())('a window that cannot be set up (real tmux)', () => 
       ).rejects.toThrow(`tmux session name "${session}" has "." or ":"`);
     expect(await tmux.list('loop_2')).toEqual([]);
   });
+});
+
+describe.skipIf(!hasTmux())("an agent never sees the server's secrets (real tmux)", () => {
+  // Its own server, never the default one or the other tests'.
+  const socket = `loop-test-env-${process.pid}`;
+  const tag = `leak-${process.pid}`;
+  // What the server holds after loading .env: its own tokens and an add-in's password.
+  const secrets = {
+    DASHBOARD_TOKEN: `${tag}-dashboard`,
+    MCP_TOKEN: `${tag}-shared-mcp`,
+    EMAIL_APP_PASSWORD: `${tag}-email`,
+  };
+  let dir: string;
+  let store: Store;
+
+  beforeAll(async () => {
+    dir = await realpath(await mkdtemp(join(tmpdir(), 'loop-env-it-')));
+    store = openStore({ clock: new FakeClock() });
+  });
+  afterAll(async () => {
+    store.close();
+    await dropServer(socket);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  /** Starts a folder session whose fake agent saves its environment; returns that environment. */
+  async function agentEnv(tmux: RealTmuxDriver, name: string) {
+    const folder = join(dir, name);
+    await mkdir(folder, { recursive: true });
+    const out = join(dir, `${name}-env.txt`);
+    const fakeAgent = join(dir, `${name}-agent.sh`);
+    await writeFile(
+      fakeAgent,
+      `#!/bin/sh\n/usr/bin/env > '${out}.tmp' && mv '${out}.tmp' '${out}'\nexec sleep 60\n`,
+      {
+        mode: 0o755,
+      },
+    );
+    const runner = new SessionRunner(
+      {
+        store,
+        tmux,
+        git: new RealGitDriver(),
+        fs: nodeFs,
+        agentCli: new DefaultAgentCli({ claude: fakeAgent, opencode: fakeAgent }),
+        log: () => undefined,
+      },
+      {
+        worktreesRoot: join(dir, 'worktrees'),
+        serverUrl: 'http://127.0.0.1:1',
+        tmuxSession: 'loop-env-it',
+        // As apps/server runs it: the runner reads the server's whole environment.
+        env: { ...process.env, ...secrets },
+        claudeProjectsDir: join(dir, 'claude-projects'),
+      },
+    );
+    const project = store.projects.create({ name, kind: 'folder', folderPath: folder });
+    const s = await runner.startSession(project.id, { text: 'Show me your environment' });
+    const text = await waitFor(`${name}'s environment`, () => readFile(out, 'utf8'));
+    const env = new Map(
+      text
+        .split('\n')
+        .filter((l) => l.includes('='))
+        .map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)] as const),
+    );
+    return { env, text, end: () => runner.end(s.id) };
+  }
+
+  const globalEnv = async () => (await run('tmux', ['-L', socket, 'show-environment', '-g'])).stdout;
+
+  it(
+    'when the runner starts the tmux server: not in the window, not in the global environment',
+    {
+      timeout: 30_000,
+    },
+    async () => {
+      // The server's process.env holds .env's secrets the whole time; the driver and the runner
+      // read it, as apps/server builds them.
+      Object.assign(process.env, secrets);
+      try {
+        const tmux = new RealTmuxDriver({ socketName: socket });
+        expect(await tmux.server()).toBeNull();
+        const { env, text, end } = await agentEnv(tmux, 'fresh');
+        expect(text).not.toContain(tag);
+        for (const name of ['DASHBOARD_TOKEN', 'EMAIL_APP_PASSWORD']) expect(env.has(name)).toBe(false);
+        // The agent's MCP_TOKEN is its own session token, derived from the shared one, never that one.
+        expect(env.get('MCP_TOKEN')).toMatch(/\S/);
+        expect(env.get('MCP_TOKEN')).not.toBe(secrets.MCP_TOKEN);
+        // What it does get: the toolchain, and the terminal tmux gave the window.
+        expect(env.get('PATH')).toBe(process.env.PATH);
+        expect(env.get('TMUX_PANE')).toMatch(/^%\d+$/);
+        expect(env.get('LOOP_SESSION_ID')).toMatch(/^\d+$/);
+        const global = await globalEnv();
+        expect(global).not.toContain(tag);
+        for (const name of Object.keys(secrets)) expect(global).not.toMatch(new RegExp(`^-?${name}=`, 'm'));
+        await end();
+      } finally {
+        for (const name of Object.keys(secrets)) delete process.env[name];
+      }
+      // Ending the only window may have ended the server already.
+      await dropServer(socket);
+    },
+  );
+
+  it(
+    'on a tmux server someone started with secrets: not in the window; the named ones leave the global environment',
+    {
+      timeout: 30_000,
+    },
+    async () => {
+      // Someone else's session, started from a shell holding the server's .env.
+      await run('tmux', ['-L', socket, 'new-session', '-d', '-s', 'theirs', 'sleep 60'], {
+        env: { PATH: process.env.PATH, HOME: process.env.HOME, ...secrets },
+      });
+      expect(await globalEnv()).toContain(secrets.DASHBOARD_TOKEN);
+      const tmux = new RealTmuxDriver({
+        socketName: socket,
+        unsetGlobalEnv: ['DASHBOARD_TOKEN', 'MCP_TOKEN'],
+      });
+      // new-session on the running server, then new-window in the session it made.
+      const first = await agentEnv(tmux, 'existing-a');
+      const second = await agentEnv(tmux, 'existing-b');
+      for (const { env, text } of [first, second]) {
+        expect(text).not.toContain(tag);
+        for (const name of ['DASHBOARD_TOKEN', 'EMAIL_APP_PASSWORD']) expect(env.has(name)).toBe(false);
+      }
+      const global = await globalEnv();
+      expect(global).not.toContain(secrets.DASHBOARD_TOKEN);
+      expect(global).not.toContain(secrets.MCP_TOKEN);
+      // A name not on the list stays in tmux's global environment, but no agent inherits it (above).
+      expect(global).toContain(`EMAIL_APP_PASSWORD=${secrets.EMAIL_APP_PASSWORD}`);
+      await first.end();
+      await second.end();
+    },
+  );
 });

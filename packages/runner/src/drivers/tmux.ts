@@ -1,3 +1,4 @@
+import { tmuxClientEnvironment } from '../agent-env.js';
 import { plainPane } from '../input-box.js';
 import { exec, ExecError } from './exec.js';
 
@@ -16,6 +17,8 @@ export interface TmuxWindow {
   name: string;
   /** The pane's process exited but the window stayed (remain-on-exit). */
   dead: boolean;
+  /** When a dead pane's process exited (epoch ms, whole seconds), if tmux says. */
+  deadAt?: number;
 }
 
 export interface TmuxDriver {
@@ -74,19 +77,40 @@ export interface RealTmuxOptions {
   /** Dedicated server socket (`tmux -L <name>`), e.g. "loop-test" in tests. Default: tmux's default server. */
   socketName?: string;
   bin?: string;
+  /**
+   * The environment tmux commands run with. A server they start copies it into its global
+   * environment, which every window inherits. Default: tmuxClientEnvironment(process.env), which
+   * holds no credentials.
+   */
+  env?: Record<string, string>;
+  /**
+   * Names removed from the server's global environment (`set-environment -gu`) in the same tmux
+   * command that makes each window: secrets a server started before (by an older runner, or from a
+   * shell holding .env's variables) may still hold. The agent never inherits them anyway (the launch
+   * script runs it under `env -i`); this keeps `tmux show-environment -g` from printing them.
+   */
+  unsetGlobalEnv?: readonly string[];
 }
+
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export class RealTmuxDriver implements TmuxDriver {
   private readonly bin: string;
   private readonly base: string[];
+  private readonly env: Record<string, string>;
+  private readonly unsetGlobal: string[];
 
   constructor(options: RealTmuxOptions = {}) {
     this.bin = options.bin ?? 'tmux';
     this.base = options.socketName ? ['-L', options.socketName] : [];
+    this.env = options.env ?? tmuxClientEnvironment(process.env);
+    this.unsetGlobal = [...new Set(options.unsetGlobalEnv ?? [])].filter((name) => ENV_NAME.test(name));
   }
 
   private async tmux(args: string[]): Promise<string> {
-    return (await exec(this.bin, [...this.base, ...args])).stdout;
+    // Exactly this environment, nothing from process.env (the cast: some apps type NODE_ENV as required).
+    const env = { ...this.env } as NodeJS.ProcessEnv;
+    return (await exec(this.bin, [...this.base, ...args], undefined, { env })).stdout;
   }
 
   private async hasSession(session: string): Promise<boolean> {
@@ -120,15 +144,17 @@ export class RealTmuxDriver implements TmuxDriver {
       name,
       value,
     ]);
+    // Run first in the same command list (which starts the server when none runs).
+    const scrub = this.unsetGlobal.flatMap((name) => ['set-environment', '-g', '-u', name, ';']);
     if (!(await this.hasSession(spec.session))) {
       try {
-        return await this.create(['new-session', '-s', spec.session, ...common, ...options]);
+        return await this.create([...scrub, 'new-session', '-s', spec.session, ...common, ...options]);
       } catch (err) {
         // Another start created the session between the check and here; fall through to new-window.
         if (!(err instanceof ExecError && /duplicate session/i.test(err.stderr))) throw err;
       }
     }
-    return await this.create(['new-window', '-a', '-t', last, ...common, ...options]);
+    return await this.create([...scrub, 'new-window', '-a', '-t', last, ...common, ...options]);
   }
 
   /**
@@ -197,7 +223,7 @@ export class RealTmuxDriver implements TmuxDriver {
         '-t',
         `=${session}`,
         '-F',
-        `${TARGET_FORMAT}\t#{window_name}\t#{pane_dead}`,
+        `${TARGET_FORMAT}\t#{window_name}\t#{pane_dead}\t#{pane_dead_time}`,
       ]);
     } catch (err) {
       if (isMissing(err)) return [];
@@ -207,8 +233,9 @@ export class RealTmuxDriver implements TmuxDriver {
       .split('\n')
       .filter((l) => l !== '')
       .map((l) => {
-        const [target = '', name = '', dead = '0'] = l.split('\t');
-        return { target, name, dead: dead === '1' };
+        const [target = '', name = '', dead = '0', deadTime = ''] = l.split('\t');
+        const deadAt = Number(deadTime) * 1000;
+        return { target, name, dead: dead === '1', ...(dead === '1' && deadAt > 0 ? { deadAt } : {}) };
       });
   }
 

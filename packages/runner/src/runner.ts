@@ -26,6 +26,7 @@ import {
   type Worktree,
 } from '@loop-engineering/core';
 import type { AgentCli, LaunchSpec } from './agent-cli.js';
+import { agentBaseEnvironment } from './agent-env.js';
 import {
   DEFAULT_MCP_TOKEN_ENV,
   OPENSOURCE_SEARCH_SKILL,
@@ -39,7 +40,7 @@ import type { Fs } from './drivers/fs.js';
 import type { GitDriver } from './drivers/git.js';
 import type { TmuxDriver, TmuxServer, TmuxWindow } from './drivers/tmux.js';
 import { sessionInstructions } from './instructions.js';
-import { renderLaunchScript, shellQuote } from './launch.js';
+import { launchFailure, renderLaunchScript, shellQuote } from './launch.js';
 import { inputBoxHasText, inputBoxHolds, inputBoxText } from './input-box.js';
 import { sanitizeLine } from './sanitize.js';
 import { transcriptHas } from './transcript.js';
@@ -148,6 +149,11 @@ type SeenTmuxServer = TmuxServer & { seenAt: number; savedAt: number };
 
 /** How reconcile's history entry for an agent it found gone starts (auto-resume looks for it). */
 export const AGENT_GONE = 'Agent gone:';
+/**
+ * A pane that died within this long of its launch (tmux reports whole seconds) may hold the launch
+ * script's failure message.
+ */
+const LAUNCH_FAILURE_WINDOW_MS = 10_000;
 
 /** How often a server that is still there has its last sighting saved. */
 const TMUX_SEEN_SAVE_MS = 5 * 60_000;
@@ -907,6 +913,19 @@ export class SessionRunner {
           return null;
         }
         if (!window) vanished.add(s.id);
+        // A launch that failed (no CLI on PATH, no /usr/bin/env) said why in the pane: keep that, since
+        // the window goes now. Only for a pane that died right after its launch, so an agent that ran
+        // for a while cannot put words in the history by printing them.
+        const launched = this.launchedAt.get(s.id);
+        const diedAtLaunch =
+          window?.deadAt !== undefined &&
+          launched !== undefined &&
+          window.deadAt - launched <= LAUNCH_FAILURE_WINDOW_MS;
+        const said =
+          diedAtLaunch && window
+            ? launchFailure(await this.deps.tmux.capture(window.target, 40).catch(() => ''))
+            : null;
+        const why = said ? ` The launch script said: ${said}.` : '';
         await this.killOwnWindow(s);
         if (store.projects.get(s.projectId)?.kind === 'folder') {
           // A folder runs one session at a time: a paused dead session would block it until someone
@@ -919,7 +938,7 @@ export class SessionRunner {
             text:
               `The ${s.provider}/${s.model} agent of folder session ${s.id} is gone (tmux window ` +
               `${s.tmuxTarget ?? 'none'} closed or its process exited). Session ended so the folder is free; ` +
-              'its files are untouched.',
+              `its files are untouched.${why}`,
           });
           return ended;
         }
@@ -936,7 +955,7 @@ export class SessionRunner {
             projectId: s.projectId,
             sessionId: s.id,
             kind: 'decision',
-            text: `${AGENT_GONE} the ${s.provider}/${s.model} agent of session ${s.id} is gone (${how}). Session paused (agent_exited); resume relaunches it.`,
+            text: `${AGENT_GONE} the ${s.provider}/${s.model} agent of session ${s.id} is gone (${how}). Session paused (agent_exited); resume relaunches it.${why}`,
           });
           return updated;
         });
@@ -1371,7 +1390,10 @@ export class SessionRunner {
       mcpConfigPath: paths.claudeMcp,
       systemPrompt: this.instructions(sessionId),
     });
+    // The agent's whole environment: it inherits nothing (the launch script runs it under env -i), so
+    // the server's own secrets (DASHBOARD_TOKEN, the shared MCP_TOKEN, .env's keys) never reach it.
     const env: Record<string, string> = {
+      ...agentBaseEnvironment(this.env),
       MCP_TOOL_TIMEOUT: String(this.mcpToolTimeoutMs),
       // The agent gets only its own session token, never the shared MCP_TOKEN (see sessionToken()).
       [this.tokenEnv]: sessionToken(this.requireToken(), sessionId),

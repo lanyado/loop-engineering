@@ -1,5 +1,7 @@
+import { readFileSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseEnv } from 'node:util';
 
 /** The repository root: this file sits in apps/server/src (sources) or apps/server/dist (build). */
 export const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
@@ -13,6 +15,18 @@ export function loadRootEnv(root = REPO_ROOT): boolean {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
     throw error;
   }
+}
+
+/** The variable names REPO_ROOT/.env sets (empty when there is no .env), values never kept. */
+export function rootEnvNames(root = REPO_ROOT): string[] {
+  let text: string;
+  try {
+    text = readFileSync(resolve(root, '.env'), 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+  return Object.keys(parseEnv(text));
 }
 
 /** Resolves a relative path (e.g. LOOP_DB_PATH=./data/loop.db) against the repo root. */

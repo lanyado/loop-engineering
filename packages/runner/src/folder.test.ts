@@ -29,7 +29,9 @@ describe('folder projects in the runner', () => {
     expect(s).toMatchObject({ status: 'active', branch: '', worktrees: [], tmuxTarget: 'loop:@1' });
     const w = h.window(s.tmuxTarget);
     expect(w.cwd).toBe(FOLDER);
-    expect(h.script(w)).toContain(`cd '${FOLDER}' || exit 1`);
+    expect(h.script(w)).toContain(
+      `cd '${FOLDER}' || { echo "launch: cannot enter the working folder" >&2; exit 1; }`,
+    );
     expect(h.git.worktrees.size).toBe(0);
     expect(h.inFolder()).toEqual([FOLDER, `${FOLDER}/cv.md`]);
     expect(await h.fs.exists(`/wt/.loop-runner/s${s.id}/mcp.json`)).toBe(true);

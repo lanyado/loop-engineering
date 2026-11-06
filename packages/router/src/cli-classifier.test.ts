@@ -107,6 +107,43 @@ describe('CliClassifier', () => {
     expect(calls.map((x) => x.bin)).toEqual(['claude', 'opencode', 'opencode', 'claude', 'opencode']);
   });
 
+  it("runs both CLIs with the agent allowlist only, never the server's secrets", async () => {
+    const { run, calls } = fakeRun((bin) =>
+      bin === 'claude'
+        ? { code: 1, stdout: claudeEnvelope("You've hit your limit · resets 3pm", true), stderr: '' }
+        : { code: 0, stdout: opencodeEvents(JSON.stringify(answer)), stderr: '' },
+    );
+    const c = new CliClassifier({
+      run,
+      clock: new FakeClock('2026-10-18T09:00:00Z'),
+      fallbackModel: () => 'opencode/free-model',
+      log: () => undefined,
+      sourceEnv: {
+        PATH: '/usr/bin',
+        HOME: '/srv/loop',
+        CLAUDE_CODE_OAUTH_TOKEN: 'oauth',
+        DASHBOARD_TOKEN: 'secret',
+        MCP_TOKEN: 'secret',
+        EMAIL_APP_PASSWORD: 'secret',
+      },
+    });
+    await c.askJson(PROMPT, new AbortController().signal);
+    const [claude, opencode] = calls;
+    expect(claude?.options?.cleanEnv).toBe(true);
+    expect(claude?.options?.env).toEqual({
+      PATH: '/usr/bin',
+      HOME: '/srv/loop',
+      CLAUDE_CODE_OAUTH_TOKEN: 'oauth',
+    });
+    expect(opencode?.options?.cleanEnv).toBe(true);
+    expect(Object.keys(opencode?.options?.env ?? {}).sort()).toEqual([
+      'CLAUDE_CODE_OAUTH_TOKEN',
+      'HOME',
+      'OPENCODE_CONFIG_CONTENT',
+      'PATH',
+    ]);
+  });
+
   it('fails when opencode has no JSON answer', async () => {
     const { run } = fakeRun((bin) =>
       bin === 'claude'
