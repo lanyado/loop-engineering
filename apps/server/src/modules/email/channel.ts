@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, join, sep } from 'node:path';
+import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import {
   QUESTION_LIMITS,
   attachChannel,
@@ -133,7 +133,14 @@ export class EmailChannel implements QuestionChannel {
   private readonly alerted: Set<number>;
   private readonly completeFailures = new Map<number, number>();
 
-  constructor(private readonly o: EmailChannelOptions) {
+  private readonly o: EmailChannelOptions;
+
+  constructor(options: EmailChannelOptions) {
+    // Absolute once, here: the file lists name absolute paths, and only those count as saved.
+    this.o = options.attachmentsDir
+      ? { ...options, attachmentsDir: resolve(options.attachmentsDir) }
+      : options;
+    const o = this.o;
     this.log = o.log ?? console.log;
     this.alerted = readAlerted(o.alertsFile);
   }
@@ -765,7 +772,11 @@ function saveFiles(root: string, mail: IncomingMail, files: MailAttachment[]): s
     const tmp = `${path}.part`;
     writeFileSync(tmp, file.content, { mode: 0o600 });
     renameSync(tmp, path);
-    return `- ${path} (${file.contentType}, ${formatSize(file.content.length)})`;
+    // The sender chose the type: anything but a plain "type/subtype" could break the line apart.
+    const type = /^[\w.+-]+\/[\w.+-]+$/.test(file.contentType)
+      ? file.contentType
+      : 'application/octet-stream';
+    return `- ${path} (${type}, ${formatSize(file.content.length)})`;
   });
 }
 
@@ -787,7 +798,24 @@ const withFileList = (text: string, lines: string[]) =>
   lines.length === 0 ? text : [text, FILES_HEADING, ...lines].filter(Boolean).join('\n');
 
 /** What a sender wrote, with any copy of our file-list heading in it (a forwarded mail of ours, or a forgery) made inert. */
-const ownWords = (text: string) => text.split(FILES_HEADING).join(QUOTED_FILES_HEADING);
+const ownWords = (text: string) =>
+  text
+    .split('\n')
+    // The whole line, and a look-alike too (other case or spacing, invisible or direction marks).
+    .map((line) => (fold(line).includes(FOLDED_FILES_HEADING) ? QUOTED_FILES_HEADING : line))
+    .join('\n')
+    .split(FILES_HEADING)
+    .join(QUOTED_FILES_HEADING);
+
+/** A line as it reads: compatibility forms unified, invisible format marks gone, spaces collapsed, lower case. */
+const fold = (text: string) =>
+  text
+    .normalize('NFKC')
+    .replace(/\p{Cf}/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+const FOLDED_FILES_HEADING = fold(FILES_HEADING);
 
 /** Whether a file-list line names a file the channel saved: inside `root` once links are resolved. */
 function savedFile(line: string, root: string | null): boolean {
@@ -870,14 +898,19 @@ function requestText(
     ? `A follow-up by email from ${thread.sender} ("${thread.subject}"). Already built earlier, not to redo:\n${clip(earlier, 3000)}`
     : `Task from ${thread.sender} by email ("${thread.subject}"):`;
   const tail = [
-    // Repeated here because a long conversation loses its middle, and an earlier round's mails are not in it.
+    // Every file of the thread, once, here: a long conversation loses its middle, and an earlier
+    // round's mails are not in it. The mails below keep only their words.
     files.length > 0 ? `${FILES_HEADING}\n${files.join('\n')}` : '',
     plan ? `The plan sent back to them:\n${plan}` : '',
   ]
     .filter(Boolean)
     .join('\n\n');
   const mails = conversation
-    .map((m) => `${m.from === 'requester' ? 'Requester' : 'Loop'}:\n${m.text}`)
+    .map((m) =>
+      m.from === 'requester'
+        ? `Requester:\n${splitFiles(m.text).words.trim() || '(only files, listed below)'}`
+        : `Loop:\n${m.text}`,
+    )
     .join('\n\n');
   // The plan and the start of the task always fit; a long conversation loses its middle.
   const room = MAX_REQUEST_CHARS - head.length - tail.length - 10;
