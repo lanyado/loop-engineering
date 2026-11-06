@@ -134,14 +134,28 @@ export class RealTmuxDriver implements TmuxDriver {
   /**
    * Runs a new-session/new-window command list. When a command after the window's creation fails,
    * the window already runs its command and printed its target: it is killed before the error is
-   * thrown, so a launch the caller counts as failed never leaves an agent running.
+   * thrown, so a launch the caller counts as failed never leaves an agent running. It is killed by
+   * its window id alone (unique on the server), whatever the session's name. A kill that fails is
+   * added to the error, which the caller records.
    */
   private async create(args: string[]): Promise<string> {
     try {
       return (await this.tmux(args)).trim();
     } catch (err) {
-      const made = err instanceof ExecError ? /^\S+:@\d+$/m.exec(err.stdout)?.[0] : undefined;
-      if (made) await this.kill(made).catch(() => undefined);
+      const made = err instanceof ExecError ? /:(@\d+)\s*$/m.exec(err.stdout)?.[1] : undefined;
+      if (!made) throw err;
+      try {
+        await this.kill(made);
+      } catch (killErr) {
+        const e = err as ExecError;
+        const why = killErr instanceof ExecError ? killErr.stderr.trim() : String(killErr);
+        throw new ExecError(
+          e.command,
+          e.code,
+          `${e.stderr.trim()}; and window ${made}, which it made, could not be killed (${why}): it may still run`,
+          e.stdout,
+        );
+      }
       throw err;
     }
   }

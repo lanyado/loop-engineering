@@ -1,6 +1,7 @@
 import type { FakeClock } from '@loop-engineering/core';
 import { describe, expect, it, vi } from 'vitest';
 import { DefaultAgentCli } from './agent-cli.js';
+import { ExecError } from './drivers/exec.js';
 import { UsageLimitMonitor, type MonitorOptions } from './monitor.js';
 import { SessionRunner } from './runner.js';
 import { harness, type Harness } from './test-support/harness.js';
@@ -420,9 +421,15 @@ describe('several agents going at once', () => {
         `resumes in 24 hours and stays paused until you send it a message. Session ${takenOver} stays paused: its PR ` +
         'was sent to you or taken over, or finished since your last message.',
     );
-    // The same pass stops it, as the alert said.
-    expect(onAlert).toHaveBeenCalledTimes(2);
-    expect(onAlert.mock.calls[1]?.[1]).toContain(`Session ${spent} ("build 0") keeps losing its agent`);
+    // The same pass stops it, as the alert said, without a second alert to say so.
+    expect(onAlert).toHaveBeenCalledTimes(1);
+    const stopped = h.store.history
+      .list({ sessionId: spent })
+      .filter((e) => e.text.startsWith('Auto-resume stopped'));
+    expect(stopped).toHaveLength(1);
+    // A later pass alerts nothing more.
+    await m.checkOnce();
+    expect(onAlert).toHaveBeenCalledTimes(1);
   });
 
   it('tells of failed tries of sessions lost together in one alert per pass', async () => {
@@ -453,22 +460,58 @@ describe('several agents going at once', () => {
     );
   });
 
-  it('cuts a long error short, so the alert still fits a question', async () => {
+  it("gives a tmux launch's reason, not its command line, in the alert", async () => {
     const { h, clock, ids, onAlert, monitor, vanish, tries } = await setup();
     const [id] = ids as [number];
     const m = monitor();
     vanish(id);
     await m.checkOnce();
-    const huge = `tmux new-window ${'x'.repeat(20_000)}`;
+    // What the real driver throws when tmux can't fork: its message leads with the chained command.
+    const last = '=loop:{end}';
+    const command =
+      `tmux new-window -a -t ${last} -d -n loop-123 -c /home/work/loop-engineering-worktrees/shop/session-123/web ` +
+      '-P -F #{session_name}:#{window_id} sh /home/work/.loop-runner/sessions/s123/launch-4f9c2a1b7d3e.sh ' +
+      `; set-option -w -t ${last} allow-rename off ; set-option -w -t ${last} automatic-rename off ` +
+      `; set-option -w -t ${last} remain-on-exit on`;
+    const err = new ExecError(
+      command,
+      1,
+      'create window failed: fork failed: Resource temporarily unavailable\n',
+    );
+    expect(err.message.length).toBeGreaterThan(400);
+    h.tmux.newWindow = () => Promise.reject(err);
+    for (let i = 0; i < 8; i++) {
+      clock.advance(5 * MINUTE);
+      await m.checkOnce();
+    }
+    expect(onAlert).toHaveBeenCalledTimes(3);
+    for (const [, text] of onAlert.mock.calls)
+      expect(text).toContain(
+        'failed: create window failed: fork failed: Resource temporarily unavailable (exit 1)',
+      );
+    // The history keeps the whole error, command line included.
+    expect(tries(id)[0]?.text).toContain(command);
+  });
+
+  it('cuts a long error in the middle, keeping its end, and never halves an emoji', async () => {
+    const { h, clock, ids, onAlert, monitor, vanish, tries } = await setup();
+    const [id] = ids as [number];
+    const m = monitor();
+    vanish(id);
+    await m.checkOnce();
+    const huge = `${'\u{1F600}'.repeat(20_000)} the real reason`;
     h.tmux.newWindow = () => Promise.reject(new Error(huge));
     for (let i = 0; i < 8; i++) {
       clock.advance(5 * MINUTE);
       await m.checkOnce();
     }
     expect(onAlert).toHaveBeenCalledTimes(3);
-    for (const [, text] of onAlert.mock.calls) expect(String(text).length).toBeLessThan(700);
-    expect(onAlert.mock.calls[2]?.[1]).toMatch(/failed: tmux new-window x+…\. It stays paused/);
-    // The history keeps the whole error.
+    const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    for (const [, text] of onAlert.mock.calls) {
+      expect(Array.from(String(text)).length).toBeLessThan(700);
+      expect(text).toMatch(/\u{1F600} … \u{1F600}+ the real reason/u);
+      expect(text).not.toMatch(lone);
+    }
     expect(tries(id)[0]?.text).toContain(huge);
   });
 

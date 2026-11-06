@@ -420,6 +420,30 @@ describe.skipIf(!hasTmux())('a window that cannot be set up (real tmux)', () => 
     // The same when the window would have started a new session.
     await expect(broken.newWindow({ session: 'fresh', ...spec })).rejects.toThrow(/invalid option/);
     expect(await tmux.list('fresh')).toEqual([]);
+    // It is killed by its window id, so a session name with a space doesn't matter.
+    await expect(broken.newWindow({ session: 'with space', ...spec })).rejects.toThrow(/invalid option/);
+    expect(await tmux.list('with space')).toEqual([]);
+  });
+
+  it('says so in the error when that window cannot be killed', async () => {
+    // As above, and kill-window fails too.
+    const bin = join(dir, 'tmux-nokill');
+    await writeFile(
+      bin,
+      '#!/usr/bin/env bash\n[ "$3" = kill-window ] && { echo "kill refused" >&2; exit 1; }\n' +
+        'args=()\nfor a in "$@"; do [ "$a" = remain-on-exit ] && a=no-such-option; args+=("$a"); done\nexec tmux "${args[@]}"\n',
+      { mode: 0o755 },
+    );
+    const broken = new RealTmuxDriver({ socketName: socket, bin });
+    const tmux = new RealTmuxDriver({ socketName: socket });
+    await expect(
+      broken.newWindow({ session: 'stuck', name: 'agent', cwd: tmpdir(), command: 'sleep 30' }),
+    ).rejects.toThrow(
+      /invalid option: no-such-option; and window @\d+, which it made, could not be killed \(kill refused\): it may still run/,
+    );
+    const [left] = await tmux.list('stuck');
+    expect(left?.name).toBe('agent');
+    await tmux.kill(left!.target);
   });
 
   it('refuses a session name that tmux would rename', async () => {

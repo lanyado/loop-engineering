@@ -1,4 +1,5 @@
 import { errorMessage, type Session, type Store } from '@loop-engineering/core';
+import { ExecError } from './drivers/exec.js';
 import { AGENT_GONE, type SessionRunner, type TmuxServerDeath } from './runner.js';
 
 const MINUTE = 60_000;
@@ -68,14 +69,33 @@ const verb = (sessions: readonly Session[], one: string, many: string) =>
 /** What happens next to a session whose agent went: see afterReconcile's alert. */
 type Fate = 'resumed' | 'loop' | 'paused' | 'spent' | 'ended';
 
-/** An error in an alert is cut to this: a tmux error repeats the whole command line, a git one can be longer. */
+/** Why a try failed is cut to this in an alert (the history keeps all of it). */
 const ERROR_CHARS = 300;
 /** An alert is cut to this: ask_human refuses a question over 3000 characters, and the alert would be lost. */
 const ALERT_CHARS = 2_500;
 
+/** `text` on one line, at most `max` characters; by code points, so an emoji is never cut in half. */
 function clip(text: string, max: number): string {
-  const flat = text.replace(/\s+/g, ' ').trim();
-  return flat.length <= max ? flat : `${flat.slice(0, max - 1)}…`;
+  const chars = Array.from(text.replace(/\s+/g, ' ').trim());
+  return chars.length <= max ? chars.join('') : `${chars.slice(0, max - 1).join('')}…`;
+}
+
+/** Like clip, but keeps the end too: an error's reason is usually its last part. */
+function clipMiddle(text: string, max: number): string {
+  const chars = Array.from(text.replace(/\s+/g, ' ').trim());
+  if (chars.length <= max) return chars.join('');
+  const head = Math.floor((max - 3) / 3);
+  return `${chars.slice(0, head).join('')} … ${chars.slice(chars.length - (max - 3 - head)).join('')}`;
+}
+
+/**
+ * Why a try failed, short enough for an alert. A command's error leads with its whole command line
+ * (a tmux launch's is longer than ERROR_CHARS), so for one only what it printed and its exit code.
+ */
+function reason(err: unknown): string {
+  if (err instanceof ExecError)
+    return clipMiddle(`${err.stderr.trim() || 'no error output'} (exit ${String(err.code)})`, ERROR_CHARS);
+  return clipMiddle(errorMessage(err), ERROR_CHARS);
 }
 
 /** A session the owner hears about after a pass: alone, or as one line among others of the same pass. */
@@ -83,6 +103,8 @@ interface Trouble {
   session: Session;
   alone: string;
   line: string;
+  /** Its history entry, written as the alert goes out (see run()). */
+  note?: string;
 }
 
 /**
@@ -129,6 +151,9 @@ export class AutoResume {
     this.alert(vanished.find((s) => s.status !== 'ended') ?? vanished[0]!, message);
   }
 
+  /** Sessions this pass's alert already said are out of resumes: run() stops them without a second alert. */
+  private readonly announcedSpent = new Set<number>();
+
   /**
    * What happens to each of `sessions` now, by the rules run() and the loop follow, in sentences;
    * `resumed` when any of them is resumed automatically.
@@ -163,6 +188,7 @@ export class AutoResume {
         return `${who} ${say[f](group)}.`;
       })
       .join(' ');
+    for (const s of by.get('spent') ?? []) this.announcedSpent.add(s.id);
     return { text, resumed: by.has('resumed') };
   }
 
@@ -187,6 +213,9 @@ export class AutoResume {
    * Resumes the sessions that are due. `skip`: sessions another part of the monitor is relaunching.
    * Failed tries, and sessions out of resumes, each reach the owner as one alert per pass: sessions
    * lost together are tried together, and a dozen of them must not become dozens of questions.
+   * A stop's history entry is written only as its alert goes out, so a Loop restart in the middle
+   * of a pass can't lose a stop alert: the next pass stops the session again and alerts then. The
+   * alert of a failed try with tries left can be lost that way; its history entry stays.
    */
   async run(skip: ReadonlySet<number> = new Set()): Promise<void> {
     const failed: Trouble[] = [];
@@ -194,16 +223,19 @@ export class AutoResume {
     try {
       await this.resumeDue(skip, failed, stopped);
     } finally {
+      for (const t of stopped) if (t.note) this.note(t.session, t.note);
       this.alertTogether(
         failed,
         (g) => `${sessionsLabel(g)} lost their agents, and an automatic resume of each failed.`,
         'You hear again about a session when its resumes run out, whether they fail or its agent keeps going away.',
       );
+      // One this pass's lost-at-once alert already said is out of resumes needs no second alert.
       this.alertTogether(
-        stopped,
+        stopped.filter((t) => !this.announcedSpent.has(t.session.id)),
         (g) => `${sessionsLabel(g)} stay paused, out of automatic resumes.`,
         'Send a session a message to resume it, or end it.',
       );
+      this.announcedSpent.clear();
     }
   }
 
@@ -256,14 +288,13 @@ export class AutoResume {
           `${attempt}: relaunched the agent ${duration(now - seen.since)} after it was found gone.`,
         );
       } catch (err) {
-        const why = errorMessage(err);
-        this.note(s, `${attempt} failed: ${why}`);
+        this.note(s, `${attempt} failed: ${errorMessage(err)}`);
         if (tries + 1 >= MAX_RESUMES) {
-          stopped.push(this.stop(s, tries + 1, why));
+          stopped.push(this.stop(s, tries + 1, err));
           continue;
         }
         this.waiting.set(s.id, { since: this.options.now(), size }); // the next try waits from this failure
-        const failure = `try ${tries + 1} of ${MAX_RESUMES} failed: ${clip(why, ERROR_CHARS)}`;
+        const failure = `try ${tries + 1} of ${MAX_RESUMES} failed: ${reason(err)}`;
         const next = duration(WAITS_MS[tries + 1]!);
         failed.push({
           session: s,
@@ -290,19 +321,18 @@ export class AutoResume {
   }
 
   /**
-   * No automatic resume is left: `failure` when the last one failed, else the agent went again.
-   * Recorded now; run() tells the owner, with the others of the same pass.
+   * No automatic resume is left: `failed` is the error when the last one failed, else the agent went
+   * again. run() records it and tells the owner, with the others of the same pass.
    */
-  private stop(s: Session, tries: number, failure?: string): Trouble {
+  private stop(s: Session, tries: number, failed?: unknown): Trouble {
     this.waiting.delete(s.id);
     const after = `${tries} automatic resumes in 24 hours`;
-    this.note(
-      s,
-      `${STOPPED}: ${failure ? `the last of ${after} failed (${failure})` : `its agent went away again after ${after}`}. It stays paused until a person sends it a message.`,
-    );
-    const why = failure && clip(failure, ERROR_CHARS);
+    const why = failed === undefined ? undefined : reason(failed);
     return {
       session: s,
+      note:
+        `${STOPPED}: ${failed === undefined ? `its agent went away again after ${after}` : `the last of ${after} failed (${errorMessage(failed)})`}. ` +
+        'It stays paused until a person sends it a message.',
       alone: why
         ? `Session ${s.id} ("${s.title}") lost its agent, and the last of ${after} failed: ${why}. It stays paused: send it a message to resume it, or end it.`
         : `Session ${s.id} ("${s.title}") keeps losing its agent: it was resumed automatically ${tries} times in 24 hours and is gone again. It stays paused: send it a message to resume it, or end it.`,
