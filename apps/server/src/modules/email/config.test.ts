@@ -70,6 +70,30 @@ describe('loadEmailConfig', () => {
         }),
       ),
     ).toThrow(/"@gmail.com".*"@yahoo.co.uk"/);
+    for (const domain of [
+      '@fastmail.com',
+      '@pm.me',
+      '@proton.me',
+      '@mail.ru',
+      '@qq.com',
+      '@163.com',
+      '@gmx.de',
+      '@yandex.ru',
+      '@zoho.com',
+      '@aol.com',
+      '@icloud.com',
+      '@me.com',
+      '@mac.com',
+      '@hey.com',
+      '@tutanota.com',
+      '@tuta.io',
+      '@googlegroups.com',
+    ])
+      expect(
+        () =>
+          loadEmailConfig(env({ EMAIL_ADDRESS: 'a@b.co', EMAIL_APP_PASSWORD: 'x', EMAIL_ALLOWLIST: domain })),
+        domain,
+      ).toThrow(/anyone can have an address there/);
     expect(
       loadEmailConfig(
         env({

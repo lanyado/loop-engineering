@@ -55,7 +55,7 @@ export function buildClarifyPrompt(
   return [
     'A software task arrived by email. Before a developer builds it, you either ask the requester the',
     'questions it needs, or write the plan the developer will follow.',
-    about ? `- The project is already known, so never ask which site or product this is about: ${about}` : '',
+    about ? `- The project is already known, so never ask which product this is about: ${about}` : '',
     earlier
       ? [
           '- This thread already had work built, from the plan below. Plan only what the new mails ask for,',

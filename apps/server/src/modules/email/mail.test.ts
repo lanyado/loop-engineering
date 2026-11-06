@@ -185,6 +185,31 @@ describe('senderAuthenticated', () => {
       null,
     );
     expect(twoFroms.authenticated).toBe(false);
+    // Two addresses in one From header, in a list or in a group.
+    for (const from of ['dana@acme.com, eve@evil.example', 'Team: dana@acme.com, eve@evil.example;']) {
+      const two = await parseMail(
+        raw(
+          [
+            'Authentication-Results: mx.google.com; dmarc=pass header.from=acme.com',
+            `From: ${from}`,
+            'Message-ID: <h@x>',
+          ],
+          'Hi',
+        ),
+        3,
+        null,
+      );
+      expect(two.authenticated, from).toBe(false);
+    }
+  });
+
+  it('takes the domain after the last @ of the address', () => {
+    expect(senderAuthenticated(gmail('dmarc=pass header.from=acme.com'), '"x@evil.example"@acme.com')).toBe(
+      true,
+    );
+    expect(
+      senderAuthenticated(gmail('dmarc=pass header.from=evil.example'), '"x@evil.example"@acme.com'),
+    ).toBe(false);
   });
 });
 

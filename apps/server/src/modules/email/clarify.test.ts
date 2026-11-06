@@ -22,10 +22,10 @@ describe('clarifying an emailed task', () => {
   });
 
   it('told what the project is, it does not ask which product; without that it still may', () => {
-    const prompt = buildClarifyPrompt(mails, { mustPlan: false, about: 'A kids site.' }, 'T');
-    expect(prompt).toContain('never ask which site or product this is about: A kids site.');
+    const prompt = buildClarifyPrompt(mails, { mustPlan: false, about: 'A shop for hats.' }, 'T');
+    expect(prompt).toContain('never ask which product this is about: A shop for hats.');
     expect(prompt).not.toContain('which product or page');
-    expect(prompt.indexOf('A kids site.')).toBeLessThan(prompt.indexOf('<T>'));
+    expect(prompt.indexOf('A shop for hats.')).toBeLessThan(prompt.indexOf('<T>'));
     const unknown = buildClarifyPrompt(mails, { mustPlan: false }, 'T');
     expect(unknown).toContain('which product or page');
     expect(unknown).not.toContain('already known');

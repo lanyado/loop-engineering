@@ -24,29 +24,30 @@ export class EmailConfigError extends Error {
 }
 
 const ADDRESS = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-/** Providers anyone can get an address at (any country's domain): "@gmail.com" would let the whole world send tasks. */
+/**
+ * Providers anyone can get an address at, by name, in any country's domain ("gmx.de", "yahoo.co.uk"):
+ * "@gmail.com" on the allowlist would let the whole world send tasks. Refusing a domain here costs
+ * little (list the addresses instead), so the list errs on the side of refusing.
+ */
 const PUBLIC_PROVIDERS = new Set([
-  'gmail',
-  'googlemail',
-  'outlook',
-  'hotmail',
-  'live',
-  'msn',
-  'yahoo',
-  'ymail',
-  'icloud',
-  'aol',
-  'proton',
-  'protonmail',
-  'gmx',
-  'yandex',
-  'zoho',
+  ...['gmail', 'googlemail', 'outlook', 'hotmail', 'live', 'msn', 'windowslive', 'passport'],
+  ...['yahoo', 'ymail', 'rocketmail', 'icloud', 'aol', 'aim', 'proton', 'protonmail', 'gmx', 'yandex'],
+  ...['zoho', 'zohomail', 'fastmail', 'tutanota', 'tuta', 'tutamail', 'mailfence', 'posteo', 'hushmail'],
+  ...['qq', '163', '126', 'sina', 'sohu', 'aliyun', 'naver', 'daum', 'hanmail', 'rediffmail', 'seznam'],
+  ...['rambler', 'mailinator', 'yopmail', 'guerrillamail', 'sharklasers', 'startmail', 'runbox'],
 ]);
-/** "yahoo.co.uk", "hotmail.fr", "gmail.com": a provider's name and a top-level domain; plus me.com and mail.com. */
+/** Public providers whose name alone is too common a word to refuse in every domain. */
+const PUBLIC_DOMAINS = new Set([
+  ...['me.com', 'mac.com', 'mail.com', 'email.com', 'usa.com', 'mail.ru', 'inbox.ru', 'list.ru', 'bk.ru'],
+  ...['ya.ru', 'pm.me', 'hey.com', 'keemail.me', 'fastmail.fm', 'duck.com', 'googlegroups.com'],
+  ...['web.de', 't-online.de', 'freenet.de', 'libero.it', 'laposte.net', 'orange.fr', 'free.fr'],
+  ...['wp.pl', 'o2.pl', 'onet.pl', 'interia.pl', 'ukr.net', 'yeah.net', 'disroot.org', 'riseup.net'],
+]);
+/** A public provider's domain: a listed one, or a provider's name and a top-level domain. */
 const isPublic = (domain: string) => {
   const [name, ...tld] = domain.split('.');
   return (
-    ['me.com', 'mail.com'].includes(domain) ||
+    PUBLIC_DOMAINS.has(domain) ||
     (PUBLIC_PROVIDERS.has(name!) && /^((com?|net|org)\.)?[a-z]{2,3}$/.test(tld.join('.')))
   );
 };

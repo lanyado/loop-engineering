@@ -131,7 +131,9 @@ export function allowed(address: string, allowlist: readonly string[]): boolean 
  * first, since they can carry text the sender chose (an envelope address, say).
  */
 export function senderAuthenticated(topResults: string | undefined, from: string): boolean {
-  const domain = from.split('@')[1]?.toLowerCase();
+  // After the last "@": a quoted local part may hold another one.
+  const at = from.lastIndexOf('@');
+  const domain = at > 0 ? from.slice(at + 1).toLowerCase() : '';
   if (!topResults || !domain) return false;
   // Quoted strings and escapes go first (a quoted address can hold ";", "(" or "dmarc=pass"), then
   // comments; anything still unbalanced is not a header to trust.
@@ -169,6 +171,11 @@ const headerText = (value: unknown): string => headerList(value).join(' ').toLow
 const firstAddress = (from: AddressObject | AddressObject[] | undefined): string =>
   ((Array.isArray(from) ? from[0] : from)?.value[0]?.address ?? '').toLowerCase();
 
+/** Every address in a From header, groups opened. */
+const addressCount = (from: AddressObject | AddressObject[] | undefined): number =>
+  (Array.isArray(from) ? from : from ? [from] : []).flatMap((f) => f.value).flatMap((a) => a.group ?? [a])
+    .length;
+
 /** Reads one raw RFC 5322 message as an IncomingMail. */
 export async function parseMail(
   source: Buffer | string,
@@ -180,8 +187,8 @@ export async function parseMail(
   const from = firstAddress(parsed.from);
   const lines = (key: string) =>
     parsed.headerLines.filter((l) => l.key === key).map((l) => l.line.slice(l.line.indexOf(':') + 1));
-  // Two From headers: which one a client shows is not certain, so the mail is not trusted.
-  const oneFrom = lines('from').length === 1;
+  // Two From headers, or two addresses in one: which a client shows is not certain, so the mail is not trusted.
+  const oneFrom = lines('from').length === 1 && addressCount(parsed.from) === 1;
   const header = (name: string) => parsed.headers.get(name);
   const precedence = headerText(header('precedence'));
   const autoSubmitted = headerText(header('auto-submitted')) || 'no';
