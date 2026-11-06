@@ -69,9 +69,6 @@ Environment=TMPDIR=%h/.cache/loop-tmp
 # The database and everything else the server writes: readable by this user only.
 UMask=0077
 ExecStartPre=/bin/mkdir -p %h/.cache/loop-tmp
-# Start the tmux server from a clean environment before Loop can, so agents don't inherit .env's
-# secrets (see "The tmux session"). The leading - ignores the failure when it is already running.
-ExecStartPre=-/usr/bin/env -i HOME=%h USER=%u PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 TMPDIR=%h/.cache/loop-tmp tmux new-session -d -s loop-keep "sleep infinity"
 ExecStart=/usr/bin/env node apps/server/dist/main.js
 Restart=always
 RestartSec=5
@@ -126,18 +123,23 @@ Agents run as windows of the tmux session `loop` on the Loop user's default tmux
 - A reboot kills tmux. When the server comes back, the monitor finds every agent gone, alerts once, and resumes each session ([below](#when-an-agent-goes-away)).
 - Keep personal tmux sessions to another user: Loop uses whatever tmux server that user has.
 
+### What agents can see
+
+Agents never inherit the server's environment, which holds all of `.env`. Each agent runs under `env -i` with an allowlist and nothing else:
+
+- the toolchain and locale
+- the model login (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CONFIG_DIR` and a few more)
+- what pushing and opening PRs needs
+- proxies and certificates
+- its own session token
+- `TAVILY_API_KEY`, `CONTEXT7_API_KEY`, `GITHUB_PERSONAL_ACCESS_TOKEN` and the `LOOP_HEAVY_*` limits
+
+`DASHBOARD_TOKEN`, the shared `MCP_TOKEN`, `EMAIL_APP_PASSWORD` and the dashboard password and secret stay out of their environment and out of tmux's global environment. The full list is in [What agents can see](reference.md#what-agents-can-see). A variable an agent needs that isn't on the list doesn't reach it: add it to `AGENT_ENV_ALLOWLIST` in `packages/runner/src/agent-env.ts`.
+
 > [!WARNING]
-> **Agents can read `.env` unless tmux starts clean.** Every window gets the environment of the process that started the tmux server, whichever client later opens the window. When Loop itself starts tmux, that is the server process, which has loaded all of `.env`. Every builder can then read `DASHBOARD_TOKEN`, `EMAIL_APP_PASSWORD`, the dashboard password and session secret, and, through `tmux show-environment -g`, the shared `MCP_TOKEN`. With those, an agent could answer its own questions, approve merges or turn on auto-merge through the API. A code fix that starts tmux with a scrubbed environment is coming. Until it lands:
->
-> - Keep the second `ExecStartPre` line of the server unit above. It starts the tmux server, with an idle session `loop-keep`, from an environment holding only `HOME`, `USER`, `PATH`, `LANG` and `TMPDIR`, before Loop starts. Each agent still gets what its launch script sets: its own session token, `TAVILY_API_KEY`, `CONTEXT7_API_KEY`, `GITHUB_PERSONAL_ACCESS_TOKEN` and the `LOOP_HEAVY_*` limits. If `.env` sets `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`, which builders need too, add them to that line.
-> - Check it after every start, and after any tmux death alert. This prints 0 when tmux is clean, and never prints a value:
->
->   ```sh
->   tmux show-environment -g | grep -c -E '^(DASHBOARD_TOKEN|MCP_TOKEN|EMAIL_APP_PASSWORD|DASHBOARD_PASSWORD|DASHBOARD_SESSION_SECRET)='
->   ```
->
-> - It is not 0 when Loop started tmux itself: on a first start without that line, or after the tmux server died while Loop was running. Clean it at a quiet moment: `systemctl --user stop loop-server && tmux kill-server && systemctl --user start loop-server`. That kills the builders, and they are resumed a minute later with their worktrees intact ([below](#when-an-agent-goes-away)).
-> - Even with tmux clean, agents run as the Loop user and could read `.env` itself from the repo folder. Treat everything a builder works on as able to reach the dashboard, and send tasks only from people you would give dashboard access.
+> **This is not a sandbox.** Agents run as the Loop user with its real `HOME`, so an agent that goes looking can still read `.env` from the repo folder. Keep `.env` at mode 0600, which `npm run setup` sets, and send tasks only from people you would give dashboard access. If that is not enough, run the builders as a separate OS user, which Loop does not set up for you.
+
+After upgrading from a release without this, the tmux server that runs your agents still holds the old environment until it exits. The runner removes those names from tmux at the next session start. To clear them at once, follow [the reference](reference.md#what-agents-can-see).
 
 ## Limits on load
 
@@ -164,7 +166,7 @@ A test run stuck at 0% CPU (a browser waiting on a dialog, a server that never c
 
 On Debian 13 and some other distributions, `/tmp` is a RAM-backed `tmpfs`, by default half the RAM. Test runs, browsers and Claude Code all write there, so a full `/tmp` also means less memory, and writes start failing. Either:
 
-- Give Loop a temp folder on disk: the server unit above sets `TMPDIR`, which the server, its jobs and (through tmux) the agents inherit. Attachments from the dashboard go there too, and are never deleted.
+- Give Loop a temp folder on disk: the server unit above sets `TMPDIR`, which the server, its jobs and the agents all get. Attachments from the dashboard go there too, and are never deleted.
 - Or put `/tmp` back on disk: on Debian 13, `sudo systemctl mask tmp.mount` and reboot.
 
 Watch `df -h /tmp` either way: some tools write to `/tmp` whatever `TMPDIR` says.

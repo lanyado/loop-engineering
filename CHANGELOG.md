@@ -4,7 +4,7 @@ Notable changes to Loop Engineering. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
-Planned as **0.1.0**, the first tagged release. It will hold everything on `main` since the initial public release on 2026-10-24 (#1 to #37, summarised at the end of this section) and the changes below (#38 to #42).
+Planned as **0.1.0**, the first tagged release. It will hold everything on `main` since the initial public release on 2026-10-24 (#1 to #37, summarised at the end of this section) and the changes below (#38 to #44).
 
 ### Added
 
@@ -35,6 +35,7 @@ Planned as **0.1.0**, the first tagged release. It will hold everything on `main
 
 ### Security
 
+- **Agents no longer inherit the server's environment.** Before, `.env`'s secrets reached every builder through tmux (`DASHBOARD_TOKEN`, the shared `MCP_TOKEN`, `EMAIL_APP_PASSWORD`, the dashboard password and secret). Now each agent runs under `env -i` with an allowlist, tmux itself runs with no credentials, and the secret names are removed from a tmux server that already holds them. It is not a sandbox: agents can still read `.env` from disk as the same user ([What agents can see](docs/reference.md#what-agents-can-see)) (#44).
 - Email sender checks: a From header with two addresses is not trusted, the domain is taken after the last `@`, `EMAIL_ALLOWLIST` refuses many more public-provider domains, and a mail that copies the attachments list can only ever list files inside the channel's own folder (#40).
 - `nodemailer` 10.3.1 and `mailparser` 3.14.2, past the address-parser advisories of earlier versions (#40).
 
@@ -43,6 +44,7 @@ Planned as **0.1.0**, the first tagged release. It will hold everything on `main
 - **Migration 26 is one-way**, and older code refuses a newer database. Back up `data/loop.db` before the first start of this version (`sqlite3 data/loop.db ".backup data/loop.db.pre-v26"`), as in [RELEASING.md](RELEASING.md#upgrading-and-rolling-back).
 - If you ran email as a `local/` add-in, rebuild or remove that add-in first: the server refuses to start with an add-in module named `email`. Only one machine may have `EMAIL_ADDRESS` set.
 - Reload open dashboard tabs after upgrading: an old bundle still expects `telegramAllowlist` in settings.
+- A tmux server started by an older version still holds `.env`'s secrets in its global environment until the next session start removes them; [the reference](docs/reference.md#what-agents-can-see) says how to clear them at once. A variable an agent needs that is not on `AGENT_ENV_ALLOWLIST` (an OpenCode provider key, say) no longer reaches it.
 
 ### Since the initial public release (#1 to #37)
 

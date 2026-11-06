@@ -65,7 +65,7 @@ Never move or delete a tag once pushed: production may be pinned to it. Fix forw
 
 ## Running a release in production
 
-Check out the tag instead of following `main`. There are no tags yet: v0.1.0 is to be cut right after the PRs it covers (#39 to #43) are merged. A fresh install:
+Check out the tag instead of following `main`. There are no tags yet: v0.1.0 is to be cut right after the PRs it covers (#39 to #44) are merged. A fresh install:
 
 ```sh
 git clone https://github.com/lanyado/loop-engineering.git
