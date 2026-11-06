@@ -49,6 +49,17 @@ export interface TmuxServer {
 const TARGET_FORMAT = '#{session_name}:#{window_id}';
 const ENTER_GAP_MS = 300;
 
+/**
+ * Set on every agent window. The runner identifies windows by name too, so the agent (terminal
+ * title escapes) must not rename it; remain-on-exit keeps the window, with a dead pane, when the
+ * agent exits, so an agent that exited can be told from a window closed from outside.
+ */
+const WINDOW_OPTIONS: readonly (readonly [string, string])[] = [
+  ['allow-rename', 'off'],
+  ['automatic-rename', 'off'],
+  ['remain-on-exit', 'on'],
+];
+
 /** True for tmux errors that only mean "nothing there": no server, session or window. */
 function isMissing(err: unknown): boolean {
   return (
@@ -89,29 +100,68 @@ export class RealTmuxDriver implements TmuxDriver {
   }
 
   async newWindow(spec: NewWindow): Promise<string> {
-    const target = await this.createWindow(spec);
-    // The runner identifies windows by name too; keep the agent (terminal title escapes) from renaming it.
-    await this.tmux(['set-option', '-w', '-t', target, 'allow-rename', 'off']).catch(() => undefined);
-    await this.tmux(['set-option', '-w', '-t', target, 'automatic-rename', 'off']).catch(() => undefined);
-    await this.keepDeadPane(target).catch(() => undefined);
-    return target;
-  }
-
-  async keepDeadPane(target: string): Promise<void> {
-    await this.tmux(['set-option', '-w', '-t', target, 'remain-on-exit', 'on']);
-  }
-
-  private async createWindow(spec: NewWindow): Promise<string> {
+    // tmux turns "." and ":" in a session name into "_", so "=<name>" would never find the session.
+    if (/[.:]/.test(spec.session))
+      throw new Error(
+        `tmux session name "${spec.session}" has "." or ":", which tmux replaces: use another name`,
+      );
     const common = ['-d', '-n', spec.name, '-c', spec.cwd, '-P', '-F', TARGET_FORMAT, spec.command];
+    // The window's options are set in the same tmux command, which the server runs before anything
+    // else: set by a later call, an agent that exits at once would take its window with it
+    // (remain-on-exit not on yet). With -d the new window is not the current one, so the options
+    // name it as the session's last window, where new-window -a puts it.
+    const last = `=${spec.session}:{end}`;
+    const options = WINDOW_OPTIONS.flatMap(([name, value]) => [
+      ';',
+      'set-option',
+      '-w',
+      '-t',
+      last,
+      name,
+      value,
+    ]);
     if (!(await this.hasSession(spec.session))) {
       try {
-        return (await this.tmux(['new-session', '-s', spec.session, ...common])).trim();
+        return await this.create(['new-session', '-s', spec.session, ...common, ...options]);
       } catch (err) {
         // Another start created the session between the check and here; fall through to new-window.
         if (!(err instanceof ExecError && /duplicate session/i.test(err.stderr))) throw err;
       }
     }
-    return (await this.tmux(['new-window', '-t', `=${spec.session}:`, ...common])).trim();
+    return await this.create(['new-window', '-a', '-t', last, ...common, ...options]);
+  }
+
+  /**
+   * Runs a new-session/new-window command list. When a command after the window's creation fails,
+   * the window already runs its command and printed its target: it is killed before the error is
+   * thrown, so a launch the caller counts as failed never leaves an agent running. It is killed by
+   * its window id alone (unique on the server), whatever the session's name. A kill that fails is
+   * added to the error, which the caller records.
+   */
+  private async create(args: string[]): Promise<string> {
+    try {
+      return (await this.tmux(args)).trim();
+    } catch (err) {
+      const made = err instanceof ExecError ? /:(@\d+)\s*$/m.exec(err.stdout)?.[1] : undefined;
+      if (!made) throw err;
+      try {
+        await this.kill(made);
+      } catch (killErr) {
+        const e = err as ExecError;
+        const why = killErr instanceof ExecError ? killErr.stderr.trim() : String(killErr);
+        throw new ExecError(
+          e.command,
+          e.code,
+          `${e.stderr.trim()}; and window ${made}, which it made, could not be killed (${why}): it may still run`,
+          e.stdout,
+        );
+      }
+      throw err;
+    }
+  }
+
+  async keepDeadPane(target: string): Promise<void> {
+    await this.tmux(['set-option', '-w', '-t', target, 'remain-on-exit', 'on']);
   }
 
   async pressEscape(target: string): Promise<void> {

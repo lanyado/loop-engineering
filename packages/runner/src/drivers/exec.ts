@@ -10,6 +10,8 @@ export class ExecError extends Error {
     readonly command: string,
     readonly code: number | string | null,
     readonly stderr: string,
+    /** What the command printed before it failed. */
+    readonly stdout = '',
   ) {
     super(`${command} failed (${String(code)}): ${stderr.trim()}`);
     this.name = 'ExecError';
@@ -31,7 +33,7 @@ export function exec(
       (err, stdout, stderr) => {
         if (err) {
           const code = (err as NodeJS.ErrnoException & { code?: number | string }).code ?? null;
-          reject(new ExecError(`${bin} ${args.join(' ')}`, code, stderr || err.message));
+          reject(new ExecError(`${bin} ${args.join(' ')}`, code, stderr || err.message, stdout));
           return;
         }
         resolve({ stdout, stderr });

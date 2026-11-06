@@ -1,5 +1,5 @@
 // Real tmux + git + filesystem, with fake agent scripts standing in for `claude` and `opencode`.
-// Uses its own tmux server (-L loop-test) and a temp dir under the OS temp folder; both are removed after.
+// Uses its own tmux servers (-L loop-test-<pid>…, so parallel runs never share one) and a temp dir under the OS temp folder; both are removed after.
 import { inputBoxText } from './input-box.js';
 import { execFile, execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
@@ -16,7 +16,7 @@ import { RealTmuxDriver } from './drivers/tmux.js';
 import { UsageLimitMonitor } from './monitor.js';
 import { SessionRunner } from './runner.js';
 
-const SOCKET = 'loop-test';
+const SOCKET = `loop-test-${process.pid}`;
 const run = promisify(execFile);
 
 function hasTmux(): boolean {
@@ -375,5 +375,83 @@ describe.skipIf(!hasTmux())('an agent window keeps its dead pane (real tmux)', (
     expect(dead.target).toBe(target);
     await tmux.kill(target);
     expect(await tmux.list('probe')).toEqual([]);
+  });
+
+  it('keeps the pane of a process that exits at once, and sets nothing on the window beside it', async () => {
+    const tmux = new RealTmuxDriver({ socketName: socket });
+    const other = await tmux.newWindow({ session: 'quick', name: 'a', cwd: tmpdir(), command: 'sleep 30' });
+    await run('tmux', ['-L', socket, 'set-option', '-w', '-t', other, 'remain-on-exit', 'off']);
+    const target = await tmux.newWindow({ session: 'quick', name: 'b', cwd: tmpdir(), command: 'true' });
+    const dead = await waitFor('the dead pane', async () => (await tmux.list('quick')).find((w) => w.dead));
+    expect(dead.target).toBe(target);
+    const option = async (t: string) =>
+      (await run('tmux', ['-L', socket, 'show-options', '-wv', '-t', t, 'remain-on-exit'])).stdout.trim();
+    expect(await option(other)).toBe('off');
+    expect(await option(target)).toBe('on');
+  });
+});
+
+describe.skipIf(!hasTmux())('a window that cannot be set up (real tmux)', () => {
+  const socket = `loop-test-setup-${process.pid}`;
+  let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'loop-tmux-bin-'));
+  });
+  afterAll(async () => {
+    await run('tmux', ['-L', socket, 'kill-server']).catch(() => undefined);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('is killed before the error is thrown, so no agent runs on after a failed launch', async () => {
+    // Real tmux, except that the remain-on-exit it is asked to set is an option tmux doesn't have:
+    // the window is made, then the chained set-option fails.
+    const bin = join(dir, 'tmux');
+    await writeFile(
+      bin,
+      '#!/usr/bin/env bash\nargs=()\nfor a in "$@"; do [ "$a" = remain-on-exit ] && a=no-such-option; args+=("$a"); done\nexec tmux "${args[@]}"\n',
+      { mode: 0o755 },
+    );
+    const broken = new RealTmuxDriver({ socketName: socket, bin });
+    const tmux = new RealTmuxDriver({ socketName: socket });
+    await tmux.newWindow({ session: 'setup', name: 'keep', cwd: tmpdir(), command: 'sleep 30' });
+    const spec = { name: 'agent', cwd: tmpdir(), command: 'sleep 30' };
+    await expect(broken.newWindow({ session: 'setup', ...spec })).rejects.toThrow(/invalid option/);
+    expect((await tmux.list('setup')).map((w) => w.name)).toEqual(['keep']);
+    // The same when the window would have started a new session.
+    await expect(broken.newWindow({ session: 'fresh', ...spec })).rejects.toThrow(/invalid option/);
+    expect(await tmux.list('fresh')).toEqual([]);
+    // It is killed by its window id, so a session name with a space doesn't matter.
+    await expect(broken.newWindow({ session: 'with space', ...spec })).rejects.toThrow(/invalid option/);
+    expect(await tmux.list('with space')).toEqual([]);
+  });
+
+  it('says so in the error when that window cannot be killed', async () => {
+    // As above, and kill-window fails too.
+    const bin = join(dir, 'tmux-nokill');
+    await writeFile(
+      bin,
+      '#!/usr/bin/env bash\n[ "$3" = kill-window ] && { echo "kill refused" >&2; exit 1; }\n' +
+        'args=()\nfor a in "$@"; do [ "$a" = remain-on-exit ] && a=no-such-option; args+=("$a"); done\nexec tmux "${args[@]}"\n',
+      { mode: 0o755 },
+    );
+    const broken = new RealTmuxDriver({ socketName: socket, bin });
+    const tmux = new RealTmuxDriver({ socketName: socket });
+    await expect(
+      broken.newWindow({ session: 'stuck', name: 'agent', cwd: tmpdir(), command: 'sleep 30' }),
+    ).rejects.toThrow(
+      /invalid option: no-such-option; and window @\d+, which it made, could not be killed \(kill refused\): it may still run/,
+    );
+    const [left] = await tmux.list('stuck');
+    expect(left?.name).toBe('agent');
+    await tmux.kill(left!.target);
+  });
+
+  it('refuses a session name that tmux would rename', async () => {
+    const tmux = new RealTmuxDriver({ socketName: socket });
+    for (const session of ['loop.2', 'loop:2'])
+      await expect(
+        tmux.newWindow({ session, name: 'w', cwd: tmpdir(), command: 'sleep 30' }),
+      ).rejects.toThrow(`tmux session name "${session}" has "." or ":"`);
+    expect(await tmux.list('loop_2')).toEqual([]);
   });
 });
