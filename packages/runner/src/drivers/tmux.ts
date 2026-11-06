@@ -49,6 +49,17 @@ export interface TmuxServer {
 const TARGET_FORMAT = '#{session_name}:#{window_id}';
 const ENTER_GAP_MS = 300;
 
+/**
+ * Set on every agent window. The runner identifies windows by name too, so the agent (terminal
+ * title escapes) must not rename it; remain-on-exit keeps the window, with a dead pane, when the
+ * agent exits, so an agent that exited can be told from a window closed from outside.
+ */
+const WINDOW_OPTIONS: readonly (readonly [string, string])[] = [
+  ['allow-rename', 'off'],
+  ['automatic-rename', 'off'],
+  ['remain-on-exit', 'on'],
+];
+
 /** True for tmux errors that only mean "nothing there": no server, session or window. */
 function isMissing(err: unknown): boolean {
   return (
@@ -89,29 +100,34 @@ export class RealTmuxDriver implements TmuxDriver {
   }
 
   async newWindow(spec: NewWindow): Promise<string> {
-    const target = await this.createWindow(spec);
-    // The runner identifies windows by name too; keep the agent (terminal title escapes) from renaming it.
-    await this.tmux(['set-option', '-w', '-t', target, 'allow-rename', 'off']).catch(() => undefined);
-    await this.tmux(['set-option', '-w', '-t', target, 'automatic-rename', 'off']).catch(() => undefined);
-    await this.keepDeadPane(target).catch(() => undefined);
-    return target;
-  }
-
-  async keepDeadPane(target: string): Promise<void> {
-    await this.tmux(['set-option', '-w', '-t', target, 'remain-on-exit', 'on']);
-  }
-
-  private async createWindow(spec: NewWindow): Promise<string> {
     const common = ['-d', '-n', spec.name, '-c', spec.cwd, '-P', '-F', TARGET_FORMAT, spec.command];
+    // The window's options are set in the same tmux command, which the server runs before anything
+    // else: set by a later call, an agent that exits at once would take its window with it
+    // (remain-on-exit not on yet). With -d the new window is not the current one, so the options
+    // name it as the session's last window, where new-window -a puts it.
+    const last = `=${spec.session}:{end}`;
+    const options = WINDOW_OPTIONS.flatMap(([name, value]) => [
+      ';',
+      'set-option',
+      '-w',
+      '-t',
+      last,
+      name,
+      value,
+    ]);
     if (!(await this.hasSession(spec.session))) {
       try {
-        return (await this.tmux(['new-session', '-s', spec.session, ...common])).trim();
+        return (await this.tmux(['new-session', '-s', spec.session, ...common, ...options])).trim();
       } catch (err) {
         // Another start created the session between the check and here; fall through to new-window.
         if (!(err instanceof ExecError && /duplicate session/i.test(err.stderr))) throw err;
       }
     }
-    return (await this.tmux(['new-window', '-t', `=${spec.session}:`, ...common])).trim();
+    return (await this.tmux(['new-window', '-a', '-t', last, ...common, ...options])).trim();
+  }
+
+  async keepDeadPane(target: string): Promise<void> {
+    await this.tmux(['set-option', '-w', '-t', target, 'remain-on-exit', 'on']);
   }
 
   async pressEscape(target: string): Promise<void> {

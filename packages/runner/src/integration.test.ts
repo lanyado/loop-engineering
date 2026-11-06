@@ -376,4 +376,17 @@ describe.skipIf(!hasTmux())('an agent window keeps its dead pane (real tmux)', (
     await tmux.kill(target);
     expect(await tmux.list('probe')).toEqual([]);
   });
+
+  it('keeps the pane of a process that exits at once, and sets nothing on the window beside it', async () => {
+    const tmux = new RealTmuxDriver({ socketName: socket });
+    const other = await tmux.newWindow({ session: 'quick', name: 'a', cwd: tmpdir(), command: 'sleep 30' });
+    await run('tmux', ['-L', socket, 'set-option', '-w', '-t', other, 'remain-on-exit', 'off']);
+    const target = await tmux.newWindow({ session: 'quick', name: 'b', cwd: tmpdir(), command: 'true' });
+    const dead = await waitFor('the dead pane', async () => (await tmux.list('quick')).find((w) => w.dead));
+    expect(dead.target).toBe(target);
+    const option = async (t: string) =>
+      (await run('tmux', ['-L', socket, 'show-options', '-wv', '-t', t, 'remain-on-exit'])).stdout.trim();
+    expect(await option(other)).toBe('off');
+    expect(await option(target)).toBe('on');
+  });
 });
