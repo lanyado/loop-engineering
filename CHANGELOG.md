@@ -35,7 +35,7 @@ Planned as **0.1.0**, the first tagged release. It will hold everything on `main
 
 ### Security
 
-- **Agents no longer inherit the server's environment.** Before, `.env`'s secrets reached every builder through tmux (`DASHBOARD_TOKEN`, the shared `MCP_TOKEN`, `EMAIL_APP_PASSWORD`, the dashboard password and secret). Now each agent runs under `env -i` with an allowlist, tmux itself runs with no credentials, and the secret names are removed from a tmux server that already holds them. It is not a sandbox: agents can still read `.env` from disk as the same user ([What agents can see](docs/reference.md#what-agents-can-see)) (#44).
+- **Agents no longer inherit the server's environment.** Before, `.env`'s secrets reached every builder through tmux (`DASHBOARD_TOKEN`, the shared `MCP_TOKEN`, `EMAIL_APP_PASSWORD`, the dashboard password and secret). Now each agent runs under `env -i` with an allowlist, plus the names or prefixes in the new `AGENT_ENV_EXTRA` (the server refuses one that covers its own secrets). tmux itself runs with no credentials, and the secret names are removed from a tmux server that already holds them. The runner's own git in builders' repos runs with only what pushing needs, with time limits. Through `GIT_CONFIG_COUNT`, it switches off the repo's hooks, filters, drivers, `core.sshCommand`, credential helpers and proxy command, and fails closed when it can't read the repo's config. It is not a sandbox: agents can still read `.env` from disk as the same user ([What agents can see](docs/reference.md#what-agents-can-see)) (#44).
 - Email sender checks: a From header with two addresses is not trusted, the domain is taken after the last `@`, `EMAIL_ALLOWLIST` refuses many more public-provider domains, and a mail that copies the attachments list can only ever list files inside the channel's own folder (#40).
 - `nodemailer` 10.3.1 and `mailparser` 3.14.2, past the address-parser advisories of earlier versions (#40).
 
@@ -44,7 +44,9 @@ Planned as **0.1.0**, the first tagged release. It will hold everything on `main
 - **Migration 26 is one-way**, and older code refuses a newer database. Back up `data/loop.db` before the first start of this version (`sqlite3 data/loop.db ".backup data/loop.db.pre-v26"`), as in [RELEASING.md](RELEASING.md#upgrading-and-rolling-back).
 - If you ran email as a `local/` add-in, rebuild or remove that add-in first: the server refuses to start with an add-in module named `email`. Only one machine may have `EMAIL_ADDRESS` set.
 - Reload open dashboard tabs after upgrading: an old bundle still expects `telegramAllowlist` in settings.
-- A tmux server started by an older version still holds `.env`'s secrets in its global environment until the next session start removes them; [the reference](docs/reference.md#what-agents-can-see) says how to clear them at once. A variable an agent needs that is not on `AGENT_ENV_ALLOWLIST` (an OpenCode provider key, say) no longer reaches it.
+- A tmux server started by an older version still holds `.env`'s secrets until it exits. The next session start removes them from its global environment. For a full clean, `tmux kill-server` when no builder is running ([the reference](docs/reference.md#what-agents-can-see)).
+- A variable an agent needs that is not on its allowlist (an OpenCode provider key, say) no longer reaches it: name it in `AGENT_ENV_EXTRA`.
+- **Git 2.31 or later is required.** The runner's git guard needs `GIT_CONFIG_COUNT`. On Git 2.26 to 2.30 the guard does nothing, and on older Git every git call the runner makes fails.
 
 ### Since the initial public release (#1 to #37)
 

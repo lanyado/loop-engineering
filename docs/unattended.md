@@ -25,7 +25,7 @@ One machine runs everything: the server, the dashboard, the agents in tmux, and 
 ## The machine
 
 - **A user of its own.** Run Loop as one OS user (say `loop`) that holds only what the agents need: its Claude login, a `gh` login, git credentials for the repos it works on, and the projects' test credentials. Sessions and PR jobs run as this user with its real `HOME`, so they can reach anything it can ([SECURITY.md](../SECURITY.md)).
-- **Tools.** Node 20.19 or later, git, tmux, [Claude Code](https://docs.claude.com/en/docs/claude-code) logged in as that user, and [`gh`](https://cli.github.com) logged in (`gh auth login`) for the PR loop. `flock` (util-linux) and `pgrep` (procps) for `scripts/heavy`: without `flock` heavy runs have no limit, and without `pgrep` a run stopped at its time limit leaves its browsers running. `sqlite3` for backups. Optional: OpenCode for the free fallback, `jq` for the usage meters, `ttyd` for the terminals under each pipeline.
+- **Tools.** Node 20.19 or later, Git 2.31 or later (`git --version`), tmux, [Claude Code](https://docs.claude.com/en/docs/claude-code) logged in as that user, and [`gh`](https://cli.github.com) logged in (`gh auth login`) for the PR loop. `flock` (util-linux) and `pgrep` (procps) for `scripts/heavy`: without `flock` heavy runs have no limit, and without `pgrep` a run stopped at its time limit leaves its browsers running. `sqlite3` for backups. Git's version matters: the runner's guard over git in builders' repos needs `GIT_CONFIG_COUNT` (Git 2.31). On Git 2.26 to 2.30 the guard silently does nothing, and on older Git every git call the runner makes fails. Optional: OpenCode for the free fallback, `jq` for the usage meters, `ttyd` for the terminals under each pipeline.
 - **Git over HTTPS.** `gh auth setup-git` lets git use gh's login, so pushes and the loop's `gh` calls share one credential and one transport. An SSH outage at GitHub then can't stop pushes while the API works. The loop treats SSH failures as network failures and waits them out either way.
 - **Size.** What loads the machine is test and browser runs, not sessions: builders and PR jobs each run them. Before the [slot limit](#limits-on-load) existed, the load average reached 56–67 on 12 CPUs and QA jobs ran out of time.
 
@@ -109,9 +109,9 @@ journalctl --user -u loop-server -f
 - **`PATH`** must reach `node`, `git`, `tmux`, `gh` and `claude` (and `opencode`, `ttyd`, `jq` if you use them). Claude's installer puts it in `~/.local/bin`. The server reads everything else from `.env` in the repo root; the dashboard reads its own variables from the same file ([how](reference.md#local-only-operation)).
 - **`KillMode=process`** matters. The tmux server the agents run in is started from this unit, so it lives in the unit's cgroup. With the default `KillMode`, every `systemctl --user restart loop-server` (an upgrade, a crash) would kill every builder. With `process`, only the Node process is stopped: builders keep working, and a restarted server finds them again. systemd logs a warning that `KillMode=process` is unsafe; here it is deliberate. The consequences:
   - On a clean stop the server ends its running PR jobs itself, and they start again from scratch after the restart.
-  - After a crash or `kill -9`, those jobs' processes keep running, and the restarted loop starts the same job again in the same checkout. Find leftovers by their folder, `ls -l /proc/*/cwd 2>/dev/null | grep .loop-jobs`, and stop them.
+  - After a crash or `kill -9`, those jobs' processes keep running, and the restarted loop starts the same job again in the same checkout. Find leftovers by their working folder under `LOOP_JOBS_ROOT` (default `$WORKTREES_ROOT/.loop-jobs`), e.g. `ls -l /proc/*/cwd 2>/dev/null | grep -F /home/loop/loop-worktrees/.loop-jobs`, and stop them.
   - `systemctl --user stop loop-server` doesn't stop the agents. To stop everything, end the sessions first, or `tmux kill-server` after the stop.
-- **`UMask=0077`** keeps `data/` (the database holds questions, email threads and history) private to the Loop user. For an existing install, also run `chmod -R go-rwx data`.
+- **`UMask=0077`** keeps `data/` (the database holds questions, email threads and history) private to the Loop user. For an existing install, also run `chmod -R go-rwx data`. The tmux server started from this unit inherits the umask too, so files the builders create are private to the Loop user as well.
 - **Linger.** Without `loginctl enable-linger`, logging out of the last SSH session stops the user's systemd instance, and Loop and tmux with it.
 - **A bad `.env`** makes the server exit with a list of what is wrong, and systemd retries every 5 seconds. Read the log rather than waiting.
 
@@ -134,12 +134,21 @@ Agents never inherit the server's environment, which holds all of `.env`. Each a
 - its own session token
 - `TAVILY_API_KEY`, `CONTEXT7_API_KEY`, `GITHUB_PERSONAL_ACCESS_TOKEN` and the `LOOP_HEAVY_*` limits
 
-`DASHBOARD_TOKEN`, the shared `MCP_TOKEN`, `EMAIL_APP_PASSWORD` and the dashboard password and secret stay out of their environment and out of tmux's global environment. The full list is in [What agents can see](reference.md#what-agents-can-see). A variable an agent needs that isn't on the list doesn't reach it: add it to `AGENT_ENV_ALLOWLIST` in `packages/runner/src/agent-env.ts`.
+`DASHBOARD_TOKEN`, the shared `MCP_TOKEN`, `EMAIL_APP_PASSWORD` and the dashboard password and secret stay out of their environment and out of tmux's global environment. The full list is in [What agents can see](reference.md#what-agents-can-see).
+
+A variable an agent needs that isn't on the list doesn't reach it, and the agent fails when it looks for it, not at launch. Name extra variables in `.env` with `AGENT_ENV_EXTRA`, comma-separated names or prefixes, such as `AGENT_ENV_EXTRA=AWS_*,OPENROUTER_API_KEY`. The server refuses to start if an entry covers one of its own secrets.
+
+The runner's own git commands in builders' repos (`status`, `diff`, `fetch`, `push`, `worktree`) run with only what pushing needs, with time limits. Hooks, filters, credential helpers and similar settings from the repo's own config are switched off. This needs Git 2.31 or later ([the machine](#the-machine)).
 
 > [!WARNING]
-> **This is not a sandbox.** Agents run as the Loop user with its real `HOME`, so an agent that goes looking can still read `.env` from the repo folder. Keep `.env` at mode 0600, which `npm run setup` sets, and send tasks only from people you would give dashboard access. If that is not enough, run the builders as a separate OS user, which Loop does not set up for you.
+> **This is not a sandbox.** Agents run as the Loop user with its real `HOME`. An agent that goes looking can still read `.env` from the repo folder, read the environment of processes started with the server's full environment (`/proc/<pid>/environ`), and read the other agents' panes. Some practical limits:
+>
+> - Keep `.env` at mode 0600, which `npm run setup` sets.
+> - Send tasks only from people you would give dashboard access.
+> - Give the Loop user a fine-grained GitHub token limited to the repos it works on: GitHub access is the biggest credential agents hold.
+> - If that is not enough, run the builders as a separate OS user. Loop does not set that up for you.
 
-After upgrading from a release without this, the tmux server that runs your agents still holds the old environment until it exits. The runner removes those names from tmux at the next session start. To clear them at once, follow [the reference](reference.md#what-agents-can-see).
+After upgrading from a release without this, the tmux server that runs your agents keeps the old environment until it exits. The runner removes those names from tmux's global environment at the next session start, but the tmux server process keeps its own copy, and so do agents started before the upgrade. For a full clean, wait until no builder is running, `tmux kill-server`, then resume the sessions ([the reference](reference.md#what-agents-can-see)).
 
 ## Limits on load
 
@@ -300,7 +309,7 @@ systemctl --user daemon-reload && systemctl --user enable --now loop-backup.time
 
 It keeps 14 days. Copy `data/` off the machine as well (`rsync`, your backup tool): a backup on the same disk doesn't survive the disk.
 
-To restore, stop everything that opens the database, remove its write-ahead files **before** copying (a stale WAL would be replayed onto the restored file), copy, and start again:
+To restore, stop everything that opens the database, remove its write-ahead files **before** copying (a stale WAL would be replayed onto the restored file), copy, and start again. Leave out the timers you didn't install:
 
 ```sh
 cd ~/loop-engineering

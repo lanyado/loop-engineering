@@ -8,7 +8,7 @@ const IDLE = [
   '⏺ Compacted while idle, before the prompt cache expired',
   '❯ Resumed: the session was paused (agent_exited). Continue where you left off.',
   '  Reading the PR review feedback file',
-  '───────────────────────────── משחק חדש- לסדר את קוביות הגן ─',
+  '───────────────────────────── משימה חדשה- לעדכן את דף הקשר ─',
   '❯ ',
   '────────────────────────────────────────────────────────────',
   '  ⚡Boost 10.9K saved',
@@ -106,7 +106,7 @@ describe('a title as wide as the pane', () => {
       '',
       '  ⏵⏵ auto mode on (shift+tab to cycle) · PR #14',
     ].join('\n');
-  const hebrew = ' במשחק הזיכרון: להחליף את התמונה שברקע בתמונה של כלבים, כלומר ';
+  const hebrew = ' בדף ההגדרות: להחליף את הכפתור שבראש הדף בכפתור חדש, כלומר רק';
   const english = ' From the owner. The files the requester attached to the email have now reach… ─';
 
   it('still shows the box, empty or holding text', () => {

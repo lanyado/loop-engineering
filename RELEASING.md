@@ -104,7 +104,7 @@ journalctl --user -u loop-server -n 50 --no-pager
 
 Running builders are not stopped by a server restart (the tmux server is left alone, see [the guide](docs/unattended.md#services)). They keep the instructions they started with until their next resume. Running PR jobs are interrupted and start again after the restart.
 
-**To roll back**, stop the services and the timers that open the database, `git checkout v<previous>`, `npm ci && npm run build`, and, if the newer version ran a migration, restore the backup before starting. Remove the write-ahead files before copying: a stale WAL would be replayed onto the restored file and migrate it again.
+**To roll back**, stop the services and the timers that open the database (leave out the timers you didn't install), `git checkout v<previous>`, `npm ci && npm run build`, and, if the newer version ran a migration, restore the backup before starting. Remove the write-ahead files before copying: a stale WAL would be replayed onto the restored file and migrate it again.
 
 ```sh
 systemctl --user stop loop-server loop-dashboard loop-backup.timer loop-retro.timer

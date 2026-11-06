@@ -79,7 +79,7 @@ Drag stages, remove them, or write a new one, for all projects or just one.
 
 ## Requirements
 
-- macOS or Linux, Node 20.19+, git and tmux. For an always-on Linux server, see [Running Loop unattended](docs/unattended.md)
+- macOS or Linux, Node 20.19+, Git 2.31+ and tmux. For an always-on Linux server, see [Running Loop unattended](docs/unattended.md)
 - [Claude Code](https://docs.claude.com/en/docs/claude-code), installed and logged in (run `claude` once)
 - Optional: [`gh`](https://cli.github.com) for the PR loop, [OpenCode](https://opencode.ai) for the free fallback, `jq` for the usage meters, and [`ttyd`](https://github.com/tsl0922/ttyd) for the terminals under each pipeline
 
