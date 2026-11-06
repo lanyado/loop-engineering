@@ -130,14 +130,16 @@ export const GIT_ENV_ALLOWLIST = [
 ] as const;
 
 /**
- * The server's own secrets. Never given to an agent, never accepted in AGENT_ENV_EXTRA, and removed
- * from the tmux server's global environment.
+ * The server's own secrets, and the mail add-in's password (it reads and sends the owner's mail).
+ * Never given to an agent, never accepted in AGENT_ENV_EXTRA (by name, or by a prefix such as
+ * EMAIL_* or EM*), and removed from the tmux server's global environment.
  */
 export const SERVER_SECRET_ENV = [
   'DASHBOARD_TOKEN',
   'DASHBOARD_PASSWORD',
   'DASHBOARD_SESSION_SECRET',
   'MCP_TOKEN',
+  'EMAIL_APP_PASSWORD',
 ] as const;
 
 /** Every LC_* locale variable passes too. */

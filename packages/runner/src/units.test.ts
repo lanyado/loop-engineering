@@ -472,8 +472,24 @@ describe('agent environment', () => {
     });
     expect(env).not.toHaveProperty('DASHBOARD_TOKEN');
     expect(parseAgentEnvExtra(' A_B , CD* ')).toEqual(['A_B', 'CD*']);
-    for (const bad of ['DASHBOARD_TOKEN', 'MCP_TOKEN', 'DASHBOARD_*', 'MCP*', '*', 'X*Y', 'a-b'])
+    for (const bad of [
+      'DASHBOARD_TOKEN',
+      'MCP_TOKEN',
+      'DASHBOARD_*',
+      'MCP*',
+      'EMAIL_APP_PASSWORD',
+      'EMAIL_*',
+      'EM*',
+      '*',
+      'X*Y',
+      'a-b',
+    ])
       expect(() => parseAgentEnvExtra(bad)).toThrow(/AGENT_ENV_EXTRA/);
+    // The mail password never reaches an agent, whatever AGENT_ENV_EXTRA says.
+    for (const setting of ['EMAIL_*', 'EM*', 'EMAIL_APP_PASSWORD', 'EMAIL_ADDRESS,EMAIL_APP_PASSWORD'])
+      expect(
+        agentBaseEnvironment({ ...server, AGENT_ENV_EXTRA: setting, EMAIL_APP_PASSWORD: 'mail' }),
+      ).not.toHaveProperty('EMAIL_APP_PASSWORD');
     // A refused setting adds nothing (the server refuses to start with it anyway).
     expect(agentBaseEnvironment({ ...server, AGENT_ENV_EXTRA: 'DASHBOARD_*' })).toEqual(
       agentBaseEnvironment(server),
@@ -494,7 +510,7 @@ describe('agent environment', () => {
   });
 
   it('no secret name is on any list', () => {
-    for (const name of ['DASHBOARD_TOKEN', 'DASHBOARD_PASSWORD', 'DASHBOARD_SESSION_SECRET', 'MCP_TOKEN'])
+    for (const name of SERVER_SECRET_ENV)
       expect([...AGENT_ENV_ALLOWLIST, ...TMUX_CLIENT_ENV, ...WINDOW_ENV, ...GIT_ENV_ALLOWLIST]).not.toContain(
         name,
       );
@@ -502,6 +518,7 @@ describe('agent environment', () => {
       'DASHBOARD_PASSWORD',
       'DASHBOARD_SESSION_SECRET',
       'DASHBOARD_TOKEN',
+      'EMAIL_APP_PASSWORD',
       'MCP_TOKEN',
     ]);
   });
