@@ -1,4 +1,5 @@
 import type { Session, Store } from '@loop-engineering/core';
+import { AutoResume } from './auto-resume.js';
 import type { SessionRunner } from './runner.js';
 import { DEFAULT_TAIL_LINES, USAGE_LIMIT_PATTERNS } from './usage-limit.js';
 import { SessionWatchdog } from './watchdog.js';
@@ -31,7 +32,12 @@ export interface MonitorOptions {
    * (session id + tmux window), not on every pass.
    */
   onTrustPrompt?: (session: Session, folder: string) => void;
-  /** The watchdog's reminders or refusals did not help, and a person should look. */
+  /**
+   * Resume sessions whose agent went away by itself (AutoResume), record a tmux server that died
+   * holding agents, and alert once when several agents go at once. Default false.
+   */
+  autoResume?: boolean;
+  /** The watchdog's reminders or refusals did not help, or auto-resume needs a person. */
   onAlert?: (session: Session, message: string) => void;
   /** What the watchdog did: nudged an idle agent or refused a permission question. */
   log?: (message: string) => void;
@@ -86,24 +92,29 @@ export class UsageLimitMonitor {
   /** `<session id> <tmux target>` of agents already reported at the trust dialog. */
   private readonly trustReported = new Set<string>();
   private readonly watchdog: SessionWatchdog;
+  private readonly autoResume: AutoResume | null;
 
   constructor(
     private readonly runner: SessionRunner,
     private readonly store: Store,
     private readonly options: MonitorOptions = {},
   ) {
-    this.watchdog = new SessionWatchdog(runner, store, {
+    const shared = {
       now: options.now ?? Date.now,
       ...(options.onAlert ? { onAlert: options.onAlert } : {}),
       ...(options.log ? { log: options.log } : {}),
-    });
+    };
+    this.watchdog = new SessionWatchdog(runner, store, shared);
+    this.autoResume = options.autoResume ? new AutoResume(runner, store, shared) : null;
   }
 
   async checkOnce(): Promise<MonitorPass> {
     const pass: MonitorPass = { switched: [], exited: [], trustWaits: [], rotated: [] };
     try {
-      pass.exited = await this.runner.reconcile();
+      const { sessions, vanished } = await this.runner.reconcileReport();
+      pass.exited = sessions;
       for (const s of pass.exited) this.options.onAgentExited?.(s);
+      await this.autoResume?.afterReconcile(pass.exited.filter((s) => vanished.has(s.id)));
     } catch (err) {
       this.options.onError?.(err, null);
     }
@@ -137,6 +148,12 @@ export class UsageLimitMonitor {
     }
     await this.checkOpencode(pass);
     await this.retryClaudeLimit();
+    try {
+      // The OpenCode relaunches above retry their own sessions on every pass.
+      await this.autoResume?.run(this.relaunch);
+    } catch (err) {
+      this.options.onError?.(err, null);
+    }
     await this.runWatchdog();
     return pass;
   }

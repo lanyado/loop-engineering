@@ -37,7 +37,7 @@ import {
 import { buildContinuationPrompt, type RepoState } from './continuation.js';
 import type { Fs } from './drivers/fs.js';
 import type { GitDriver } from './drivers/git.js';
-import type { TmuxDriver, TmuxWindow } from './drivers/tmux.js';
+import type { TmuxDriver, TmuxServer, TmuxWindow } from './drivers/tmux.js';
 import { sessionInstructions } from './instructions.js';
 import { renderLaunchScript, shellQuote } from './launch.js';
 import { inputBoxHasText, inputBoxHolds, inputBoxText } from './input-box.js';
@@ -132,6 +132,25 @@ export interface ResumeOptions {
   /** Launch on the session's default model and effort, ignoring the builder's pick and the rigor level's effort. */
   defaults?: boolean;
 }
+
+/** A tmux server found gone or replaced while it held agents: what was known of it. */
+export interface TmuxServerDeath {
+  pid: number;
+  /** Epoch ms. */
+  startedAt: number;
+  /** When a pass last found it alive (epoch ms): it died after this. */
+  lastSeenAt: number;
+  /** The pid of the server running now, if one is. */
+  replacedBy: number | null;
+}
+
+type SeenTmuxServer = TmuxServer & { seenAt: number; savedAt: number };
+
+/** How reconcile's history entry for an agent it found gone starts (auto-resume looks for it). */
+export const AGENT_GONE = 'Agent gone:';
+
+/** How often a server that is still there has its last sighting saved. */
+const TMUX_SEEN_SAVE_MS = 5 * 60_000;
 
 export interface EndOptions {
   /** Remove worktrees even with uncommitted changes (they are lost). */
@@ -304,7 +323,8 @@ export class SessionRunner {
   /**
    * Stops the agent (its conversation stays resumable) and marks the session paused. Pausing a
    * session that is already paused keeps its original reason, so an automatic resume for that
-   * reason still applies.
+   * reason still applies, except agent_exited: a stop someone chose wins over an agent that left by
+   * itself, so nothing resumes the session automatically.
    */
   pause(sessionId: number, reason: PauseReason): Promise<Session> {
     if (!PAUSE_REASONS.includes(reason)) {
@@ -313,7 +333,10 @@ export class SessionRunner {
     return this.withLock(sessionId, async () => {
       const s = this.deps.store.sessions.require(sessionId);
       if (s.status === 'ended') throw new ValidationError(`session ${sessionId} has ended`);
-      if (s.status === 'paused') return s;
+      if (s.status === 'paused') {
+        if (s.pauseReason !== 'agent_exited' || reason === 'agent_exited') return s;
+        return this.deps.store.sessions.update(sessionId, { status: 'paused', pauseReason: reason });
+      }
       await this.killOwnWindow(s);
       return this.deps.store.sessions.update(sessionId, {
         status: 'paused',
@@ -330,6 +353,18 @@ export class SessionRunner {
    */
   resume(sessionId: number, options: ResumeOptions = {}): Promise<Session> {
     return this.withLock(sessionId, () => this.resumeNow(sessionId, options));
+  }
+
+  /**
+   * resume() only when the session is still paused for `reason` once its lock is free: null when it
+   * is not (another resume, a pause by the human or its end got there first), so nothing launches twice.
+   */
+  resumePaused(sessionId: number, reason: PauseReason, options: ResumeOptions = {}): Promise<Session | null> {
+    return this.withLock(sessionId, async () => {
+      const s = this.deps.store.sessions.require(sessionId);
+      if (s.status !== 'paused' || s.pauseReason !== reason) return null;
+      return this.resumeNow(sessionId, { ...options, ifReason: reason });
+    });
   }
 
   /** resume() without taking the session's lock: for callers that already hold it. */
@@ -805,6 +840,17 @@ export class SessionRunner {
     });
   }
 
+  /**
+   * How long the session's Claude conversation file is, whatever the session's state; null without
+   * one. A file that grows while the session is paused means an agent still runs somewhere.
+   */
+  async conversationSize(sessionId: number): Promise<number | null> {
+    const s = this.deps.store.sessions.require(sessionId);
+    if (s.provider !== 'claude') return null;
+    const file = await this.conversationFile(s.agentSessionId);
+    return file ? await this.deps.fs.size(file).catch(() => null) : null;
+  }
+
   /** Cancels the permission question the pane shows now; false if it shows none. Never answers Yes. */
   refusePermissionPrompt(sessionId: number): Promise<boolean> {
     return this.withLock(sessionId, async () => {
@@ -839,12 +885,28 @@ export class SessionRunner {
    * Call it when the server starts; the monitor also runs it on every pass. Returns those sessions.
    */
   async reconcile(): Promise<Session[]> {
+    return (await this.reconcileReport()).sessions;
+  }
+
+  /**
+   * reconcile(), also saying whose window vanished. Agents' windows keep a dead pane when the agent
+   * exits (remain-on-exit), so a dead pane means the agent left by itself, and a window that is
+   * not there at all was closed from outside, or went with the tmux server.
+   */
+  async reconcileReport(): Promise<{ sessions: Session[]; vanished: Set<number> }> {
     const { store } = this.deps;
     const paused: Session[] = [];
+    const vanished = new Set<number>();
     for (const candidate of store.sessions.list({ status: 'active' })) {
       const result = await this.withLock(candidate.id, async () => {
         const s = store.sessions.require(candidate.id);
-        if (s.status !== 'active' || (await this.isAlive(s))) return null;
+        if (s.status !== 'active') return null;
+        const window = await this.ownWindow(s);
+        if (window && !window.dead) {
+          await this.keepDeadPane(window.target);
+          return null;
+        }
+        if (!window) vanished.add(s.id);
         await this.killOwnWindow(s);
         if (store.projects.get(s.projectId)?.kind === 'folder') {
           // A folder runs one session at a time: a paused dead session would block it until someone
@@ -867,20 +929,114 @@ export class SessionRunner {
             pauseReason: 'agent_exited',
             tmuxTarget: null,
           });
+          const how = window
+            ? `its process exited in tmux window ${window.target}`
+            : `its tmux window ${s.tmuxTarget ?? 'none'} vanished: closed from outside, or gone with the tmux server`;
           store.history.add({
             projectId: s.projectId,
             sessionId: s.id,
             kind: 'decision',
-            text:
-              `The ${s.provider}/${s.model} agent of session ${s.id} is gone (tmux window ` +
-              `${s.tmuxTarget ?? 'none'} closed or its process exited). Session paused (agent_exited); resume relaunches it.`,
+            text: `${AGENT_GONE} the ${s.provider}/${s.model} agent of session ${s.id} is gone (${how}). Session paused (agent_exited); resume relaunches it.`,
           });
           return updated;
         });
       });
       if (result) paused.push(result);
     }
-    return paused;
+    return { sessions: paused, vanished };
+  }
+
+  /** Windows made before agents' windows kept their dead pane, set once each. */
+  private readonly deadPanesKept = new Set<string>();
+
+  private async keepDeadPane(target: string): Promise<void> {
+    if (this.deadPanesKept.has(target)) return;
+    this.deadPanesKept.add(target);
+    await this.deps.tmux.keepDeadPane(target).catch((err: unknown) => {
+      this.log(`could not keep the dead pane of ${target}: ${errorMessage(err)}`);
+    });
+  }
+
+  /**
+   * Compares the tmux server with the one last seen alive (kept in the state folder, so a restart
+   * remembers it). A server gone or replaced is reported only when `lost` (this pass found agents
+   * gone): a server that exits with its last window, or one started for the next session, is normal.
+   * tmux keeps no log, so this is the only evidence of how long it ran and when it was last seen.
+   */
+  async checkTmuxServer(lost: boolean, now = this.now()): Promise<TmuxServerDeath | null> {
+    let current: TmuxServer | null;
+    try {
+      current = await this.deps.tmux.server();
+    } catch (err) {
+      this.log(`could not read the tmux server: ${errorMessage(err)}`);
+      return null;
+    }
+    const known = await this.knownTmuxServer();
+    if (current && known && current.pid === known.pid && current.startedAt === known.startedAt) {
+      known.seenAt = now;
+      if (now - known.savedAt >= TMUX_SEEN_SAVE_MS) await this.saveTmuxServer(known);
+      return null;
+    }
+    if (!current && !lost) {
+      // Gone with no agent lost. With no agent window left it exited empty, and is forgotten;
+      // otherwise it died just after this pass's reconcile, and the next pass finds its agents gone.
+      const holding = this.deps.store.sessions.list({ status: 'active' }).some((s) => s.tmuxTarget !== null);
+      if (!holding && known) {
+        this.tmuxSeen = null;
+        await this.saveTmuxServer(null);
+      }
+      return null;
+    }
+    const death =
+      known && lost
+        ? {
+            pid: known.pid,
+            startedAt: known.startedAt,
+            lastSeenAt: known.seenAt,
+            replacedBy: current?.pid ?? null,
+          }
+        : null;
+    this.tmuxSeen = current && { ...current, seenAt: now, savedAt: 0 };
+    await this.saveTmuxServer(this.tmuxSeen);
+    return death;
+  }
+
+  /** The tmux server last seen alive; undefined until read from the state folder. */
+  private tmuxSeen: SeenTmuxServer | null | undefined;
+
+  private async knownTmuxServer(): Promise<SeenTmuxServer | null> {
+    if (this.tmuxSeen !== undefined) return this.tmuxSeen;
+    this.tmuxSeen = null;
+    try {
+      const saved = JSON.parse(await this.deps.fs.readFile(this.tmuxServerFile())) as Partial<SeenTmuxServer>;
+      if (
+        typeof saved.pid === 'number' &&
+        typeof saved.startedAt === 'number' &&
+        typeof saved.seenAt === 'number'
+      )
+        this.tmuxSeen = { pid: saved.pid, startedAt: saved.startedAt, seenAt: saved.seenAt, savedAt: 0 };
+    } catch {
+      // None saved yet, or unreadable: nothing was seen.
+    }
+    return this.tmuxSeen;
+  }
+
+  private async saveTmuxServer(seen: SeenTmuxServer | null): Promise<void> {
+    try {
+      if (!seen) {
+        await this.deps.fs.remove(this.tmuxServerFile());
+        return;
+      }
+      seen.savedAt = seen.seenAt;
+      const { pid, startedAt, seenAt } = seen;
+      await this.deps.fs.writeFile(this.tmuxServerFile(), `${JSON.stringify({ pid, startedAt, seenAt })}\n`);
+    } catch (err) {
+      this.log(`could not save the tmux server's last sighting: ${errorMessage(err)}`);
+    }
+  }
+
+  private tmuxServerFile(): string {
+    return join(this.stateDir, 'tmux-server.json');
   }
 
   /** Origin's fresh tip of the default branch, so a session never starts from stale code; the local branch if the fetch fails. */

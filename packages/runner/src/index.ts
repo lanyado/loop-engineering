@@ -27,8 +27,10 @@ export {
   type NewWindow,
   type RealTmuxOptions,
   type TmuxDriver,
+  type TmuxServer,
   type TmuxWindow,
 } from './drivers/tmux.js';
+export { AutoResume, AUTO_RESUME_REASON, type AutoResumeOptions } from './auto-resume.js';
 export { FakeGitDriver, FakeTmuxDriver, MemoryFs, type FakeWindow, type MemoryFile } from './fakes.js';
 export {
   sessionInstructions,
@@ -62,6 +64,7 @@ export {
   type RunnerDeps,
   type StartOptions,
   type StartRequest,
+  type TmuxServerDeath,
   type UsageCheckOptions,
 } from './runner.js';
 export {

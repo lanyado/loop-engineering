@@ -31,6 +31,19 @@ export interface TmuxDriver {
   kill(target: string): Promise<void>;
   /** Windows of `session`; empty when the session or the tmux server does not exist. */
   list(session: string): Promise<TmuxWindow[]>;
+  /** The running tmux server; null when none runs. */
+  server(): Promise<TmuxServer | null>;
+  /**
+   * Keeps the window, with a dead pane, when its process exits (remain-on-exit), so an agent that
+   * exited can be told from a window closed from outside. newWindow does this for its windows.
+   */
+  keepDeadPane(target: string): Promise<void>;
+}
+
+export interface TmuxServer {
+  pid: number;
+  /** Epoch ms, as tmux reports it (whole seconds). */
+  startedAt: number;
 }
 
 const TARGET_FORMAT = '#{session_name}:#{window_id}';
@@ -80,7 +93,12 @@ export class RealTmuxDriver implements TmuxDriver {
     // The runner identifies windows by name too; keep the agent (terminal title escapes) from renaming it.
     await this.tmux(['set-option', '-w', '-t', target, 'allow-rename', 'off']).catch(() => undefined);
     await this.tmux(['set-option', '-w', '-t', target, 'automatic-rename', 'off']).catch(() => undefined);
+    await this.keepDeadPane(target).catch(() => undefined);
     return target;
+  }
+
+  async keepDeadPane(target: string): Promise<void> {
+    await this.tmux(['set-option', '-w', '-t', target, 'remain-on-exit', 'on']);
   }
 
   private async createWindow(spec: NewWindow): Promise<string> {
@@ -142,5 +160,17 @@ export class RealTmuxDriver implements TmuxDriver {
         const [target = '', name = '', dead = '0'] = l.split('\t');
         return { target, name, dead: dead === '1' };
       });
+  }
+
+  async server(): Promise<TmuxServer | null> {
+    let out: string;
+    try {
+      out = await this.tmux(['display-message', '-p', '#{pid} #{start_time}']);
+    } catch (err) {
+      if (isMissing(err)) return null;
+      throw err;
+    }
+    const [pid, start] = out.trim().split(' ').map(Number);
+    return pid && pid > 0 && start ? { pid, startedAt: start * 1000 } : null;
   }
 }
