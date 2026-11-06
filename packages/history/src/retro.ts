@@ -381,17 +381,29 @@ export function collectRetro(db: RetroDb, options: RetroOptions): RetroData {
     )
     .all({ ...params, since: w.since, until: w.until }) as GuardianRow[];
 
+  // A PR's label says as much as the report needs to tell PRs apart: "#12", "web#12" when it has
+  // several repos, "shop/web#12" when it has several projects (evidence is listed once per label).
+  const projectName = new Map(
+    (db.prepare('SELECT id, name FROM projects').all() as { id: number; name: string }[]).map((p) => [
+      p.id,
+      p.name,
+    ]),
+  );
+  const multiProject = new Set(prs.map((p) => p.project_id)).size > 1;
   const multiRepo = new Set(prs.map((p) => p.repo)).size > 1;
+  const prLabel = (projectId: number, repo: string, n: number | string) =>
+    multiProject
+      ? `${projectName.get(projectId) ?? `project ${projectId}`}/${repo}#${n}`
+      : multiRepo
+        ? `${repo}#${n}`
+        : `#${n}`;
   const prByKey = new Map(prs.map((p) => [prKey(p.project_id, p.repo, p.number), p]));
   const prById = new Map(prs.map((p) => [p.id, p]));
-  const prEvidence = (p: PrRow): Evidence => ({
-    label: multiRepo ? `${p.repo}#${p.number}` : `#${p.number}`,
-    url: p.url,
-  });
+  const prEvidence = (p: PrRow): Evidence => ({ label: prLabel(p.project_id, p.repo, p.number), url: p.url });
   /** A PR a history entry names: its project is the entry's. */
   const prRef = (d: DecisionRow, repo: string, n: string): Evidence => {
     const p = prByKey.get(prKey(d.project_id, repo, Number(n)));
-    return p ? prEvidence(p) : { label: multiRepo ? `${repo}#${n}` : `#${n}` };
+    return p ? prEvidence(p) : { label: prLabel(d.project_id, repo, n) };
   };
   const sessionRef = (id: number | null): Evidence => ({
     label: id === null ? 'no session' : `session ${id}`,

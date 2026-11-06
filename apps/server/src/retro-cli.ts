@@ -29,9 +29,9 @@ Read-only on the database; no model and no network (unless --file-request).
                       --db is from the current folder, like --out-dir)
   --out-dir <dir>     where to write (default: retros/ beside the database)
   --stdout            print the report instead of writing the file
-  --file-request      also file the report as a request asking a builder to propose pipeline and
-                      prompt improvements (needs --project and the server running; off by default)
-  --request-project <p>  the project that request goes to (default: --project)
+  --file-request      also file the report as a request to the --project's builder, asking it to
+                      propose pipeline and prompt improvements (needs --project and the server
+                      running; off by default)
   -h, --help          this text
 
 The file is <dir>/<YYYY-MM>.md for a calendar month, else <first>_to_<last>.md; a report of one
@@ -102,7 +102,6 @@ export async function runRetroCli(argv: string[], io: RetroCliIo): Promise<numbe
         'out-dir': { type: 'string' },
         stdout: { type: 'boolean' },
         'file-request': { type: 'boolean' },
-        'request-project': { type: 'string' },
         help: { type: 'boolean', short: 'h' },
       },
       strict: true,
@@ -194,7 +193,8 @@ export async function runRetroCli(argv: string[], io: RetroCliIo): Promise<numbe
   if (!args['file-request']) return 0;
   // With --stdout, stdout is the report alone: what the request step says goes to stderr.
   const say = args.stdout ? io.err : io.out;
-  const target = args['request-project'] ?? args.project!;
+  // Only to the project the report is about: never one project's snippets to another's builder.
+  const target = args.project!;
   return fileRequest(data, report, fileName, target, secrets, { ...io, out: say });
 }
 

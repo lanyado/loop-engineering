@@ -172,14 +172,11 @@ describe('loop retro', () => {
     expect(out).toHaveLength(1);
     expect(err.at(-1)).toBe('Filed request 7 in shop: a builder will propose improvements from the retro.');
 
-    // --request-project sends it elsewhere.
+    // It only goes to the project the report is about: there is no flag to send it elsewhere.
     expect(
-      await runRetroCli(
-        ['--db', db, '--stdout', '--file-request', '--project', 'shop', '--request-project', 'blog'],
-        io,
-      ),
-    ).toBe(0);
-    expect((server.posted[1]!.body as { projectId: number }).projectId).toBe(2);
+      await runRetroCli(['--db', db, '--file-request', '--project', 'shop', '--request-project', 'blog'], io),
+    ).toBe(2);
+    expect(server.posted).toHaveLength(1);
   });
 
   it('reads --db from the current folder, writes the report 0600 over a stale temp file, masks secrets', async () => {

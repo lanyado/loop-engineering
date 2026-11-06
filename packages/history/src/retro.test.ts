@@ -445,7 +445,6 @@ describe('collectRetro: reverts, automatic resumes and two projects with a repo 
       store.close();
       const db = new Database(path, { readonly: true });
       const d = collectRetro(db, { window: OCTOBER, now: NOW });
-      db.close();
       expect(d.prs).toMatchObject({
         opened: 5,
         byOutcome: { reverted: 1, merged: 2, 'left the loop (nobody answered)': 1, 'taken over': 1 },
@@ -454,11 +453,22 @@ describe('collectRetro: reverts, automatic resumes and two projects with a repo 
       // Each PR #120 has its own project's merge time: 1h and 2h after opening; #130 3h.
       expect(d.prs.openToMerge).toMatchObject({ count: 3, median: 2 * HOUR, max: 3 * HOUR });
       expect(d.prs.reverted).toEqual([
-        { label: '#120 (reverted by #121)', url: `https://github.example/${a}/120` },
+        { label: 'a/web#120 (reverted by #121)', url: `https://github.example/${a}/120` },
       ]);
-      expect(d.prs.revertPrs.map((e) => e.label)).toEqual(['#121 (revert of #120)', '#131 (revert of #130)']);
-      expect(d.prs.leftLoop.map((e) => e.label)).toEqual(['#140']);
-      expect(d.prs.tookOver.map((e) => e.label)).toEqual(['#141']);
+      // Two projects: every PR label names its project, so a/web#120 and b/web#120 stay apart.
+      expect(d.prs.revertPrs.map((e) => e.label)).toEqual([
+        'a/web#121 (revert of a/web#120)',
+        'a/web#131 (revert of a/web#130)',
+      ]);
+      expect(d.prs.leftLoop.map((e) => e.label)).toEqual(['a/web#140']);
+      expect(d.prs.tookOver.map((e) => e.label)).toEqual(['a/web#141']);
+      // One project: plain numbers.
+      const alone = collectRetro(db, { window: OCTOBER, projectId: a, now: NOW });
+      db.close();
+      expect(alone.prs.revertPrs.map((e) => e.label)).toEqual([
+        '#121 (revert of #120)',
+        '#131 (revert of #130)',
+      ]);
       expect(d.pauses.autoResumes.map((e) => e.label)).toEqual([`session ${s}`]);
       expect(d.pauses.autoResumeFailed.map((e) => e.label)).toEqual([`session ${s}`]);
     } finally {
