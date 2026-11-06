@@ -743,6 +743,7 @@ export class SessionRunner {
       }
       await this.removeSessionDir(s.worktrees);
       await fs.remove(this.configDir(sessionId));
+      this.launchedCli.delete(sessionId);
       return ended;
     }
   }
@@ -1066,7 +1067,7 @@ export class SessionRunner {
   /** Origin's fresh tip of the default branch, so a session never starts from stale code; the local branch if the fetch fails. */
   private async baseRef(repo: Repo): Promise<string> {
     try {
-      await this.deps.git.fetch(repo.path, repo.defaultBranch);
+      await this.deps.git.fetch(repo.path, repo.defaultBranch, repo.remote);
       return `origin/${repo.defaultBranch}`;
     } catch (err) {
       this.log(

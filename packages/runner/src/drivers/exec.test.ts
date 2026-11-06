@@ -71,6 +71,44 @@ describe('exec', () => {
     await vi.waitFor(() => expect(alive(child)).toBe(false), { timeout: 3000 });
   });
 
+  it('fails past its output limit, or keeps the first part when asked to truncate', async () => {
+    const big = ['-c', 'head -c 100000 /dev/zero'];
+    await expect(exec('sh', big, undefined, { maxBuffer: 1000 })).rejects.toMatchObject({
+      code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
+    });
+    const cut = await exec('sh', big, undefined, { maxBuffer: 1000, overflow: 'truncate' });
+    expect(cut.stdout.length).toBe(1000);
+  });
+
+  it('past its output limit stops what still writes, without a time limit too', async () => {
+    // A background writer the command leaves on our pipe (as in `yes | cat`).
+    const pidFile = join(dir, 'writer.pid');
+    await expect(
+      exec('sh', ['-c', `cat /dev/zero & echo $! > '${pidFile}'; wait`], undefined, { maxBuffer: 100_000 }),
+    ).rejects.toMatchObject({ code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' });
+    const writer = await pidIn(pidFile);
+    await vi.waitFor(() => expect(alive(writer)).toBe(false), { timeout: 3000 });
+  });
+
+  it.skipIf(!existsSync('/proc/self/stat'))(
+    'runs a timed command in a session of its own, so it has no terminal to prompt on',
+    async () => {
+      // Field 6 of /proc/<pid>/stat is the session id: a session leader's is its own pid.
+      const { stdout } = await exec('sh', ['-c', 'echo $$; cut -d" " -f6 /proc/$$/stat'], undefined, {
+        timeoutMs: 5000,
+      });
+      const [pid, session] = stdout.trim().split('\n');
+      expect(session).toBe(pid);
+      expect(
+        (
+          await exec('sh', ['-c', '(exec 3</dev/tty) 2>/dev/null && echo tty || echo none'], undefined, {
+            timeoutMs: 5000,
+          })
+        ).stdout.trim(),
+      ).toBe('none');
+    },
+  );
+
   it("stops a slow git and the helper it started when the repo's config read times out", async () => {
     // A fake git whose config read starts a slow helper and waits for it.
     const pidFile = join(dir, 'helper.pid');

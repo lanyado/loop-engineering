@@ -125,7 +125,7 @@ export class FakeGitDriver implements GitDriver {
   readonly pushed: { path: string; branch: string }[] = [];
   /** Repo paths whose addWorktree fails, to test rollback. */
   readonly failAddFor = new Set<string>();
-  readonly fetched: { repoPath: string; ref: string }[] = [];
+  readonly fetched: { repoPath: string; ref: string; url?: string }[] = [];
   /** Repo paths whose fetch fails, like an unreachable remote. */
   readonly failFetchFor = new Set<string>();
   /** The base ref each worktree was created from. */
@@ -134,10 +134,10 @@ export class FakeGitDriver implements GitDriver {
   /** With an Fs, worktree directories appear in and vanish from it like on disk. */
   constructor(private readonly fs?: Fs) {}
 
-  fetch(repoPath: string, ref: string): Promise<void> {
+  fetch(repoPath: string, ref: string, url?: string): Promise<void> {
     if (this.failFetchFor.has(repoPath))
       return Promise.reject(new Error(`fatal: unable to access ${repoPath}`));
-    this.fetched.push({ repoPath, ref });
+    this.fetched.push({ repoPath, ref, ...(url !== undefined ? { url } : {}) });
     return Promise.resolve();
   }
 

@@ -31,6 +31,13 @@ export interface ExecOptions {
   killGraceMs?: number;
   /** Exactly the environment the command gets. Default process.env. */
   env?: Record<string, string | undefined>;
+  /** Most bytes kept of stdout and of stderr. Default 16 MB. */
+  maxBuffer?: number;
+  /**
+   * What happens past `maxBuffer`: "fail" (default) stops the command and rejects; "truncate" keeps
+   * the first `maxBuffer` bytes and lets it finish.
+   */
+  overflow?: 'fail' | 'truncate';
 }
 
 const MAX_BUFFER = 16 * 1024 * 1024;
@@ -74,9 +81,16 @@ export function exec(
         // ESRCH: the group is gone already
       }
     };
+    /** Our ends of its pipes: a pipeline still writing gets SIGPIPE, and 'close' is not held up. */
+    const closePipes = () => {
+      child.stdout.destroy();
+      child.stderr.destroy();
+    };
     const stop = (why: string) => {
       if (stopped !== null || settled) return;
       stopped = why;
+      // Past the output limit nothing more is read: stop whatever still writes.
+      if (why.includes('maxBuffer')) closePipes();
       signalAll('SIGTERM');
       const kill = setTimeout(() => {
         signalAll('SIGKILL');
@@ -92,8 +106,12 @@ export function exec(
       if (settled) return;
       settled = true;
       for (const t of timers) clearTimeout(t);
-      // Whatever the group still holds after a timeout dies now, not after the grace.
-      if (stopped !== null) signalAll('SIGKILL');
+      // Whatever the group still holds after a timeout dies now, not after the grace; and a process
+      // that left the group but still holds the pipes loses them.
+      if (stopped !== null) {
+        signalAll('SIGKILL');
+        closePipes();
+      }
       const stdout = Buffer.concat(out).toString();
       const stderr = Buffer.concat(err).toString();
       if (stopped !== null) {
@@ -123,18 +141,27 @@ export function exec(
       timer.unref();
       timers.push(timer);
     }
+    const max = options.maxBuffer ?? MAX_BUFFER;
+    const truncate = options.overflow === 'truncate';
     child.stdout.on('data', (d: Buffer) => {
+      const room = max - outBytes;
       outBytes += d.length;
-      if (outBytes > MAX_BUFFER) stop('stdout maxBuffer length exceeded');
-      else out.push(d);
+      if (outBytes <= max) out.push(d);
+      else if (truncate) {
+        if (room > 0) out.push(d.subarray(0, room));
+      } else stop('stdout maxBuffer length exceeded');
     });
     child.stderr.on('data', (d: Buffer) => {
+      const room = max - errBytes;
       errBytes += d.length;
-      if (errBytes > MAX_BUFFER) stop('stderr maxBuffer length exceeded');
-      else err.push(d);
+      if (errBytes <= max) err.push(d);
+      else if (truncate) {
+        if (room > 0) err.push(d.subarray(0, room));
+      } else stop('stderr maxBuffer length exceeded');
     });
     child.on('error', (e: NodeJS.ErrnoException) => {
-      if (settled) return;
+      // After we stopped it ('close' still comes): a failed kill must not drop what it printed.
+      if (settled || stopped !== null) return;
       settled = true;
       for (const t of timers) clearTimeout(t);
       reject(new ExecError(command, e.code ?? null, e.message));

@@ -204,7 +204,8 @@ describe('startSession', () => {
     });
     h.git.failFetchFor.add('/src/api');
     const s = await h.runner.startSession(p.id, { text: 'Add search' });
-    expect(h.git.fetched).toEqual([{ repoPath: '/src/web', ref: 'main' }]);
+    // From the project's remote URL, not whatever the repo's config says origin is.
+    expect(h.git.fetched).toEqual([{ repoPath: '/src/web', ref: 'main', url: 'r' }]);
     const dir = '/wt/full-stack/add-search-sfx1';
     expect(h.git.bases.get(`${dir}/web`)).toBe('origin/main');
     expect(h.git.bases.get(`${dir}/api`)).toBe('develop');
@@ -225,8 +226,8 @@ describe('startSession', () => {
     });
     await h.runner.startSession(p.id, { text: 'Add search' });
     expect(h.git.fetched).toEqual([
-      { repoPath: '/src/web', ref: 'main' },
-      { repoPath: '/src/api', ref: 'develop' },
+      { repoPath: '/src/web', ref: 'main', url: 'r' },
+      { repoPath: '/src/api', ref: 'develop', url: 'r' },
     ]);
     expect(h.logs).toEqual([]);
   });
@@ -1124,6 +1125,15 @@ describe('reconcile', () => {
     await h.runner.reconcile();
     const gone = h.store.history.list({ sessionId: s.id }).find((e) => e.text.includes('is gone'));
     expect(gone?.text).toContain(`The launch script said: claude not found (PATH=${PATH}).`);
+  });
+
+  it('forgets what a session launched with once it ends', async () => {
+    const h = harness();
+    const s = await h.runner.startSession(h.shop.id, REQUEST);
+    const launched = (h.runner as unknown as { launchedCli: Map<number, unknown> }).launchedCli;
+    expect(launched.has(s.id)).toBe(true);
+    await h.runner.end(s.id, { force: true });
+    expect(launched.has(s.id)).toBe(false);
   });
 
   it("does not let an agent put words in the history: only the script's messages, only right after launch", async () => {

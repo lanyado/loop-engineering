@@ -50,7 +50,9 @@ Planned as **0.1.0**, the first tagged release. It will hold everything on `main
   - `-c` options turn off hooks (`core.hooksPath=/dev/null`), `core.fsmonitor`, the `ext::` transport, submodule recursion and signature checks.
   - `GIT_PROXY_COMMAND` is set empty, so no `core.gitProxy` runs.
   - `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` override the repo's own config: its filters, diff and merge drivers, pagers, editors, `core.sshCommand` and credential helpers. It is not a sandbox: agents can still read `.env` from disk as the same user ([What agents can see](docs/reference.md#what-agents-can-see)) (#44).
-  - **The PR loop's own git** in its job checkouts, which share the builder's `.git`, now runs through the same guard (#45). Before, only hooks and `fsmonitor` were off there, so a filter, credential helper or `core.sshCommand` a job planted in that `.git` still ran.
+  - **The PR loop's own git** in its job checkouts, which share the builder's `.git`, now runs through the same guard (#45). Before, only hooks and `fsmonitor` were off there, so a filter, credential helper or `core.sshCommand` a job planted in that `.git` still ran. Its commits are never signed, and its environment has no GitHub token or gh config folder.
+  - The guard reads the config from where each command runs: a new worktree is checked out by a command run inside it, and an unforced removal checks the worktree from inside it, so `includeIf "gitdir:…"` and `"onbranch:…"` can no longer slip a filter past it. `gpg.ssh.defaultKeyCommand` is neutralized too, and fetches name the project's remote URL instead of `origin` (#45).
+  - `add-project` and `loop init` run git without the server's secrets in its environment (#45).
 - Email sender checks: a From header with two addresses is not trusted, the domain is taken after the last `@`, `EMAIL_ALLOWLIST` refuses many more public-provider domains, and a mail that copies the attachments list (or a look-alike of its heading) can only ever list files inside the channel's own folder. Each saved file is listed once, at the end of the request, with a content type that is a plain `type/subtype` or else `application/octet-stream` (#40).
 - `nodemailer` 10.3.1 and `mailparser` 3.14.2, past the address-parser advisories of earlier versions (#40).
 
@@ -62,6 +64,8 @@ Planned as **0.1.0**, the first tagged release. It will hold everything on `main
 - A tmux server started by an older version still holds `.env`'s secrets until it exits. The next session start removes them from its global environment. For a full clean, `tmux kill-server` when no builder is running ([the reference](docs/reference.md#what-agents-can-see)).
 - A variable an agent needs that is not on its allowlist (an OpenCode provider key, say) no longer reaches it: name it in `AGENT_ENV_EXTRA`.
 - If you proxy `git://` remotes through a global `core.gitProxy`, the server's git no longer uses it: `GIT_PROXY_COMMAND` is set empty, which turns every `core.gitProxy` off.
+- The loop's own commits (tests the tester wrote, conflict fixes) are no longer signed, even if your config asks for it. A branch rule that requires signed commits refuses them.
+- The server's git runs with no terminal: an SSH key with a passphrase needs an SSH agent, and a host must be in `~/.ssh/known_hosts` before the first fetch.
 - **Use Git 2.31 or later.**
   - On Git 2.26 to 2.30, git ignores `GIT_CONFIG_COUNT`, so the override of a repo's own filters, drivers and credential helpers is lost. The `-c` options and the empty `GIT_PROXY_COMMAND` still apply, and the server logs a warning at start.
   - Below 2.26 (Ubuntu 20.04 ships 2.25), `git config --list --show-scope` fails, so the guard refuses to run and every git command the runner makes fails: no session can start.

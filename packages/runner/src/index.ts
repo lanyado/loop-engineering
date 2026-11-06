@@ -42,6 +42,8 @@ export {
   repoConfigGuard,
   SAFE_GIT,
   safeGit,
+  safeWorktreeAdd,
+  safeWorktreeRemove,
   type ConfigEntry,
   type GitDriver,
   type RealGitOptions,
