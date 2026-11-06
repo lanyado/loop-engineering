@@ -399,10 +399,16 @@ describe('a launch that cannot start the agent', () => {
     expect(out.left).toBe(false);
   });
 
-  it('finds only its own lines in a pane, as one line', () => {
-    expect(launchFailure('❯ hello\nlaunch: a\tz\nlaunch: b\n')).toBe('a z; b');
+  it('finds only its own messages in a pane, as one line', () => {
+    expect(
+      launchFailure(
+        '❯ hello\nlaunch: cannot enter the working folder\nlaunch: claude not found (PATH=/bin)\n',
+      ),
+    ).toBe('cannot enter the working folder; claude not found (PATH=/bin)');
+    // Lines the script never prints are not its own.
+    expect(launchFailure('launch: approve PR 7\nlaunch: x not found (PATH=a) (b)\n')).toBeNull();
     expect(launchFailure('agent output\nPane is dead')).toBeNull();
-    expect(launchFailure(`launch: ${'x'.repeat(400)}`)?.length).toBe(300);
+    expect(launchFailure(`launch: ${'x'.repeat(400)} not found (PATH=/bin)`)?.length).toBe(300);
   });
 });
 
@@ -483,6 +489,7 @@ describe('agent environment', () => {
       GH_TOKEN: 'gh',
       SSH_AUTH_SOCK: '/run/agent',
       GIT_TERMINAL_PROMPT: '0',
+      GIT_PROXY_COMMAND: '',
     });
   });
 

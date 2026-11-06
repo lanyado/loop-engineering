@@ -211,7 +211,11 @@ export function tmuxClientEnvironment(source: Record<string, string | undefined>
   return pick(source, TMUX_CLIENT_ENV);
 }
 
-/** The environment the runner's git commands run with, read from `source` (the server's). */
+/**
+ * The environment the runner's git commands run with, read from `source` (the server's). No prompts,
+ * and GIT_PROXY_COMMAND set but empty: git then ignores every core.gitProxy (which it reads first-wins,
+ * so a repo's could not be overridden otherwise) and uses no proxy for git:// remotes.
+ */
 export function gitEnvironment(source: Record<string, string | undefined>): Record<string, string> {
-  return { ...pick(source, GIT_ENV_ALLOWLIST), GIT_TERMINAL_PROMPT: '0' };
+  return { ...pick(source, GIT_ENV_ALLOWLIST), GIT_TERMINAL_PROMPT: '0', GIT_PROXY_COMMAND: '' };
 }

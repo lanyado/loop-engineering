@@ -4,6 +4,13 @@ import { exec, ExecError } from './exec.js';
 
 /** An unreachable remote must not stall a session start. */
 const FETCH_TIMEOUT_MS = 30_000;
+/**
+ * Every other git command has a limit too: a repo's config can make git wait forever (an include.path
+ * naming a FIFO), and the runner must not hang with it.
+ */
+const GIT_TIMEOUT_MS = 120_000;
+const PUSH_TIMEOUT_MS = 600_000;
+const CONFIG_TIMEOUT_MS = 30_000;
 
 export interface GitDriver {
   /** `git fetch --quiet origin <ref>` in the repo checkout, updating `origin/<ref>`. Rejects when it fails or times out. */
@@ -59,17 +66,26 @@ export const SAFE_GIT = [
 
 /**
  * Repo config (local or worktree scope: what an agent can write into the .git its worktree shares)
- * that makes git run a command. Overridden on the command line: emptied (a filter with no command
- * is skipped), or for credential helpers and core.sshCommand set back to what the user's own
- * (system and global) config says. Config git reads "first wins" (remote.*.receivepack, url.*.insteadOf)
- * cannot be overridden this way; whatever it runs gets only the git environment, no server secret.
+ * that makes git run a command, and that a later value overrides: emptied (a filter or diff driver
+ * with no command is skipped), or set back to the user's own (system and global) value. Config git
+ * reads first-wins (remote.*.uploadpack/receivepack, url.*.insteadOf) cannot be overridden; whatever
+ * it runs gets only the git environment, no server secret (see docs/reference.md).
  */
 const OVERRIDDEN =
-  /^(filter\..+\.(clean|smudge|process)|credential\.(.+\.)?helper|core\.sshcommand|diff\.external|diff\..+\.(textconv|command)|merge\..+\.driver|gpg\.(.+\.)?program|core\.pager|pager\..+|core\.editor|sequence\.editor)$/i;
+  /^(filter\..+\.(clean|smudge|process)|diff\.external|diff\..+\.(textconv|command)|merge\..+\.driver|gpg\.(.+\.)?program|core\.(sshcommand|alternaterefscommand|pager|editor)|pager\..+|sequence\.editor)$/i;
+/** Credential helpers, general or for a URL: a list, which an empty value resets. */
+const CREDENTIAL_HELPER = /^credential\.(.+\.)?helper$/i;
 /** Filters made empty must not be required, or git refuses the file. */
 const FILTER_DRIVER = /^filter\.(.+)\.(clean|smudge|process)$/i;
+/** What an emptied key falls back to when the user's own config has no value for it. */
+const NEUTRAL: Record<string, string> = {
+  'core.sshcommand': 'ssh',
+  'core.pager': 'cat',
+  // Run with the alternate's path; printing nothing just advertises no alternate refs.
+  'core.alternaterefscommand': 'true',
+};
 
-interface ConfigEntry {
+export interface ConfigEntry {
   scope: string;
   key: string;
   value: string;
@@ -92,35 +108,56 @@ export function parseConfigList(out: string): ConfigEntry[] {
   return entries;
 }
 
-/** The -c overrides that neutralize the repo's own command-running config. Pure; exported for tests. */
-export function repoConfigGuard(entries: ConfigEntry[]): string[] {
+/**
+ * The config, in order, that neutralizes the repo's own command-running config. Pure; exported for
+ * tests. Given to git as GIT_CONFIG_COUNT/KEY/VALUE (gitConfigEnv), which takes any key, a driver
+ * name with "=" in it too, and is read after every config file.
+ */
+export function repoConfigGuard(entries: ConfigEntry[]): [string, string][] {
   const repo = entries.filter((e) => e.scope === 'local' || e.scope === 'worktree');
   const user = entries.filter((e) => e.scope === 'system' || e.scope === 'global');
-  const overrides: string[] = [];
+  const out: [string, string][] = [];
+  // Credential helpers: an empty credential.helper clears the list for every URL, the repo's helpers
+  // (read before) included; then every helper of the user's own, general or for a URL, in order.
+  if (repo.some((e) => CREDENTIAL_HELPER.test(e.key))) {
+    out.push(['credential.helper', '']);
+    for (const e of user) if (CREDENTIAL_HELPER.test(e.key)) out.push([e.key, e.value]);
+  }
   const seen = new Set<string>();
   for (const { key } of repo) {
-    if (seen.has(key) || key.includes('=') || !OVERRIDDEN.test(key)) continue;
+    if (seen.has(key) || !OVERRIDDEN.test(key)) continue;
     seen.add(key);
-    // An empty value resets a list (credential.helper) and empties a command; the user's own values follow.
-    overrides.push('-c', `${key}=`);
+    out.push([key, '']);
     const own = user.filter((e) => e.key === key).map((e) => e.value);
-    const lower = key.toLowerCase();
-    if (lower === 'core.sshcommand' && own.length === 0) own.push('ssh');
-    if (lower === 'core.pager' && own.length === 0) own.push('cat');
-    for (const value of own) overrides.push('-c', `${key}=${value}`);
+    const neutral = NEUTRAL[key.toLowerCase()];
+    if (own.length === 0 && neutral !== undefined) own.push(neutral);
+    for (const value of own) out.push([key, value]);
     const filter = FILTER_DRIVER.exec(key)?.[1];
-    if (filter && !seen.has(`filter.${filter}.required`)) {
+    if (filter !== undefined && !seen.has(`filter.${filter}.required`)) {
       seen.add(`filter.${filter}.required`);
-      overrides.push('-c', `filter.${filter}.required=false`);
+      out.push([`filter.${filter}.required`, 'false']);
     }
   }
-  return overrides;
+  return out;
+}
+
+/** `pairs` as git's GIT_CONFIG_COUNT / GIT_CONFIG_KEY_<n> / GIT_CONFIG_VALUE_<n> variables. */
+export function gitConfigEnv(pairs: [string, string][]): Record<string, string> {
+  if (pairs.length === 0) return {};
+  const env: Record<string, string> = { GIT_CONFIG_COUNT: String(pairs.length) };
+  pairs.forEach(([key, value], i) => {
+    env[`GIT_CONFIG_KEY_${i}`] = key;
+    env[`GIT_CONFIG_VALUE_${i}`] = value;
+  });
+  return env;
 }
 
 export interface RealGitOptions {
   bin?: string;
   /** Where the git environment (gitEnvironment) is read from. Default process.env. */
   sourceEnv?: Record<string, string | undefined>;
+  /** Limit for reading a repo's config before each command, in ms. Default 30 s. */
+  configTimeoutMs?: number;
 }
 
 /**
@@ -133,29 +170,44 @@ export class RealGitDriver implements GitDriver {
   private readonly bin: string;
   /** Exactly this, nothing from process.env. */
   private readonly env: NodeJS.ProcessEnv;
+  private readonly configTimeoutMs: number;
 
   constructor(options: RealGitOptions | string = {}) {
     const o = typeof options === 'string' ? { bin: options } : options;
     this.bin = o.bin ?? 'git';
+    this.configTimeoutMs = o.configTimeoutMs ?? CONFIG_TIMEOUT_MS;
     // The cast: unneeded here, but an app that types NODE_ENV as required (the dashboard) needs it.
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
     this.env = gitEnvironment(o.sourceEnv ?? process.env) as NodeJS.ProcessEnv;
   }
 
-  /** The overrides for the repo at `cwd` (repoConfigGuard); reading config runs nothing. */
-  private async guard(cwd: string): Promise<string[]> {
-    const out = await exec(
-      this.bin,
-      [...SAFE_GIT, '-C', cwd, 'config', '--list', '--show-scope', '-z'],
-      undefined,
-      { env: this.env },
-    ).catch(() => null);
-    return repoConfigGuard(out ? parseConfigList(out.stdout) : []);
+  /**
+   * The guard for the repo at `cwd` (repoConfigGuard), as environment variables. Reading config runs
+   * nothing. Fails closed: when the config cannot be read, no git command runs there.
+   */
+  private async guard(cwd: string): Promise<Record<string, string>> {
+    let out: string;
+    try {
+      out = (
+        await exec(this.bin, [...SAFE_GIT, '-C', cwd, 'config', '--list', '--show-scope', '-z'], undefined, {
+          env: this.env,
+          timeoutMs: this.configTimeoutMs,
+        })
+      ).stdout;
+    } catch (err) {
+      const why = err instanceof ExecError ? err.stderr.trim() || String(err.code) : String(err);
+      throw new ExecError(
+        `${this.bin} config --list`,
+        err instanceof ExecError ? err.code : null,
+        `cannot read the git config in ${cwd}, so the runner runs no git there (${why})`,
+      );
+    }
+    return gitConfigEnv(repoConfigGuard(parseConfigList(out)));
   }
 
-  private async run(cwd: string, args: string[], timeoutMs?: number): Promise<string> {
-    const all = [...SAFE_GIT, ...(await this.guard(cwd)), '-C', cwd, ...args];
-    return (await exec(this.bin, all, undefined, { env: this.env, timeoutMs })).stdout;
+  private async run(cwd: string, args: string[], timeoutMs = GIT_TIMEOUT_MS): Promise<string> {
+    const env = { ...this.env, ...(await this.guard(cwd)) };
+    return (await exec(this.bin, [...SAFE_GIT, '-C', cwd, ...args], undefined, { env, timeoutMs })).stdout;
   }
 
   private git(cwd: string, args: string[]): Promise<string> {
@@ -224,7 +276,7 @@ export class RealGitDriver implements GitDriver {
   }
 
   async push(path: string, branch: string): Promise<void> {
-    await this.git(path, ['push', '-u', 'origin', '--', branch]);
+    await this.run(path, ['push', '-u', 'origin', '--', branch], PUSH_TIMEOUT_MS);
   }
 
   async excludeFile(path: string): Promise<string> {

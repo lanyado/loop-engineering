@@ -11,19 +11,28 @@ const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 /** Starts every line the script prints about its own failure; launchFailure() finds them in the pane. */
 const LAUNCH_PREFIX = 'launch:';
 
+/** The script's own failure messages, exactly as it prints them (after "launch: "). */
+const LAUNCH_MESSAGES = [
+  /^\/usr\/bin\/env not found$/,
+  /^cannot enter the working folder$/,
+  /^\S.* not found \(PATH=[^()]*\)$/,
+];
+
 /**
  * What the launch script said about why the agent never started, from the dead pane's text: its
- * "launch:" lines as one line, or null. The runner puts it in the session history, since the window
- * is killed right after.
+ * own messages, as one line, or null. Lines the script does not print are ignored, so an agent
+ * printing "launch: ..." gets nothing in; the runner also reads it only for a pane that died right
+ * after its launch. The runner puts it in the session history, since the window is killed next.
  */
 export function launchFailure(pane: string): string | null {
   const said = pane
     .split('\n')
     .map((l) => sanitizeLine(l))
     .filter((l) => l.startsWith(`${LAUNCH_PREFIX} `))
-    .map((l) => l.slice(LAUNCH_PREFIX.length + 1));
+    .map((l) => l.slice(LAUNCH_PREFIX.length + 1))
+    .filter((l) => LAUNCH_MESSAGES.some((m) => m.test(l)));
   if (said.length === 0) return null;
-  const text = said.join('; ');
+  const text = [...new Set(said)].join('; ');
   return text.length > 300 ? `${text.slice(0, 299)}…` : text;
 }
 

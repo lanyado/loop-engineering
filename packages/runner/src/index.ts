@@ -33,10 +33,12 @@ export { buildContinuationPrompt, type ContinuationInput, type RepoState } from 
 export { exec, ExecError, type ExecResult } from './drivers/exec.js';
 export { nodeFs, type Fs } from './drivers/fs.js';
 export {
+  gitConfigEnv,
   parseConfigList,
   RealGitDriver,
   repoConfigGuard,
   SAFE_GIT,
+  type ConfigEntry,
   type GitDriver,
   type RealGitOptions,
 } from './drivers/git.js';

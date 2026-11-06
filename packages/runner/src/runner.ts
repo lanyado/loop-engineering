@@ -149,6 +149,11 @@ type SeenTmuxServer = TmuxServer & { seenAt: number; savedAt: number };
 
 /** How reconcile's history entry for an agent it found gone starts (auto-resume looks for it). */
 export const AGENT_GONE = 'Agent gone:';
+/**
+ * A pane that died within this long of its launch (tmux reports whole seconds) may hold the launch
+ * script's failure message.
+ */
+const LAUNCH_FAILURE_WINDOW_MS = 10_000;
 
 /** How often a server that is still there has its last sighting saved. */
 const TMUX_SEEN_SAVE_MS = 5 * 60_000;
@@ -909,10 +914,17 @@ export class SessionRunner {
         }
         if (!window) vanished.add(s.id);
         // A launch that failed (no CLI on PATH, no /usr/bin/env) said why in the pane: keep that, since
-        // the window goes now.
-        const said = window
-          ? launchFailure(await this.deps.tmux.capture(window.target, 40).catch(() => ''))
-          : null;
+        // the window goes now. Only for a pane that died right after its launch, so an agent that ran
+        // for a while cannot put words in the history by printing them.
+        const launched = this.launchedAt.get(s.id);
+        const diedAtLaunch =
+          window?.deadAt !== undefined &&
+          launched !== undefined &&
+          window.deadAt - launched <= LAUNCH_FAILURE_WINDOW_MS;
+        const said =
+          diedAtLaunch && window
+            ? launchFailure(await this.deps.tmux.capture(window.target, 40).catch(() => ''))
+            : null;
         const why = said ? ` The launch script said: ${said}.` : '';
         await this.killOwnWindow(s);
         if (store.projects.get(s.projectId)?.kind === 'folder') {

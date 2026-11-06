@@ -380,6 +380,8 @@ describe.skipIf(!hasTmux())('an agent window keeps its dead pane (real tmux)', (
     const target = await tmux.newWindow({ session: 'probe', name: 'w', cwd: tmpdir(), command: 'sleep 0.3' });
     const dead = await waitFor('the dead pane', async () => (await tmux.list('probe')).find((w) => w.dead));
     expect(dead.target).toBe(target);
+    // When it died, as tmux reports it (whole seconds): what tells a failed launch from a later exit.
+    expect(Math.abs((dead.deadAt ?? 0) - Date.now())).toBeLessThan(60_000);
     await tmux.kill(target);
     expect(await tmux.list('probe')).toEqual([]);
   });
