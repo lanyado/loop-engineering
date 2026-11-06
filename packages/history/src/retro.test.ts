@@ -167,7 +167,7 @@ function buildFixture(path: string): { shop: number; blog: number } {
   at('10-15T09:00');
   const s4 = session('s4');
   const pr12 = pr(12, s4, null);
-  store.pullRequests.update(pr12, { round: 1 });
+  store.pullRequests.update(pr12, { round: 1, stage: 'escalated' }); // sent to the human, waiting
   at('10-15T10:00');
   note(
     s4,
@@ -266,7 +266,7 @@ describe('collectRetro on a month of made-up history', () => {
   it('reports PRs by outcome, fix rounds and time to merge', () => {
     expect(d.prs).toMatchObject({
       opened: 3,
-      byOutcome: { merged: 1, escalated: 1, open: 1 },
+      byOutcome: { merged: 1, 'taken over': 1, escalated: 1 },
       mergedInWindow: 1,
       fixRounds: [1, 0, 1, 0, 1],
       costUsd: 2.5,
@@ -363,6 +363,71 @@ describe('collectRetro on a month of made-up history', () => {
     const md = renderRetro(empty);
     expect(md).toContain('Nothing went wrong that the database records.');
     expect(md).toContain('| Time paused | not logged in this window |');
+  });
+});
+
+describe('collectRetro: reverts, automatic resumes and two projects with a repo of the same name', () => {
+  it('keys PRs by project, reports reverts apart and counts only resumes that worked', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'loop-retro-'));
+    try {
+      const path = join(dir, 'loop.db');
+      const clock = new FakeClock('2026-10-05T09:00:00.000Z');
+      const store = openStore({ path, clock });
+      const web = (owner: string) => [
+        {
+          name: 'web',
+          path: `/src/${owner}`,
+          remote: `git@example.com:${owner}/web.git`,
+          defaultBranch: 'main',
+        },
+      ];
+      const a = store.projects.create({ name: 'a', repos: web('a') }).id;
+      const b = store.projects.create({ name: 'b', repos: web('b') }).id;
+      const s = store.sessions.create({ projectId: a, title: 's', model: 'opus', branch: 's' }).id;
+      const open = (projectId: number, number: number) =>
+        store.pullRequests.create({
+          projectId,
+          repo: 'web',
+          number,
+          url: `https://github.example/${projectId}/${number}`,
+        }).id;
+      const a1 = open(a, 1);
+      const b1 = open(b, 1);
+      clock.set('2026-10-05T10:00:00.000Z');
+      store.history.add({ projectId: a, kind: 'decision', text: 'PR web#1 merged (squash) as 1111111.' });
+      clock.set('2026-10-05T11:00:00.000Z');
+      store.history.add({ projectId: b, kind: 'decision', text: 'PR web#1 merged (squash) as 2222222.' });
+      store.pullRequests.update(b1, { outcome: 'merged', stage: 'deployed' });
+      const revert = open(a, 2);
+      store.pullRequests.update(revert, { outcome: 'merged', loopState: { revertOf: 1 } });
+      store.pullRequests.update(a1, { outcome: 'reverted', stage: 'reverted', revertedByPrId: revert });
+      store.history.add({ projectId: a, kind: 'decision', text: 'PR web#1 reverted by #2 (3333333).' });
+      store.history.add({
+        projectId: a,
+        sessionId: s,
+        kind: 'decision',
+        text: 'Auto-resume: try 1 of 3 failed: no tmux',
+      });
+      store.history.add({
+        projectId: a,
+        sessionId: s,
+        kind: 'decision',
+        text: 'Auto-resume: try 2 of 3: relaunched the agent 2 min after it was found gone.',
+      });
+      store.close();
+      const db = new Database(path, { readonly: true });
+      const d = collectRetro(db, { window: OCTOBER, now: NOW });
+      db.close();
+      expect(d.prs).toMatchObject({ opened: 2, byOutcome: { reverted: 1, merged: 1 }, mergedInWindow: 2 });
+      // Each PR #1 has its own project's merge time: 1h and 2h after opening.
+      expect(d.prs.openToMerge).toMatchObject({ count: 2, median: HOUR, max: 2 * HOUR });
+      expect(d.prs.reverted).toEqual([{ label: '#1 (reverted by #2)', url: 'https://github.example/1/1' }]);
+      expect(d.prs.revertPrs).toEqual([{ label: '#2 (revert of #1)', url: 'https://github.example/1/2' }]);
+      expect(d.pauses.autoResumes.map((e) => e.label)).toEqual([`session ${s}`]);
+      expect(d.pauses.autoResumeFailed.map((e) => e.label)).toEqual([`session ${s}`]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

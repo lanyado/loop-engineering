@@ -1,8 +1,8 @@
-import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import Database from 'better-sqlite3';
-import { errorMessage } from '@loop-engineering/core';
+import { envFileValues, errorMessage, secretValues } from '@loop-engineering/core';
 import {
   collectRetro,
   renderRetro,
@@ -25,12 +25,13 @@ Read-only on the database; no model and no network (unless --file-request).
   --until <date>      last day, included (default with --since: now)
   --days <n>          the last n days instead
   --project <p>       one project, by name or id (default: all)
-  --db <path>         database (default LOOP_DB_PATH, or ./data/loop.db in the repo)
+  --db <path>         database (default LOOP_DB_PATH, or ./data/loop.db in the repo; a relative
+                      --db is from the current folder, like --out-dir)
   --out-dir <dir>     where to write (default: retros/ beside the database)
   --stdout            print the report instead of writing the file
   --file-request      also file the report as a request asking a builder to propose pipeline and
-                      prompt improvements (needs the server running; off by default)
-  --request-project <p>  the project that request goes to (default: --project, or the only one)
+                      prompt improvements (needs --project and the server running; off by default)
+  --request-project <p>  the project that request goes to (default: --project)
   -h, --help          this text
 
 The file is <dir>/<YYYY-MM>.md for a calendar month, else <first>_to_<last>.md; a report of one
@@ -53,6 +54,35 @@ interface KnownProject {
 const findProject = <T extends KnownProject>(projects: T[], wanted: string): T | undefined =>
   projects.find((p) => p.name === wanted) ??
   (/^\d+$/.test(wanted) ? projects.find((p) => p.id === Number(wanted)) : undefined);
+
+/**
+ * Values to mask besides token shapes, as history search does: the server's secret env values and
+ * the secret values in the env files of the projects the report covers. An unreadable file is skipped.
+ */
+function knownSecrets(db: Database.Database, env: RetroCliIo['env'], projectId?: number): string[] {
+  const values = secretValues(env);
+  const rows = db
+    .prepare('SELECT env_files FROM projects WHERE ? IS NULL OR id = ?')
+    .all(projectId ?? null, projectId ?? null) as { env_files: string }[];
+  for (const row of rows) {
+    let files: unknown;
+    try {
+      files = JSON.parse(row.env_files);
+    } catch {
+      continue;
+    }
+    for (const f of Array.isArray(files) ? files : []) {
+      const source = (f as { source?: unknown } | null)?.source;
+      if (typeof source !== 'string') continue;
+      try {
+        values.push(...envFileValues(readFileSync(source, 'utf8')));
+      } catch {
+        // Token shapes and the server's secrets still apply.
+      }
+    }
+  }
+  return values;
+}
 
 const quiet = (d: RetroData) =>
   d.sessions.started + d.prs.opened + d.requests.created + d.questions.asked === 0;
@@ -86,6 +116,15 @@ export async function runRetroCli(argv: string[], io: RetroCliIo): Promise<numbe
     io.out(RETRO_USAGE);
     return 0;
   }
+  // A report of every project would carry the others' request and question snippets to one
+  // project's builder: filing it needs --project.
+  if (args['file-request'] && args.project === undefined) {
+    io.err(
+      `--file-request needs --project: the request carries the report to that project's builder.\n\n${RETRO_USAGE}`,
+    );
+    return 2;
+  }
+  const cwd = io.env.INIT_CWD ?? process.cwd();
   const now = io.now?.() ?? new Date();
   let window;
   try {
@@ -94,13 +133,15 @@ export async function runRetroCli(argv: string[], io: RetroCliIo): Promise<numbe
     io.err(`${errorMessage(error)}\n\n${RETRO_USAGE}`);
     return 2;
   }
-  const dbPath = fromRoot(args.db ?? (io.env.LOOP_DB_PATH?.trim() || './data/loop.db'));
+  // --db is a path typed here (like --out-dir); LOOP_DB_PATH is the server's setting, from the repo root.
+  const dbPath = args.db ? resolve(cwd, args.db) : fromRoot(io.env.LOOP_DB_PATH?.trim() || './data/loop.db');
   if (dbPath === ':memory:' || !existsSync(dbPath)) {
     io.err(`No database at ${dbPath}. Start the server once, or pass --db.`);
     return 1;
   }
 
   let data: RetroData;
+  let secrets: string[];
   let db: Database.Database | null = null;
   try {
     // Read-only: never migrates or writes the live database, even while the server runs.
@@ -121,6 +162,7 @@ export async function runRetroCli(argv: string[], io: RetroCliIo): Promise<numbe
       projectId = found.id;
     }
     data = collectRetro(db, { window, now, ...(projectId === undefined ? {} : { projectId }) });
+    secrets = knownSecrets(db, io.env, projectId);
   } catch (error) {
     io.err(`retro failed: ${errorMessage(error)}`);
     return 1;
@@ -128,19 +170,21 @@ export async function runRetroCli(argv: string[], io: RetroCliIo): Promise<numbe
     db?.close();
   }
 
-  const report = renderRetro(data);
+  const report = renderRetro(data, { secrets });
   const fileName = retroFileName(window, data.project ?? undefined);
   if (args.stdout) io.out(report.trimEnd());
   else {
-    const dir = args['out-dir']
-      ? resolve(io.env.INIT_CWD ?? process.cwd(), args['out-dir'])
-      : join(dirname(dbPath), 'retros');
+    const dir = args['out-dir'] ? resolve(cwd, args['out-dir']) : join(dirname(dbPath), 'retros');
     const path = join(dir, fileName);
     try {
       mkdirSync(dir, { recursive: true });
-      // Written whole, then renamed: a reader never sees half a report.
-      writeFileSync(`${path}.tmp`, report, { mode: 0o600 });
-      renameSync(`${path}.tmp`, path);
+      // Written whole, then renamed: a reader never sees half a report. The mode only applies to a
+      // new file, so a temp file left by a crash goes first, and the mode is set again to be sure.
+      const tmp = `${path}.tmp`;
+      rmSync(tmp, { force: true });
+      writeFileSync(tmp, report, { mode: 0o600 });
+      chmodSync(tmp, 0o600);
+      renameSync(tmp, path);
     } catch (error) {
       io.err(`Could not write ${path}: ${errorMessage(error)}`);
       return 1;
@@ -150,7 +194,8 @@ export async function runRetroCli(argv: string[], io: RetroCliIo): Promise<numbe
   if (!args['file-request']) return 0;
   // With --stdout, stdout is the report alone: what the request step says goes to stderr.
   const say = args.stdout ? io.err : io.out;
-  return fileRequest(data, report, fileName, args['request-project'] ?? args.project, { ...io, out: say });
+  const target = args['request-project'] ?? args.project!;
+  return fileRequest(data, report, fileName, target, secrets, { ...io, out: say });
 }
 
 /** POST /api/requests, as the dashboard does: the request text and the report as an attached file. */
@@ -158,7 +203,8 @@ async function fileRequest(
   data: RetroData,
   report: string,
   fileName: string,
-  target: string | undefined,
+  target: string,
+  secrets: readonly string[],
   io: RetroCliIo,
 ): Promise<number> {
   if (quiet(data)) {
@@ -180,19 +226,14 @@ async function fileRequest(
     return 1;
   }
   const projects = list.body.projects as KnownProject[];
-  const project =
-    target === undefined ? (projects.length === 1 ? projects[0] : undefined) : findProject(projects, target);
+  const project = findProject(projects, target);
   if (!project) {
-    io.err(
-      target === undefined
-        ? `--file-request needs --request-project (or --project): the server has ${projects.length} projects.`
-        : `The server has no project "${target}".`,
-    );
+    io.err(`The server has no project "${target}".`);
     return 1;
   }
   const res = await callServer(server, 'POST', '/requests', {
     projectId: project.id,
-    text: retroRequestText(data, fileName),
+    text: retroRequestText(data, fileName, { secrets }),
     attachments: [{ name: fileName, data: Buffer.from(report, 'utf8').toString('base64') }],
   });
   if (!res) return 1;
