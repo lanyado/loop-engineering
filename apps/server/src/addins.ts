@@ -16,12 +16,14 @@ const REBUILD = 'npm --prefix local install && npm --prefix local run build';
  * The owner's private add-ins: a `local/` folder in the repo (gitignored, with its own package.json
  * and build) whose `dist/index.js` exports serverModules(env). Extra channels or integrations live
  * there without being part of this repository. No folder: none. A folder that is not built: none,
- * with a warning.
+ * with a warning. An add-in module named like a built-in one (`builtIn`) is refused: the server would
+ * run both (an add-in that still has its own email channel would answer every mail twice).
  */
 export async function loadAddins(
   dir: string,
   env: NodeJS.ProcessEnv,
   log: (line: string) => void = console.log,
+  builtIn: readonly string[] = [],
 ): Promise<ServerModule[]> {
   if (!existsSync(dir)) return [];
   const entry = join(dir, 'dist', 'index.js');
@@ -43,6 +45,11 @@ export async function loadAddins(
   const modules = await loaded.serverModules(env);
   if (!Array.isArray(modules) || modules.some((m) => typeof m?.name !== 'string'))
     throw new ConfigError(`${entry}: serverModules(env) must return an array of modules, each with a name`);
+  const twice = modules.filter((m) => builtIn.includes(m.name)).map((m) => m.name);
+  if (twice.length > 0)
+    throw new ConfigError(
+      `${entry} adds ${twice.map((n) => `"${n}"`).join(', ')}, which the server has built in now. Remove it from the add-in, then: ${REBUILD}`,
+    );
   log(`[addins] loaded ${modules.map((m) => m.name).join(', ') || 'no modules'}`);
   return modules;
 }

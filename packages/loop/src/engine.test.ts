@@ -1097,7 +1097,7 @@ describe('deploy', () => {
       deps: {
         createRequest: (input) => {
           created++;
-          return h.store.requests.create({ ...input, source: 'telegram' });
+          return h.store.requests.create({ ...input, source: 'email' });
         },
       },
     });

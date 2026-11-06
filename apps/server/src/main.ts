@@ -6,6 +6,7 @@ import { claudeUsageModule } from './modules/claude-usage.js';
 import { terminalModule } from './modules/terminal.js';
 import { opencodeSubagentsModule } from './modules/opencode-subagents.js';
 import { dashboardApi } from './modules/dashboard-api.js';
+import { emailModule, loadEmailConfig } from './modules/email/index.js';
 import { loopModuleFromEnv } from './modules/loop.js';
 import { pipelineModule } from './modules/pipeline.js';
 import { routerModule } from './modules/router.js';
@@ -29,6 +30,7 @@ let config;
 let loop;
 let runner;
 let addins;
+let email;
 try {
   config = loadConfig();
   // Every session agent plans each new task first, following its project's planner.md as it reads at launch.
@@ -36,8 +38,10 @@ try {
     planner: (project) => stages.forProject(project).planner().prompt,
   });
   loop = loopModuleFromEnv(process.env, { stages });
+  // Tasks and answers by email: off without EMAIL_ADDRESS; set up wrong, it stops the start.
+  email = emailModule({ email: loadEmailConfig(process.env) });
   // Private add-ins from local/ (see addins.ts); one that is set up wrong stops the start, like the rest.
-  addins = await loadAddins(fromRoot('local'), process.env);
+  addins = await loadAddins(fromRoot('local'), process.env, console.log, [email.name]);
 } catch (error) {
   if (!(error instanceof Error)) throw error;
   if (!(error instanceof ConfigError) && !error.name.endsWith('ConfigError')) throw error;
@@ -52,7 +56,7 @@ const server = createServer({
   config: { ...config, dbPath: fromRoot(config.dbPath) },
   // The one SessionRunner and usage-limit monitor, shared by the PR loop and the router.
   ...(runner ? { runner } : {}),
-  // The router comes after the add-ins (which may add question channels), so they are listening when
+  // The router comes after the question channels (email and the add-ins'), so they are listening when
   // it asks a routing question, and before the loop, so it hears the loop's fix requests. It stays off
   // without ctx.runner. History and the planner come last: they only add MCP tools (and a sweep).
   modules: [
@@ -61,6 +65,7 @@ const server = createServer({
     claudeUsageModule(),
     terminalModule(),
     opencodeSubagentsModule(),
+    email,
     ...addins,
     routerModule(),
     ...(loop ? [loop] : []),

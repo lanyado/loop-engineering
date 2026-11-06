@@ -96,20 +96,6 @@ export function formatAgo(iso: string, nowMs: number): string {
   return ms < 30_000 ? 'just now' : `${formatDuration(ms)} ago`;
 }
 
-/** Parses the allowlist box: IDs separated by commas, spaces or new lines. */
-export function parseIdList(text: string): { ids: number[]; invalid: string[] } {
-  const ids: number[] = [];
-  const invalid: string[] = [];
-  for (const part of text.split(/[\s,]+/).filter(Boolean)) {
-    if (/^\d{1,16}$/.test(part) && Number(part) > 0 && Number.isSafeInteger(Number(part))) {
-      if (!ids.includes(Number(part))) ids.push(Number(part));
-    } else {
-      invalid.push(part);
-    }
-  }
-  return { ids, invalid };
-}
-
 /** "842", "128k", "1.9M": a token count in a few characters. */
 export function formatTokens(count: number): string {
   if (count < 1000) return String(count);

@@ -9,6 +9,7 @@ import {
   type Question,
   type QuestionOrigin,
   type QuestionStatus,
+  type RetiredChannel,
 } from '../types.js';
 import type { SessionRepo } from './sessions.js';
 import type { SubagentRepo } from './subagents.js';
@@ -56,7 +57,7 @@ interface QuestionRow {
   recommended_option: string;
   status: QuestionStatus;
   answer: string | null;
-  answered_via: AnswerChannel | null;
+  answered_via: AnswerChannel | RetiredChannel | null;
   created_at: string;
   deadline: string;
   answered_at: string | null;
@@ -177,7 +178,7 @@ export class QuestionRepo {
   }
 
   /**
-   * Records a human answer. The answer may be one of the options or free text (e.g. a chat reply).
+   * Records a human answer. The answer may be one of the options or free text (e.g. an email reply).
    * Only the first answer is kept, and only before the deadline: each update is conditional on the
    * question still being pending, so concurrent answers from two channels cannot both win. An answer
    * that arrives after the deadline is rejected and the question is defaulted on the spot, so the

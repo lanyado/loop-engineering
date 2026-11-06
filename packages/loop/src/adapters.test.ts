@@ -170,7 +170,7 @@ describe('agent jobs', () => {
       LANG: 'en_US.UTF-8',
       DASHBOARD_TOKEN: 'd',
       MCP_TOKEN: 'm',
-      TELEGRAM_BOT_TOKEN: 't',
+      EMAIL_APP_PASSWORD: 't',
       GH_TOKEN: 'g',
       GITHUB_TOKEN: 'g2',
       GITHUB_PERSONAL_ACCESS_TOKEN: 'p',

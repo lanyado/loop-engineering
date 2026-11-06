@@ -118,7 +118,7 @@ describe('restart', () => {
       const again = after.service.ask(newQuestion(after.session.id));
       expect(again).toMatchObject({ reused: true, question: { id: question.id } });
       const waiting = after.service.wait(question.id);
-      after.service.answer(question.id, 'Postgres', 'telegram');
+      after.service.answer(question.id, 'Postgres', 'email');
       await expect(waiting).resolves.toMatchObject({ answer: 'Postgres' });
       after.close();
     } finally {

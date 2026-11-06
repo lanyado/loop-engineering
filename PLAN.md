@@ -7,7 +7,7 @@ Status here is updated as each milestone merges.
 | M1 | Monorepo skeleton, data model, SQLite store, CI | — | done |
 | M2 | Session runner: Claude CLI in tmux, worktree per session per repo, OpenCode free-model fallback | M1 | done |
 | M3 | `ask_human` MCP server + question bus (15-min default, first answer wins) | M1 | done |
-| M4 | A second question channel, allowlist, new tasks, cross-channel confirmations (now a private local add-in) | M1 | done |
+| M4 | A second question channel, allowlist, new tasks, cross-channel confirmations (now email, built in) | M1 | done |
 | M7 | Next.js dashboard: inbox, tree, PR pipeline, metrics, settings toggles | M1 | done |
 | M5 | Router: direct input to marked project/session, ask with options when unclear | M2–M4, M7 | done |
 | M6 | PR loop engine: review loop (cap 5), tests, AI-decided QA, merge per auto-merge, deploy watch + revert, branch cleanup, metrics | M2–M4, M7 | done |

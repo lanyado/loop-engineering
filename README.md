@@ -27,6 +27,7 @@
 - **Background sessions.** Each task runs the Claude Code CLI in tmux, in its own git worktree. When Claude hits its usage limit, the session can move to a free OpenCode model.
 - **Planned before it's built.** A Planner reads the code, asks what's unclear, and picks the rigor level and the model for each agent. You can override any of it.
 - **Questions, not interruptions.** The agent asks through the dashboard as one-tap options with a default answer. If you don't reply in time, the default wins.
+- **Tasks by email.** Optional. Mail a task to the loop's address, answer its questions by reply, and hear back on the same thread when the change is in production. No dashboard needed.
 - **A PR loop that closes the job.** Optional. Tests, code review by a separate agent, QA, merge and deploy for every PR a session opens. Failures go back to the agent, and a failed deploy is reverted (repos with a Vercel project set).
 - **Stuck PRs come to you.** With the PR loop on, an open PR that stops moving for 2 hours is put to you, whatever the cause, and a builder whose agent exited is resumed with the feedback it missed. A session whose terminal closed by itself (a crash, the tmux server dying) is resumed automatically, up to 3 times a day, and you hear once if that isn't enough or if several close at once. Messages to Claude are checked against its own conversation file.
 - **Terminals under each pipeline.** Open the Builder's live window or any check's log in one click, with your Claude 5-hour and weekly limits in the top bar.
@@ -131,6 +132,8 @@ These are the `.env` values you're most likely to change. Everything else has a 
 ## Optional extras
 
 **The PR loop.** Run `gh auth login`, set `LOOP_ENGINE=on`, and restart. Every PR a session opens then gets tests, a code review by a separate agent (up to 5 rounds), QA when the change needs it, and a merge when auto-merge is on for that project, or your approval when it's off. After the merge, the loop watches the deploy and reverts it if it fails (for repos with a `vercelProject` set; see [the reference](docs/reference.md#the-pr-loop)).
+
+**Tasks and answers by email.** Give the loop a Gmail (or Google Workspace) address of its own, and people on an allowlist can send it tasks and answer the agents' questions from their mail, without opening the dashboard. A mailed task gets a few clarifying questions back if it needs them, then the plan, and the work starts in the project you name; the agents' questions arrive on the same thread (reply with a number or your own words), and a last mail says when the change is in production. Set `EMAIL_ADDRESS`, `EMAIL_APP_PASSWORD` (a [Google app password](https://myaccount.google.com/apppasswords)), `EMAIL_ALLOWLIST` and `EMAIL_PROJECT` in `.env` and restart; it stays off without them ([details](docs/reference.md#email)).
 
 **Your own add-ins.** Extra channels or integrations you keep to yourself go in a `local/` folder in the repo, which git ignores: the server loads it at start ([how](docs/reference.md#local-add-ins)).
 

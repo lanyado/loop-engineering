@@ -64,16 +64,16 @@ describe('ask_human tool', () => {
     const call = client.callTool({ name: ASK_HUMAN_TOOL, arguments: args(h.session.id) });
     const question = await pendingQuestion();
     expect(question).toMatchObject({ text: 'Which database?', context: 'Single-user app on one Mac.' });
-    h.service.answer(question.id, 'Postgres', 'telegram');
+    h.service.answer(question.id, 'Postgres', 'email');
 
     const result = await call;
     expect(result.isError).toBeFalsy();
     expect(result.structuredContent).toEqual({
       questionId: question.id,
       answer: 'Postgres',
-      answeredVia: 'telegram',
+      answeredVia: 'email',
       defaulted: false,
-      note: 'The human chose "Postgres" (via telegram).',
+      note: 'The human chose "Postgres" (via email).',
     });
   });
 
@@ -207,7 +207,7 @@ describe('re-asking', () => {
     await expect(lost).rejects.toThrow();
     const [question] = h.store.questions.listPending();
     h.clock.advance(60_000);
-    h.service.answer(question!.id, 'Postgres', 'telegram'); // answered while the agent was away
+    h.service.answer(question!.id, 'Postgres', 'email'); // answered while the agent was away
 
     const again = await ask();
     expect(again).toMatchObject({ questionId: question!.id, answer: 'Postgres' });
@@ -228,8 +228,8 @@ describe('re-asking', () => {
   it('asks the human again when the agent already received the answer', async () => {
     const first = ask();
     const [question] = h.store.questions.listPending();
-    h.service.answer(question!.id, 'Postgres', 'telegram');
-    expect((await first).note).toBe('The human chose "Postgres" (via telegram).');
+    h.service.answer(question!.id, 'Postgres', 'email');
+    expect((await first).note).toBe('The human chose "Postgres" (via email).');
 
     const second = ask();
     expect(h.store.questions.listPending()).toHaveLength(1);
@@ -243,9 +243,9 @@ describe('re-asking', () => {
 describe('toAskHumanOutput', () => {
   it('tells the agent to follow a free-text answer', () => {
     const { question } = h.service.ask(newQuestion(h.session.id));
-    const answered = h.service.answer(question.id, 'Neither, use DuckDB', 'telegram').question;
+    const answered = h.service.answer(question.id, 'Neither, use DuckDB', 'email').question;
     expect(toAskHumanOutput(answered).note).toBe(
-      'The human replied via telegram with free text instead of one of the options. Follow it: "Neither, use DuckDB"',
+      'The human replied via email with free text instead of one of the options. Follow it: "Neither, use DuckDB"',
     );
   });
 });

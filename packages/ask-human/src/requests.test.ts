@@ -24,7 +24,7 @@ describe('RequestService', () => {
     bus.onAny(() => {
       emitted++;
     });
-    expect(() => new RequestService(store, bus).create({ text: ' ', source: 'telegram' })).toThrow();
+    expect(() => new RequestService(store, bus).create({ text: ' ', source: 'email' })).toThrow();
     expect(emitted).toBe(0);
     store.close();
   });

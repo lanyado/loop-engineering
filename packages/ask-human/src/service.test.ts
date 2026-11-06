@@ -33,7 +33,7 @@ describe('QuestionService', () => {
 
   it('re-attaches to an outcome that was never delivered, within 15 minutes of resolving', async () => {
     const first = h.service.ask(newQuestion(h.session.id)).question;
-    h.service.answer(first.id, 'Postgres', 'telegram'); // no waiter: the agent was disconnected
+    h.service.answer(first.id, 'Postgres', 'email'); // no waiter: the agent was disconnected
     h.clock.advance(REATTACH_WINDOW_MS);
     const again = h.service.ask(newQuestion(h.session.id));
     expect(again).toMatchObject({ reused: true, question: { id: first.id, answer: 'Postgres' } });
@@ -46,7 +46,7 @@ describe('QuestionService', () => {
 
   it('does not re-attach once the window has passed', () => {
     const first = h.service.ask(newQuestion(h.session.id)).question;
-    h.service.answer(first.id, 'Postgres', 'telegram');
+    h.service.answer(first.id, 'Postgres', 'email');
     h.clock.advance(REATTACH_WINDOW_MS + 1);
     expect(h.service.ask(newQuestion(h.session.id)).reused).toBe(false);
   });
@@ -54,7 +54,7 @@ describe('QuestionService', () => {
   it('never re-attaches to an outcome a waiter received', async () => {
     const first = h.service.ask(newQuestion(h.session.id)).question;
     const waiting = h.service.wait(first.id);
-    h.service.answer(first.id, 'Postgres', 'telegram');
+    h.service.answer(first.id, 'Postgres', 'email');
     await waiting;
     expect(h.store.questions.require(first.id).deliveredAt).toBe('2026-10-18T09:00:00.000Z');
     const again = h.service.ask(newQuestion(h.session.id));
@@ -86,25 +86,25 @@ describe('QuestionService', () => {
       /context must be at most 2000/,
     );
     const { question } = h.service.ask(base);
-    expect(() => h.service.answer(question.id, 'a'.repeat(QUESTION_LIMITS.answer + 1), 'telegram')).toThrow(
+    expect(() => h.service.answer(question.id, 'a'.repeat(QUESTION_LIMITS.answer + 1), 'email')).toThrow(
       /answer must be at most 2000/,
     );
-    expect(h.service.answer(question.id, 'a'.repeat(QUESTION_LIMITS.answer), 'telegram').accepted).toBe(true);
+    expect(h.service.answer(question.id, 'a'.repeat(QUESTION_LIMITS.answer), 'email').accepted).toBe(true);
   });
 
   it('emits question.resolved once for the winning answer only', () => {
     const { question } = h.service.ask(newQuestion(h.session.id));
-    expect(h.service.answer(question.id, 'Postgres', 'telegram').accepted).toBe(true);
+    expect(h.service.answer(question.id, 'Postgres', 'email').accepted).toBe(true);
     expect(h.service.answer(question.id, 'SQLite', 'dashboard').accepted).toBe(false);
     const resolved = h.events.filter((e) => e.type === 'question.resolved');
     expect(resolved).toHaveLength(1);
-    expect(resolved[0]).toMatchObject({ answer: 'Postgres', answeredVia: 'telegram', defaulted: false });
+    expect(resolved[0]).toMatchObject({ answer: 'Postgres', answeredVia: 'email', defaulted: false });
   });
 
   it('announces the default when a late answer defaults the question before any sweep', () => {
     const { question } = h.service.ask(newQuestion(h.session.id));
     h.clock.advance(QUESTION_TIMEOUT_MS);
-    expect(h.service.answer(question.id, 'Postgres', 'telegram')).toMatchObject({
+    expect(h.service.answer(question.id, 'Postgres', 'email')).toMatchObject({
       accepted: false,
       defaultedNow: true,
     });
@@ -125,7 +125,7 @@ describe('QuestionService', () => {
     h.service.answer(question.id, 'Postgres', 'dashboard');
     h.clock.advance(QUESTION_TIMEOUT_MS);
     h.service.expireDue();
-    h.service.answer(question.id, 'SQLite', 'telegram');
+    h.service.answer(question.id, 'SQLite', 'email');
     await Promise.all([a, b]);
 
     expect(wakes.sort()).toEqual(['a:Postgres', 'b:Postgres']);

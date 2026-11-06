@@ -124,7 +124,7 @@ function seed(server) {
     projectId: shop.id,
     sessionId: checkout.id,
     text: 'Support Apple Pay',
-    source: 'telegram',
+    source: 'email',
   });
   store.sessions.setPlan(
     checkout.id,
@@ -205,7 +205,6 @@ function reset(server) {
   store.settings.update({
     sessionModel: 'opus',
     fallbackModel: 'opencode/glm-5.3-flash-free',
-    telegramAllowlist: [],
     dashboardLayout: {},
   });
   seed(server);

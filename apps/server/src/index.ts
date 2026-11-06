@@ -3,6 +3,7 @@ export { claudeUsageModule } from './modules/claude-usage.js';
 export type { ServerConfig } from './config.js';
 export type { ServerContext, ServerModule } from './context.js';
 export { dashboardApi } from './modules/dashboard-api.js';
+export { emailModule, loadEmailConfig } from './modules/email/index.js';
 export { pipelineModule } from './modules/pipeline.js';
 export { plannerModule } from './modules/planner.js';
 export { terminalModule } from './modules/terminal.js';

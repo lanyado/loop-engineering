@@ -48,6 +48,16 @@ describe('local add-ins', () => {
     await expect(loadAddins(dir, {}, () => {})).rejects.toThrow(/must return an array/);
   });
 
+  it('refuse a module the server has built in, so it never runs twice', async () => {
+    entry('export const serverModules = () => [{ name: "mine" }, { name: "email" }];');
+    await expect(loadAddins(dir, {}, () => {}, ['email'])).rejects.toThrow(
+      /adds "email", which the server has built in now[\s\S]*npm --prefix local run build/,
+    );
+    fresh();
+    entry('export const serverModules = () => [{ name: "mine" }];');
+    expect(await loadAddins(dir, {}, () => {}, ['email'])).toEqual([{ name: 'mine' }]);
+  });
+
   it('refuse an entry without serverModules, and pass on its own errors', async () => {
     entry('export const other = 1;');
     await expect(loadAddins(dir, {}, () => {})).rejects.toThrow(ConfigError);

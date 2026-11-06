@@ -52,7 +52,7 @@ describe('questions', () => {
 
   it('links a routing question to its request, cleared when the request is deleted', () => {
     expect(ask().requestId).toBeNull();
-    const request = store.requests.create({ text: 'route me', source: 'telegram' });
+    const request = store.requests.create({ text: 'route me', source: 'email' });
     const linked = store.questions.create({
       sessionId: session.id,
       text: 'Where?',
@@ -120,13 +120,13 @@ describe('questions', () => {
   it('keeps only the first answer', () => {
     const q = ask();
     clock.advance(2 * MINUTE);
-    const first = store.questions.answer(q.id, 'Postgres', 'telegram');
+    const first = store.questions.answer(q.id, 'Postgres', 'email');
     expect(first.accepted).toBe(true);
     expect(first.defaultedNow).toBe(false);
     expect(first.question).toMatchObject({
       status: 'answered',
       answer: 'Postgres',
-      answeredVia: 'telegram',
+      answeredVia: 'email',
       answeredAt: '2026-10-18T09:02:00.000Z',
     });
 
@@ -134,7 +134,7 @@ describe('questions', () => {
     expect(second.accepted).toBe(false);
     expect(second.defaultedNow).toBe(false);
     expect(second.question.answer).toBe('Postgres');
-    expect(second.question.answeredVia).toBe('telegram');
+    expect(second.question.answeredVia).toBe('email');
 
     expect(() => store.questions.answer(999, 'x', 'dashboard')).toThrow(NotFoundError);
     expect(() => store.questions.answer(q.id, '  ', 'dashboard')).toThrow(ValidationError);
@@ -142,21 +142,21 @@ describe('questions', () => {
 
   it('accepts free-text answers that are not one of the options', () => {
     const q = ask();
-    expect(store.questions.answer(q.id, 'Neither, use DuckDB', 'telegram').question.answer).toBe(
+    expect(store.questions.answer(q.id, 'Neither, use DuckDB', 'email').question.answer).toBe(
       'Neither, use DuckDB',
     );
   });
 
   it('rejects "timeout" as a human channel at runtime', () => {
     const q = ask();
-    expect(() => store.questions.answer(q.id, 'Postgres', 'timeout' as 'telegram')).toThrow(ValidationError);
+    expect(() => store.questions.answer(q.id, 'Postgres', 'timeout' as 'email')).toThrow(ValidationError);
     expect(store.questions.get(q.id)?.status).toBe('pending');
   });
 
   it('rejects an answer after the deadline even before any sweep, and defaults the question', () => {
     const q = ask();
     clock.advance(QUESTION_TIMEOUT_MS);
-    const late = store.questions.answer(q.id, 'Postgres', 'telegram');
+    const late = store.questions.answer(q.id, 'Postgres', 'email');
     expect(late.accepted).toBe(false);
     expect(late.defaultedNow).toBe(true);
     expect(late.question).toMatchObject({
@@ -177,7 +177,7 @@ describe('questions', () => {
     const q = ask();
     expect(store.questions.markDelivered(q.id)).toBe(false);
     clock.advance(MINUTE);
-    store.questions.answer(q.id, 'Postgres', 'telegram');
+    store.questions.answer(q.id, 'Postgres', 'email');
     clock.advance(MINUTE);
     expect(store.questions.markDelivered(q.id)).toBe(true);
     expect(store.questions.markDelivered(q.id)).toBe(false);
@@ -235,7 +235,7 @@ describe('questions', () => {
     const due = ask({ timeoutMs: 5 * MINUTE });
     const later = ask({ timeoutMs: 20 * MINUTE });
     const answered = ask({ timeoutMs: 1 * MINUTE });
-    store.questions.answer(answered.id, 'Postgres', 'telegram');
+    store.questions.answer(answered.id, 'Postgres', 'email');
 
     clock.advance(16 * MINUTE);
     const expired = store.questions.expireDue();

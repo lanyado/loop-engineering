@@ -1,15 +1,16 @@
 import { isoNow, type Clock } from '../clock.js';
 import { NotFoundError, ValidationError } from '../errors.js';
 import { updateById, where, type Db } from '../sql.js';
-import type { Request, RequestSource } from '../types.js';
+import { REQUEST_SOURCES, type Request, type RequestSource, type RetiredChannel } from '../types.js';
 import type { ProjectRepo } from './projects.js';
 import type { SessionRepo } from './sessions.js';
 
 export interface NewRequest {
-  /** Omit (or null) for a request the router has not routed yet, e.g. one from a chat channel. */
+  /** Omit (or null) for a request the router has not routed yet, e.g. one from a channel that names no project. */
   projectId?: number | null;
   text: string;
-  source: RequestSource;
+  /** A retired channel only for a part of a request that came through it (the part keeps its source). */
+  source: RequestSource | RetiredChannel;
   /** Needs a projectId. */
   sessionId?: number | null;
   /** The session the human addressed it to; needs a projectId, and the session must be in it. */
@@ -31,7 +32,7 @@ interface RequestRow {
   target_session_id: number | null;
   parent_request_id: number | null;
   text: string;
-  source: RequestSource;
+  source: RequestSource | RetiredChannel;
   created_at: string;
 }
 
@@ -67,11 +68,14 @@ export class RequestRepo {
       if (projectId === null) throw new ValidationError('a request for a session needs its projectId');
       this.sessions.requireInProject(input.targetSessionId, projectId);
     }
-    if (input.parentRequestId != null) {
-      const parent = this.require(input.parentRequestId);
-      if (projectId === null || parent.projectId !== projectId)
-        throw new ValidationError('a part of a request is in its project');
-    }
+    const parent = input.parentRequestId != null ? this.require(input.parentRequestId) : undefined;
+    if (parent && (projectId === null || parent.projectId !== projectId))
+      throw new ValidationError('a part of a request is in its project');
+    // The database also accepts a retired channel, for the rows it wrote; new requests never get it.
+    if (!(REQUEST_SOURCES as readonly string[]).includes(input.source) && parent?.source !== input.source)
+      throw new ValidationError(
+        `requests come from ${REQUEST_SOURCES.join(' or ')}, not "${String(input.source)}"`,
+      );
     const info = this.db
       .prepare(
         `INSERT INTO requests (project_id, session_id, target_session_id, parent_request_id, text, source, created_at)

@@ -1,8 +1,8 @@
 import {
   ANSWER_CHANNELS,
   NotFoundError,
+  RETIRED_CHANNELS,
   ValidationError,
-  type AnswerChannel,
   type Question,
 } from '@loop-engineering/core';
 import {
@@ -59,7 +59,8 @@ export const askHumanInputSchema = z.object({
 export const askHumanOutputSchema = z.object({
   questionId: z.number().int(),
   answer: z.string(),
-  answeredVia: z.enum(ANSWER_CHANNELS),
+  // A question answered before its channel was retired keeps that channel's name.
+  answeredVia: z.enum([...ANSWER_CHANNELS, ...RETIRED_CHANNELS]),
   defaulted: z.boolean(),
   note: z.string(),
 });
@@ -90,7 +91,7 @@ export interface AskHumanOptions {
  */
 export function toAskHumanOutput(question: Question, reattached = false): AskHumanOutput {
   const answer = question.answer ?? question.recommendedOption;
-  const answeredVia: AnswerChannel = question.answeredVia ?? 'timeout';
+  const answeredVia = question.answeredVia ?? 'timeout';
   const defaulted = question.status === 'defaulted';
   let note: string;
   if (defaulted) {
