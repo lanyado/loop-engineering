@@ -165,7 +165,7 @@ These settings bound how much runs at once, all in `.env`:
 | `LOOP_HEAVY_SLOTS`                                    | 3       | Heavy runs at once on the machine: the loop's tests, browser and shell-check jobs, and builders' browser suites and full test runs                         |
 | `LOOP_JOB_TIMEOUT_MINUTES`, `LOOP_QA_TIMEOUT_MINUTES` | 30, 15  | One job's run time; the second applies to every job that drives a browser. A job killed at its timeout gets twice the time on its next try, at most 4x     |
 | `LOOP_HEAVY_MAX_SECONDS`                              | 7200    | One heavy run of a builder (or yours): then TERM, KILL 30 seconds later, and its slot is free. The loop's own slots are bounded by the job timeout instead |
-| `LOOP_GUARDIAN_JOB_TIMEOUT_MINUTES`                   | 15      | One Production Guardian check's run time. Waiting for a heavy-run slot doesn't count                                                                       |
+| `LOOP_GUARDIAN_JOB_TIMEOUT_MINUTES`                   | 15      | One Production Guardian check's run time. Waiting for a heavy-run slot doesn't count. At most 1440, like the other time limits                             |
 
 `scripts/heavy <command>` waits for a free slot and returns the command's exit code. Put the timeout inside it, so waiting doesn't count:
 

@@ -155,14 +155,32 @@ export function loopModule(options: LoopModuleOptions): LoopModule {
   };
 }
 
-function positiveInt(env: NodeJS.ProcessEnv, name: string, fallback: number, problems: string[]): number {
+/**
+ * A whole number written in plain decimal digits (not `1e2`, `0x10` or `1.0`), from 1 to `max`.
+ * Time limits are capped: Node's timers hold at most 2^31-1 ms (24.8 days) and fire at once past
+ * that, and a timed-out job's next try gets up to 4x its limit.
+ */
+function positiveInt(
+  env: NodeJS.ProcessEnv,
+  name: string,
+  fallback: number,
+  problems: string[],
+  max = Number.MAX_SAFE_INTEGER,
+): number {
   const text = env[name]?.trim();
   if (!text) return fallback;
-  const value = Number(text);
-  if (!Number.isInteger(value) || value < 1)
-    problems.push(`${name} must be a positive integer, got "${text}"`);
+  const value = /^\d+$/.test(text) ? Number(text) : NaN;
+  if (!Number.isSafeInteger(value) || value < 1 || value > max) {
+    problems.push(
+      `${name} must be a positive integer${max < Number.MAX_SAFE_INTEGER ? ` up to ${max}` : ''}, got "${text}"`,
+    );
+    return fallback;
+  }
   return value;
 }
+
+/** The longest job time limit, in minutes: a day. */
+const MAX_TIMEOUT_MINUTES = 24 * 60;
 
 const STAGE_PROVIDERS = ['claude', 'opencode', 'builder'] as const;
 const PROVIDERS = ['claude', 'opencode'] as const;
@@ -185,10 +203,10 @@ export function loopConfigFromEnv(env: NodeJS.ProcessEnv): Partial<LoopConfig> {
   const problems: string[] = [];
   const config: Partial<LoopConfig> = {
     maxConcurrentJobs: positiveInt(env, 'LOOP_MAX_JOBS', 4, problems),
-    jobTimeoutMs: positiveInt(env, 'LOOP_JOB_TIMEOUT_MINUTES', 30, problems) * 60_000,
-    qaTimeoutMs: positiveInt(env, 'LOOP_QA_TIMEOUT_MINUTES', 15, problems) * 60_000,
+    jobTimeoutMs: positiveInt(env, 'LOOP_JOB_TIMEOUT_MINUTES', 30, problems, MAX_TIMEOUT_MINUTES) * 60_000,
+    qaTimeoutMs: positiveInt(env, 'LOOP_QA_TIMEOUT_MINUTES', 15, problems, MAX_TIMEOUT_MINUTES) * 60_000,
     maxRounds: positiveInt(env, 'LOOP_MAX_ROUNDS', 5, problems),
-    tickIntervalMs: positiveInt(env, 'LOOP_TICK_SECONDS', 30, problems) * 1000,
+    tickIntervalMs: positiveInt(env, 'LOOP_TICK_SECONDS', 30, problems, 24 * 60 * 60) * 1000,
     jobModel: env.LOOP_JOB_MODEL?.trim() || null,
     // Claude where a weak answer gets through (review gates the merge, QA drives a browser for long);
     // free models where the answer is checkable (tests report exit codes, CI reruns them).
@@ -218,7 +236,8 @@ export function guardianConfigFromEnv(env: NodeJS.ProcessEnv): Partial<GuardianC
   else if (text)
     problems.push(`LOOP_GUARDIAN_PROVIDER must be one of ${PROVIDERS.join(', ')}, got "${text}"`);
   if (env.LOOP_GUARDIAN_JOB_TIMEOUT_MINUTES?.trim())
-    config.jobTimeoutMs = positiveInt(env, 'LOOP_GUARDIAN_JOB_TIMEOUT_MINUTES', 15, problems) * 60_000;
+    config.jobTimeoutMs =
+      positiveInt(env, 'LOOP_GUARDIAN_JOB_TIMEOUT_MINUTES', 15, problems, MAX_TIMEOUT_MINUTES) * 60_000;
   if (problems.length > 0) throw new ConfigError(problems.join('\n'));
   return config;
 }
@@ -251,8 +270,8 @@ export function loopModuleFromEnv(env: NodeJS.ProcessEnv, deps: Partial<LoopDeps
         {
           store: ctx.store,
           github: new GhCli(),
-          // As in the engine: a check's heavy runs are covered by the slot the Guardian holds for it.
-          launcher: new CliAgentLauncher({ extraEnv: { LOOP_HEAVY_HELD: '1' } }),
+          // A check that holds a heavy-run slot gets LOOP_HEAVY_HELD (its job env), not every job.
+          launcher: new CliAgentLauncher(),
           workspace: new GitWorkspace(jobsRoot),
           heavySlots: deps.heavySlots ?? new ScriptHeavySlots(),
           questions: ctx.questions,
@@ -275,8 +294,9 @@ export function loopModuleFromEnv(env: NodeJS.ProcessEnv, deps: Partial<LoopDeps
           runner: ctx.runner,
           questions: ctx.questions,
           github: new GhCli(),
-          // A job's heavy runs are covered by the slot the engine holds for it: scripts/heavy passes them through.
-          launcher: new CliAgentLauncher({ extraEnv: { LOOP_HEAVY_HELD: '1' } }),
+          // A job's heavy runs are covered by the slot the engine holds for it (LOOP_HEAVY_HELD in that
+          // job's env, set only when it holds one): scripts/heavy passes them through.
+          launcher: new CliAgentLauncher(),
           deployments: new GhDeployments(),
           workspace: new GitWorkspace(jobsRoot),
           heavySlots: new ScriptHeavySlots(),

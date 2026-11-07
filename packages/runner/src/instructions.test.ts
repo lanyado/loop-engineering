@@ -33,6 +33,13 @@ describe('sessionInstructions', () => {
     expect(GIT).toContain('go with the default and say so in the pull request description');
   });
 
+  it('tells builders to stop only their own processes, by pid, never by name or pattern', () => {
+    expect(GIT).toContain('Stop only processes you started, each by its pid (`kill <pid>`).');
+    expect(GIT).toContain(
+      'Never stop processes by name or pattern (`pkill`, `killall`, `kill $(pgrep ...)`)',
+    );
+  });
+
   it('git: finish by verifying, committing, pushing the branch and opening a PR, then stop', () => {
     const steps = [
       '1. Do the task, changing only what it needs.',

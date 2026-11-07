@@ -75,6 +75,11 @@ export interface GuardianConfig {
    */
   checkoutAttempts: number;
   checkoutRetryMs: number;
+  /**
+   * After this many runs in a row of a repo that were infrastructure errors (production was not
+   * checked at all), the human gets an alert.
+   */
+  infraAlertAfter: number;
   /** The CLI to prefer; the other one when it is switched off or Claude is out of usage. */
   provider: Provider;
   jobModel: string | null;
@@ -98,6 +103,7 @@ export const DEFAULT_GUARDIAN_CONFIG: GuardianConfig = {
   heavyWaitMs: 30 * MINUTE,
   checkoutAttempts: 3,
   checkoutRetryMs: 15_000,
+  infraAlertAfter: 3,
   provider: 'claude',
   jobModel: null,
   diffLimit: 60_000,
@@ -383,7 +389,12 @@ export class ProductionGuardian {
                 .join(', ')} only on retry)`
             : 'all checks passed';
       this.log(`${c.repo.name}: ${c.run.trigger} run ${c.run.id}: ${summary}`);
-      return this.finish(c.run.id, { status: errored.length > 0 ? 'error' : 'passed', summary, areas }, c.pr);
+      const done = this.finish(
+        c.run.id,
+        { status: errored.length > 0 ? 'error' : 'passed', summary, areas },
+        c.pr,
+      );
+      return errored.length > 0 && errored.every((a) => a.infra) ? this.infraAlert(c, done) : done;
     }
 
     const critical = failed.some((a) => a.critical);
@@ -409,13 +420,26 @@ export class ProductionGuardian {
    */
   private async checkArea(c: RunCtx, area: GuardianArea): Promise<GuardianAreaResult> {
     const first = await this.attempt(c, area, []);
+    // Stopping: no retry (the first attempt was cut short), the run ends as an error.
     const last =
-      first.outcome === 'pass' || first.outcome === 'offline' || first.outcome === 'infra'
+      first.outcome === 'pass' || first.outcome === 'offline' || first.outcome === 'infra' || this.stopped
         ? first
         : await this.attempt(c, area, first.failures);
     // No retry for an outage: the next run, once the connection is back, is the retry.
     const cut = [first, last].find((a) => a.outcome === 'offline');
     if (cut) return offlineArea(area, cut.failures);
+    // A real failure whose retry could not start: still unconfirmed (an error run, tried again
+    // later), but it shows what the check found, not Loop's checkout.
+    if (first.outcome === 'fail' && last.outcome === 'infra') {
+      return {
+        area,
+        passed: false,
+        critical: false,
+        failures: [...first.failures, `not confirmed: ${last.failures[0] ?? 'the retry could not start'}`],
+        flaky: false,
+        errored: true,
+      };
+    }
     return {
       area,
       passed: last.outcome === 'pass',
@@ -542,6 +566,8 @@ export class ProductionGuardian {
     },
   ): Promise<AgentJobResult> {
     const { launcher, store } = this.deps;
+    // stop() aborts the controllers it finds; a job that starts after it never waits for anything.
+    if (this.stopped) throw new Error('the guardian is stopping');
     const controller = new AbortController();
     this.controllers.add(controller);
     let slot: (() => void) | undefined;
@@ -549,10 +575,12 @@ export class ProductionGuardian {
     let path: string | null = null;
     let timer: TimerHandle | null = null;
     try {
-      // Before the job permit and the timeout, as in the PR loop: waiting for a slot is not job time.
-      if (job.heavy) slot = await this.heavySlot(c, job.name, controller.signal);
+      // The permit first, so a run holds at most maxConcurrentJobs machine-wide slots; the slot
+      // before the timeout, so waiting for one is not job time.
       release = await this.jobs.acquire();
       if (this.stopped) throw new Error('the guardian is stopping');
+      if (job.heavy) slot = await this.heavySlot(c, job.name, controller.signal);
+      controller.signal.throwIfAborted();
       path = await this.checkout(c, job.name, controller.signal);
       const aborted = new Promise<never>((_, reject) => {
         controller.signal.addEventListener(
@@ -575,6 +603,8 @@ export class ProductionGuardian {
         systemPrompt: job.systemPrompt,
         rights: job.rights,
         ...(job.logFile ? { logFile: job.logFile } : {}),
+        // Only with a slot held: then the check's own `scripts/heavy` runs don't wait for a second one.
+        ...(slot ? { env: { LOOP_HEAVY_HELD: '1' } } : {}),
       });
       const run = async (p: Provider) => {
         const result = await Promise.race([launcher.run(spec(p), controller.signal), aborted]);
@@ -622,7 +652,7 @@ export class ProductionGuardian {
         });
       } catch (err) {
         if (isNetworkError(err) || this.stopped || signal.aborted) throw err;
-        why = clip(errorMessage(err), 300);
+        why = clip(failureText(err), 300);
         if (i >= this.config.checkoutAttempts) {
           throw new InfrastructureError(`the job checkout failed ${i} times (${why})`, { cause: err });
         }
@@ -725,15 +755,42 @@ export class ProductionGuardian {
     return this.createRequest({ projectId: c.project.id, text }).id;
   }
 
+  /**
+   * Infrastructure errors (job checkouts that keep failing) leave production unchecked, and error
+   * runs are retried quietly. After infraAlertAfter of them in a row for the repo, one alert; the
+   * next one only after a run that was not.
+   */
+  private infraAlert(c: RunCtx, run: GuardianRun): GuardianRun {
+    const runs = this.deps.store.guardianRuns
+      .list({ projectId: c.project.id, repo: c.repo.name })
+      .filter((r) => r.status !== 'skipped' && r.status !== 'running');
+    let streak = 0;
+    for (const r of runs.reverse()) {
+      if (r.status !== 'error' || !r.areas.some((a) => a.infra)) break;
+      streak++;
+    }
+    if (streak !== this.config.infraAlertAfter) return run;
+    return this.alert(
+      c,
+      run,
+      `${GUARDIAN_LABEL}: ${c.repo.name} has not been checked for ${streak} runs: Loop could not check out the code to test. ${run.summary}`,
+      "Production is not being verified until Loop's job checkouts work again (git in the builder's repo on the server: locks, disk space, permissions). The run's summary says what git answered.",
+    );
+  }
+
   /** A critical failure goes to the human: a question, which every channel shows. */
-  private alert(c: RunCtx, run: GuardianRun): GuardianRun {
+  private alert(c: RunCtx, run: GuardianRun, text?: string, note?: string): GuardianRun {
     const { store, questions } = this.deps;
     try {
       const { question } = questions.ask({
         sessionId: c.pr?.sessionId ?? loopSessionId(store, c.project.id),
-        text: clip(`${GUARDIAN_LABEL}: ${c.repo.name} is failing critical checks. ${run.summary}`, 400),
+        text: clip(
+          text ?? `${GUARDIAN_LABEL}: ${c.repo.name} is failing critical checks. ${run.summary}`,
+          400,
+        ),
         context: clip(
           [
+            note ?? '',
             run.diagnosis,
             run.requestId === null
               ? ''
@@ -805,6 +862,15 @@ export class ProductionGuardian {
       }),
     });
   }
+}
+
+/** What git said, for a failed checkout: its stderr first, not its long `-c …` command line. */
+function failureText(err: unknown): string {
+  const e = err as { stderr?: unknown; result?: { stderr?: unknown; stdout?: unknown } } | null;
+  const said = [e?.result?.stderr, e?.stderr, e?.result?.stdout].find(
+    (t): t is string => typeof t === 'string' && t.trim() !== '',
+  );
+  return said ? said.trim().replace(/\s+/g, ' ') : errorMessage(err);
 }
 
 const offlineArea = (area: GuardianArea, failures: string[]): GuardianAreaResult => ({

@@ -53,6 +53,8 @@ export {
 export {
   GIT_LOCK_RETRY_MS,
   isGitLockError,
+  REPO_LOCK_NAME,
+  RepoLockTimeoutError,
   retryGitLock,
   withRepoLock,
   type RepoLockOptions,

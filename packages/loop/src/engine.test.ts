@@ -1982,6 +1982,8 @@ describe('failures that pass', () => {
     expect(h.launcher.kinds()).toEqual(['tests', 'review']);
     expect(acquire).toHaveBeenCalledTimes(1); // the review job has no browser or shell to limit
     expect(released).toHaveBeenCalledTimes(1);
+    // Only the job that holds a slot is told so: its own `scripts/heavy` runs pass through.
+    expect(h.launcher.jobs.map((j) => j.env)).toEqual([{ LOOP_HEAVY_HELD: '1' }, undefined]);
     expect(h.pr().outcome).toBe('merged');
   });
 });

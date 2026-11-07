@@ -271,10 +271,21 @@ export async function safeWorktreeAdd(
 /**
  * safeGit for a command that writes the repo every worktree shares (refs, `worktree` metadata):
  * one at a time per repo (withRepoLock), and again after a short wait when git found the repo
- * locked anyway, by a git Loop does not run.
+ * locked anyway, by a git Loop does not run (a fetch also when a ref moved under it). `lockWaitMs`:
+ * the longest wait for the lock (default withRepoLock's), then RepoLockTimeoutError.
  */
-export function sharedGit(repoPath: string, args: string[], options: SafeGitOptions): Promise<ExecResult> {
-  return withRepoLock(repoPath, () => retryGitLock(() => safeGit(repoPath, args, options)));
+export function sharedGit(
+  repoPath: string,
+  args: string[],
+  options: SafeGitOptions,
+  lockWaitMs?: number,
+): Promise<ExecResult> {
+  const refRace = args[0] === 'fetch';
+  return withRepoLock(
+    repoPath,
+    () => retryGitLock(() => safeGit(repoPath, args, options), { refRace }),
+    lockWaitMs === undefined ? {} : { waitMs: lockWaitMs },
+  );
 }
 
 /**
@@ -317,6 +328,12 @@ export interface RealGitOptions {
   sourceEnv?: Record<string, string | undefined>;
   /** Limit for reading a repo's config before each command, in ms. Default 30 s. */
   configTimeoutMs?: number;
+  /**
+   * Longest wait of a session start's fetch for the repo's git lock (the loop's job checkouts may
+   * hold it for minutes). Then the fetch fails and the session branches from the local branch, as
+   * when the remote can't be reached. Default 30 s, the fetch's own limit.
+   */
+  fetchLockWaitMs?: number;
 }
 
 /**
@@ -330,11 +347,13 @@ export class RealGitDriver implements GitDriver {
   /** Exactly this, nothing from process.env. */
   private readonly env: Record<string, string>;
   private readonly configTimeoutMs: number;
+  private readonly fetchLockWaitMs: number;
 
   constructor(options: RealGitOptions | string = {}) {
     const o = typeof options === 'string' ? { bin: options } : options;
     this.bin = o.bin ?? 'git';
     this.configTimeoutMs = o.configTimeoutMs ?? CONFIG_TIMEOUT_MS;
+    this.fetchLockWaitMs = o.fetchLockWaitMs ?? FETCH_TIMEOUT_MS;
     this.env = gitEnvironment(o.sourceEnv ?? process.env);
   }
 
@@ -356,7 +375,7 @@ export class RealGitDriver implements GitDriver {
     const args = url
       ? ['fetch', '--quiet', '--', url, `+refs/heads/${ref}:refs/remotes/origin/${ref}`]
       : ['fetch', '--quiet', 'origin', '--', ref];
-    await sharedGit(repoPath, args, this.options(FETCH_TIMEOUT_MS));
+    await sharedGit(repoPath, args, this.options(FETCH_TIMEOUT_MS), this.fetchLockWaitMs);
   }
 
   async addWorktree(repoPath: string, worktreePath: string, branch: string, baseRef: string): Promise<void> {
