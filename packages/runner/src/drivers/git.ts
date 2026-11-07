@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { gitEnvironment } from '../agent-env.js';
 import { exec, ExecError, type ExecResult } from './exec.js';
+import { retryGitLock, withRepoLock } from './repo-lock.js';
 
 /** An unreachable remote must not stall a session start. */
 const FETCH_TIMEOUT_MS = 30_000;
@@ -252,7 +253,7 @@ export async function safeWorktreeAdd(
   commitish: string,
   options: SafeGitOptions,
 ): Promise<void> {
-  await safeGit(
+  await sharedGit(
     repoPath,
     ['worktree', 'add', '--no-checkout', ...flags, '--', worktreePath, commitish],
     options,
@@ -260,11 +261,20 @@ export async function safeWorktreeAdd(
   try {
     await safeGit(worktreePath, ['reset', '--hard', '--quiet'], options);
   } catch (err) {
-    await safeGit(repoPath, ['worktree', 'remove', '--force', '--', worktreePath], options).catch(
+    await sharedGit(repoPath, ['worktree', 'remove', '--force', '--', worktreePath], options).catch(
       () => undefined,
     );
     throw err;
   }
+}
+
+/**
+ * safeGit for a command that writes the repo every worktree shares (refs, `worktree` metadata):
+ * one at a time per repo (withRepoLock), and again after a short wait when git found the repo
+ * locked anyway, by a git Loop does not run.
+ */
+export function sharedGit(repoPath: string, args: string[], options: SafeGitOptions): Promise<ExecResult> {
+  return withRepoLock(repoPath, () => retryGitLock(() => safeGit(repoPath, args, options)));
 }
 
 /**
@@ -294,7 +304,7 @@ export async function safeWorktreeRemove(
       );
     forced = true;
   }
-  await safeGit(
+  await sharedGit(
     repoPath,
     ['worktree', 'remove', ...(forced ? ['--force'] : []), '--', worktreePath],
     options,
@@ -346,7 +356,7 @@ export class RealGitDriver implements GitDriver {
     const args = url
       ? ['fetch', '--quiet', '--', url, `+refs/heads/${ref}:refs/remotes/origin/${ref}`]
       : ['fetch', '--quiet', 'origin', '--', ref];
-    await this.run(repoPath, args, FETCH_TIMEOUT_MS);
+    await sharedGit(repoPath, args, this.options(FETCH_TIMEOUT_MS));
   }
 
   async addWorktree(repoPath: string, worktreePath: string, branch: string, baseRef: string): Promise<void> {
@@ -372,7 +382,7 @@ export class RealGitDriver implements GitDriver {
   }
 
   async deleteBranch(repoPath: string, branch: string): Promise<void> {
-    await this.git(repoPath, ['branch', '-D', '--', branch]);
+    await sharedGit(repoPath, ['branch', '-D', '--', branch], this.options());
   }
 
   async currentBranch(path: string): Promise<string> {

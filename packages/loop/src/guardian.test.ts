@@ -89,6 +89,17 @@ describe('ProductionGuardian', () => {
 
   const on = (plan: Parameters<typeof answers>[0] = {}) => h.launcher.on('guardian', answers(plan));
 
+  /** Waits for `promise`, firing the guardian's timers (checkout retries, slot waits) as they come due. */
+  async function settle<T>(promise: Promise<T>, stepMs = 5000): Promise<T> {
+    let done = false;
+    void promise.finally(() => (done = true)).catch(() => undefined);
+    while (!done) {
+      await new Promise((next) => setImmediate(next));
+      h.timers.advance(stepMs);
+    }
+    return promise;
+  }
+
   beforeEach(() => {
     h = new Harness({ productionUrl: URL, vercelProject: 'shop' });
     evidence = mkdtempSync(join(tmpdir(), 'guardian-'));
@@ -289,6 +300,100 @@ describe('ProductionGuardian', () => {
       expect(run).toMatchObject({ status: 'failed', critical: false });
       expect(run!.requestId).not.toBeNull();
       expect(h.asked()).toEqual([]);
+    });
+
+    it('retries a failed checkout as infrastructure: no second agent run, not a flaky check', async () => {
+      deployedPr();
+      on();
+      // The api job's fetch loses a race for the ref lock once (another job fetching at the same time).
+      let locked = 1;
+      h.workspace.failCheckout = (name) =>
+        name.includes('-api-') && locked-- > 0
+          ? new Error(
+              "git fetch --quiet failed (1): error: cannot lock ref 'refs/remotes/origin/main': is at 1a2b but expected 3c4d",
+            )
+          : null;
+      await settle(guardian.tick());
+
+      const [, run] = h.store.guardianRuns.list();
+      expect(run).toMatchObject({ status: 'passed', summary: 'all checks passed' });
+      expect(run!.areas.find((a) => a.area === 'api')).toMatchObject({
+        passed: true,
+        flaky: false,
+        errored: false,
+      });
+      expect(h.workspace.failedCheckouts).toEqual([expect.stringContaining('-api-1')]);
+      expect(h.launcher.jobs.filter((j) => areaOf(j) === 'api')).toHaveLength(1);
+      expect(h.logs.some((l) => l.includes('failed, trying again'))).toBe(true);
+    });
+
+    it('reports a checkout that keeps failing as an infrastructure error, never as the site failing', async () => {
+      deployedPr();
+      on();
+      h.workspace.failCheckout = (name) =>
+        name.includes('-ui-')
+          ? new Error('git worktree add failed (128): fatal: No space left on device')
+          : null;
+      await settle(guardian.tick());
+
+      const [, run] = h.store.guardianRuns.list();
+      expect(run).toMatchObject({ status: 'error', requestId: null });
+      expect(run!.summary).toMatch(
+        /^infrastructure error: could not check ui: the ui check could not start: the job checkout failed 3 times/,
+      );
+      expect(run!.areas.find((a) => a.area === 'ui')).toMatchObject({
+        passed: false,
+        errored: true,
+        infra: true,
+        flaky: false,
+      });
+      // Tried as infrastructure (three checkouts), and no agent ever ran for it.
+      expect(h.workspace.failedCheckouts).toEqual(['guardian2-ui-1', 'guardian2-ui-1', 'guardian2-ui-1']);
+      expect(h.launcher.jobs.filter((j) => areaOf(j) === 'ui')).toEqual([]);
+      expect(h.store.requests.list()).toEqual([]);
+      expect(h.asked()).toEqual([]);
+    });
+
+    it('takes a heavy-run slot for each check before its time limit starts, and tells the agent the limit', async () => {
+      const MINUTE = 60_000;
+      const held: string[] = [];
+      let acquired = 0;
+      // The slots are busy for 20 minutes: longer than a check's own 15.
+      const heavySlots = {
+        acquire: () =>
+          new Promise<() => void>((done) =>
+            h.timers.setTimeout(() => {
+              acquired++;
+              held.push('slot');
+              done(() => held.pop());
+            }, 20 * MINUTE),
+          ),
+      };
+      guardian = new ProductionGuardian(
+        {
+          store: h.store,
+          github: h.github,
+          launcher: h.launcher,
+          workspace: h.workspace,
+          questions: h.questions,
+          timers: h.timers,
+          heavySlots,
+          log: (m) => h.logs.push(m),
+        },
+        { evidenceDir: evidence },
+      );
+      deployedPr();
+      on({ ui: [fail(false, 'menu is broken'), fail(false, 'menu is broken')] });
+      await settle(guardian.tick(), MINUTE);
+
+      const [, run] = h.store.guardianRuns.list();
+      expect(run).toMatchObject({ status: 'failed' }); // the checks ran: the wait was not job time
+      expect(acquired).toBe(5); // four areas and the ui retry; the diagnosis runs no browser
+      expect(held).toEqual([]);
+      const check = h.launcher.jobs.find((j) => areaOf(j) === 'api')!;
+      expect(check.prompt).toContain('you have 15 minutes');
+      expect(check.prompt).not.toContain('Stop any process you started');
+      expect(check.systemPrompt).toContain('Never stop processes by name or pattern (pkill, killall');
     });
 
     it('does not count a crashed check as a production failure, and retries the run later up to the cap', async () => {

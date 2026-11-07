@@ -11,20 +11,31 @@ export interface HeadlessResult {
 
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 
-/** `claude -p --output-format json`: one result object (the last JSON line, in case anything precedes it). */
+const parseLine = (line: string): Record<string, unknown> | null => {
+  if (!line.trim().startsWith('{')) return null;
+  try {
+    const value: unknown = JSON.parse(line);
+    return value !== null && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * `claude -p --output-format json` (one result object) or `stream-json` (one event per line). The
+ * answer is the last `result` event: in stream-json other events can follow it (a background
+ * command's `command_lifecycle`, system notices), so the last line is not always the result.
+ */
 export function parseClaudeOutput(stdout: string, stderr = ''): HeadlessResult {
-  const line = stdout
+  const events = stdout
     .trim()
     .split('\n')
-    .reverse()
-    .find((l) => l.trim().startsWith('{'));
-  if (!line) return { text: (stderr || stdout).trim(), costUsd: 0, tokensIn: 0, tokensOut: 0, isError: true };
-  let r: Record<string, unknown>;
-  try {
-    r = JSON.parse(line) as Record<string, unknown>;
-  } catch {
-    return { text: (stderr || stdout).trim(), costUsd: 0, tokensIn: 0, tokensOut: 0, isError: true };
-  }
+    .map(parseLine)
+    .filter((e): e is Record<string, unknown> => e !== null);
+  const r = events.findLast((e) => e.type === 'result');
+  if (!r) return { text: (stderr || stdout).trim(), costUsd: 0, tokensIn: 0, tokensOut: 0, isError: true };
   const usage = (r.usage ?? {}) as Record<string, unknown>;
   return {
     text: typeof r.result === 'string' ? r.result : '',

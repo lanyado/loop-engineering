@@ -20,6 +20,7 @@ import {
 import { detectUsageLimit, USAGE_LIMIT_PATTERNS } from '@loop-engineering/runner';
 import { Connectivity, isNetworkError, loopSessionId, LOOP_REQUEST_PREFIX } from './engine.js';
 import { repoRef } from './gh.js';
+import type { HeavySlots } from './heavy.js';
 import type {
   AgentJobResult,
   AgentLauncher,
@@ -60,9 +61,20 @@ export interface GuardianConfig {
   skippedRetryMs: number;
   /** A deploy older than this when the guardian first sees it is not verified (it predates the guardian). */
   deployWindowMs: number;
-  /** One agent job running longer is killed and counts as an error of its check. */
+  /**
+   * One agent job running longer is killed and counts as an error of its check. Time spent waiting
+   * for a heavy-run slot or a job permit does not count.
+   */
   jobTimeoutMs: number;
   maxConcurrentJobs: number;
+  /** A check waits at most this long for a heavy-run slot, then runs without one. */
+  heavyWaitMs: number;
+  /**
+   * A job checkout that fails (git could not fetch or check out) is tried this many times in all,
+   * checkoutRetryMs apart, before the check is reported as an infrastructure error.
+   */
+  checkoutAttempts: number;
+  checkoutRetryMs: number;
   /** The CLI to prefer; the other one when it is switched off or Claude is out of usage. */
   provider: Provider;
   jobModel: string | null;
@@ -83,6 +95,9 @@ export const DEFAULT_GUARDIAN_CONFIG: GuardianConfig = {
   deployWindowMs: 6 * HOUR,
   jobTimeoutMs: 15 * MINUTE,
   maxConcurrentJobs: 2,
+  heavyWaitMs: 30 * MINUTE,
+  checkoutAttempts: 3,
+  checkoutRetryMs: 15_000,
   provider: 'claude',
   jobModel: null,
   diffLimit: 60_000,
@@ -106,13 +121,18 @@ export interface GuardianDeps {
    * instructions. Default: the built-in pipeline (on).
    */
   stages?: StageSource;
+  /**
+   * The machine-wide limit on heavy runs, shared with the builders and the PR loop: each area check
+   * takes a slot before its timeout starts. Default: no limit.
+   */
+  heavySlots?: HeavySlots;
   timers?: Timers;
   log?: (message: string) => void;
 }
 
-/** What one agent attempt at one check came to. */
+/** What one agent attempt at one check came to. "infra": Loop could not start the agent (its checkout failed). */
 interface Attempt {
-  outcome: 'pass' | 'fail' | 'error' | 'offline';
+  outcome: 'pass' | 'fail' | 'error' | 'offline' | 'infra';
   critical: boolean;
   failures: string[];
   report: string;
@@ -133,6 +153,11 @@ interface RunCtx {
 }
 
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+
+/** Loop's own machinery failed before the agent started (the job checkout): nothing was checked. */
+class InfrastructureError extends Error {
+  override name = 'InfrastructureError';
+}
 
 /**
  * The Production Guardian. Two triggers only:
@@ -350,7 +375,7 @@ export class ProductionGuardian {
     if (failed.length === 0) {
       const summary =
         errored.length > 0
-          ? `could not check ${errored.map((a) => a.area).join(', ')}: ${errored[0]!.failures[0] ?? 'error'}`
+          ? `${errored.every((a) => a.infra) ? 'infrastructure error: ' : ''}could not check ${errored.map((a) => a.area).join(', ')}: ${errored[0]!.failures[0] ?? 'error'}`
           : areas.some((a) => a.flaky)
             ? `all checks passed (${areas
                 .filter((a) => a.flaky)
@@ -377,11 +402,15 @@ export class ProductionGuardian {
 
   // ---------------------------------------------------------------- one check
 
-  /** One area: an attempt, and a second one when the first did not pass (it may have been transient). */
+  /**
+   * One area: an attempt, and a second one when the first did not pass (it may have been transient).
+   * A checkout that kept failing (already retried in runJob) gets no second attempt: the agent never
+   * ran, so there is nothing to confirm, and it is never a flaky check.
+   */
   private async checkArea(c: RunCtx, area: GuardianArea): Promise<GuardianAreaResult> {
     const first = await this.attempt(c, area, []);
     const last =
-      first.outcome === 'pass' || first.outcome === 'offline'
+      first.outcome === 'pass' || first.outcome === 'offline' || first.outcome === 'infra'
         ? first
         : await this.attempt(c, area, first.failures);
     // No retry for an outage: the next run, once the connection is back, is the retry.
@@ -393,7 +422,8 @@ export class ProductionGuardian {
       critical: last.outcome === 'fail' && last.critical,
       failures: last.failures,
       flaky: first.outcome !== 'pass' && last.outcome === 'pass',
-      errored: last.outcome === 'error',
+      errored: last.outcome === 'error' || last.outcome === 'infra',
+      ...(last.outcome === 'infra' ? { infra: true } : {}),
     };
   }
 
@@ -407,6 +437,7 @@ export class ProductionGuardian {
       pr: c.prInfo,
       retryOf,
       instructions: stagesOf(this.deps.stages ?? builtinStageLibrary(), c.project).guardian().prompt,
+      minutes: Math.round(this.config.jobTimeoutMs / MINUTE),
     };
     const name = `guardian${c.run.id}-${area}-${retryOf.length > 0 ? 2 : 1}`;
     const evidence = c.dir ? join(c.dir, area) : null;
@@ -416,6 +447,7 @@ export class ProductionGuardian {
         prompt: guardianPrompt(context, this.config.diffLimit),
         systemPrompt: GUARDIAN_SYSTEM,
         rights: GUARDIAN_RIGHTS,
+        heavy: true,
         logFile: c.dir ? join(c.dir, `${area}.log`) : undefined,
         // Screenshots are copied out before the checkout is removed; the last attempt's stay.
         beforeRemove: (path) => {
@@ -447,6 +479,10 @@ export class ProductionGuardian {
       return { outcome: verdict.passed ? 'pass' : 'fail', ...verdict };
     } catch (err) {
       if (isNetworkError(err)) return this.offline(area, errorMessage(err));
+      if (err instanceof InfrastructureError) {
+        const why = `the ${area} check could not start: ${clip(err.message, 400)}`;
+        return { outcome: 'infra', critical: false, failures: [why], report: why };
+      }
       const why = `the ${area} check could not run (${clip(errorMessage(err), 400)})`;
       return { outcome: 'error', critical: false, failures: [why], report: why };
     }
@@ -499,25 +535,25 @@ export class ProductionGuardian {
       prompt: string;
       systemPrompt: string;
       rights: JobRights;
+      /** Runs browsers or test suites: takes a heavy-run slot first. */
+      heavy?: boolean;
       logFile?: string | undefined;
       beforeRemove?: (path: string) => void;
     },
   ): Promise<AgentJobResult> {
-    const { workspace, launcher, store } = this.deps;
-    const release = await this.jobs.acquire();
+    const { launcher, store } = this.deps;
     const controller = new AbortController();
     this.controllers.add(controller);
+    let slot: (() => void) | undefined;
+    let release: (() => void) | null = null;
     let path: string | null = null;
     let timer: TimerHandle | null = null;
     try {
+      // Before the job permit and the timeout, as in the PR loop: waiting for a slot is not job time.
+      if (job.heavy) slot = await this.heavySlot(c, job.name, controller.signal);
+      release = await this.jobs.acquire();
       if (this.stopped) throw new Error('the guardian is stopping');
-      path = await workspace.checkout({
-        repo: c.repo,
-        branch: c.repo.defaultBranch,
-        sha: c.sha,
-        name: job.name,
-        envFiles: c.project.envFiles,
-      });
+      path = await this.checkout(c, job.name, controller.signal);
       const aborted = new Promise<never>((_, reject) => {
         controller.signal.addEventListener(
           'abort',
@@ -561,8 +597,70 @@ export class ProductionGuardian {
     } finally {
       if (timer) this.timers.clearTimeout(timer);
       this.controllers.delete(controller);
-      if (path) await workspace.remove(c.repo, path).catch(() => undefined);
-      release();
+      if (path) await this.deps.workspace.remove(c.repo, path).catch(() => undefined);
+      slot?.();
+      release?.();
+    }
+  }
+
+  /**
+   * The job's checkout, tried again when it fails: a fetch can lose a race for a ref lock to a git
+   * Loop does not run, or the host's git can fail for a moment. Network errors are not retried here
+   * (the run is skipped as offline). A checkout that keeps failing is an InfrastructureError, so
+   * the check is reported as Loop's failure, never as the site's.
+   */
+  private async checkout(c: RunCtx, name: string, signal: AbortSignal): Promise<string> {
+    for (let i = 1; ; i++) {
+      let why: string;
+      try {
+        return await this.deps.workspace.checkout({
+          repo: c.repo,
+          branch: c.repo.defaultBranch,
+          sha: c.sha,
+          name,
+          envFiles: c.project.envFiles,
+        });
+      } catch (err) {
+        if (isNetworkError(err) || this.stopped || signal.aborted) throw err;
+        why = clip(errorMessage(err), 300);
+        if (i >= this.config.checkoutAttempts) {
+          throw new InfrastructureError(`the job checkout failed ${i} times (${why})`, { cause: err });
+        }
+      }
+      this.log(`${c.repo.name}: the checkout for ${name} failed, trying again: ${why}`);
+      await new Promise<void>((done) => {
+        const timer = this.timers.setTimeout(done, this.config.checkoutRetryMs);
+        signal.addEventListener(
+          'abort',
+          () => {
+            this.timers.clearTimeout(timer);
+            done();
+          },
+          { once: true },
+        );
+      });
+      if (signal.aborted) throw new Error('the guardian is stopping');
+    }
+  }
+
+  /** A heavy-run slot, or none after heavyWaitMs: a limit that is stuck must not stop the checks. */
+  private async heavySlot(c: RunCtx, name: string, signal: AbortSignal): Promise<(() => void) | undefined> {
+    const slots = this.deps.heavySlots;
+    if (!slots) return undefined;
+    const wait = new AbortController();
+    const passOn = () => wait.abort(signal.reason);
+    signal.addEventListener('abort', passOn, { once: true });
+    const noSlot = new Error('no slot in time');
+    const timer = this.timers.setTimeout(() => wait.abort(noSlot), this.config.heavyWaitMs);
+    try {
+      return await slots.acquire(wait.signal);
+    } catch (err) {
+      if (err !== noSlot) throw err;
+      this.log(`${c.repo.name}: ${name} runs without a heavy-run slot: none came free in time`);
+      return undefined;
+    } finally {
+      this.timers.clearTimeout(timer);
+      signal.removeEventListener('abort', passOn);
     }
   }
 

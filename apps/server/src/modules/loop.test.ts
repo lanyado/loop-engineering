@@ -320,6 +320,15 @@ describe('guardianConfigFromEnv', () => {
     expect(guardianConfigFromEnv({ LOOP_GUARDIAN_PROVIDER: ' OpenCode ' })).toEqual({ provider: 'opencode' });
     expect(() => guardianConfigFromEnv({ LOOP_GUARDIAN_PROVIDER: 'builder' })).toThrow(ConfigError);
   });
+
+  it('takes the time limit of one check from LOOP_GUARDIAN_JOB_TIMEOUT_MINUTES', () => {
+    expect(guardianConfigFromEnv({ LOOP_GUARDIAN_JOB_TIMEOUT_MINUTES: '25' })).toEqual({
+      jobTimeoutMs: 25 * 60_000,
+    });
+    expect(() => guardianConfigFromEnv({ LOOP_GUARDIAN_JOB_TIMEOUT_MINUTES: '0' })).toThrow(
+      /LOOP_GUARDIAN_JOB_TIMEOUT_MINUTES must be a positive integer/,
+    );
+  });
 });
 
 describe('loopModuleFromEnv', () => {

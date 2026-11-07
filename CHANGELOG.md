@@ -4,7 +4,7 @@ Notable changes to Loop Engineering. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
-Planned as **0.1.0**, the first tagged release. It will hold everything on `main` since the initial public release on 2026-10-24 (#1 to #37, summarised at the end of this section) and the changes below (#38 to #45).
+Planned as **0.1.0**, the first tagged release. It will hold everything on `main` since the initial public release on 2026-10-24 (#1 to #37, summarised at the end of this section) and the changes below (#38 to #46).
 
 ### Added
 
@@ -17,6 +17,7 @@ Planned as **0.1.0**, the first tagged release. It will hold everything on `main
 - **`POST /api/prs/:id/take-over`** and **`POST /api/prs/:id/retry`**, with a button for each on the PR's lane (#38).
 - **Idle-builder and permission-prompt watchdogs**: reminders for an agent idle with undelivered work, Esc for a permission menu nobody answers, and one alert for any screen with no input box for an hour (#38).
 - `LOOP_QA_TIMEOUT_MINUTES` (#38).
+- `LOOP_GUARDIAN_JOB_TIMEOUT_MINUTES`: one Production Guardian check's time limit (default 15, as before), which the agent is now told instead of a fixed 15 (#46).
 - Release process: this changelog, [RELEASING.md](RELEASING.md) and an optional release workflow ([docs/examples/release.yml](docs/examples/release.yml)); [docs/unattended.md](docs/unattended.md) for running Loop on an always-on Linux server, with a sample [server .env](docs/examples/server.env); [CONTRIBUTING.md](CONTRIBUTING.md), issue and PR templates; [a case study](docs/case-study.md) of a week of unattended use.
 
 ### Changed
@@ -32,9 +33,14 @@ Planned as **0.1.0**, the first tagged release. It will hold everything on `main
 - The history note of a failed launch takes the "not found" line only when it names the CLI and `PATH` the launch script really ran with, and a `PATH` with parentheses (`Program Files (x86)`) is kept whole (#45).
 - An auto-resume alert stays under ask_human's limit as it counts it (an emoji is two), and a command stopped by a signal reads "(killed)", not "(exit null)" (#45).
 - The server's warning for git older than 2.26 says that no session can start (#45).
+- Each Production Guardian check takes a heavy-run slot before its time limit starts, like the PR loop's heavy jobs, so a loaded machine makes it wait instead of timing out (#46).
+- Job prompts tell agents to stop only the processes they started, by pid, and never by name or pattern: "Stop any process you started" led agents to `pkill -f` the shared test and browser processes of other jobs running at the same time (#46).
 
 ### Fixed
 
+- Concurrent job checkouts no longer fail on git's ref locks (`cannot lock ref 'refs/remotes/origin/main'`). Git commands that write the repo shared by its worktrees (fetch, `worktree add|remove|prune`, branch deletes) run one at a time per repo, across the engine, the Production Guardian and the runner and across processes, and are retried briefly when a git Loop doesn't run holds the lock (#46).
+- A Production Guardian check whose checkout failed is no longer recorded as a failed attempt and then a flaky check: the checkout is retried as infrastructure, and if it keeps failing the run reports an infrastructure error (#46).
+- The answer of a Claude job is the stream's `result` event, not its last line: an event after it (a background command's `command_lifecycle`) made a passing check read as "no decision" and run again (#46).
 - `loop retro` escapes project and repo names in its evidence links, so a `]` in a name no longer breaks the link (#45).
 - A new email task's thread and its first mail are saved in one transaction (#45).
 - The test suites remove the temp folders and tmux socket files they make; the dashboard API takes an `uploadsDir` for files attached to tasks (default unchanged: the OS temp folder) (#45).

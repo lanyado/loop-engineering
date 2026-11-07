@@ -32,6 +32,53 @@ describe('headless output', () => {
     expect(parseClaudeOutput(`${events}\n${out}\n`).costUsd).toBe(0.42);
   });
 
+  it('takes the result event of a stream-json run, also when other events follow it', () => {
+    // The shape `claude -p --output-format stream-json --verbose` prints for a Guardian check that ran
+    // a test suite in the background: the result, then the background command's lifecycle events.
+    const answer = 'All checks passed.\n```json\n{"passed": true, "critical": false, "failures": []}\n```';
+    const stream = [
+      { type: 'system', subtype: 'init', session_id: 's1', tools: ['Bash', 'Read'], model: 'claude-x' },
+      {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'npm test &' } }],
+        },
+        session_id: 's1',
+      },
+      {
+        type: 'user',
+        message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'started' }] },
+        session_id: 's1',
+      },
+      { type: 'assistant', message: { content: [{ type: 'text', text: answer }] }, session_id: 's1' },
+      {
+        type: 'result',
+        subtype: 'success',
+        is_error: false,
+        duration_ms: 812_000,
+        num_turns: 41,
+        result: answer,
+        session_id: 's1',
+        total_cost_usd: 1.25,
+        usage: { input_tokens: 20, cache_read_input_tokens: 300, output_tokens: 9 },
+      },
+      { type: 'command_lifecycle', command_id: 'b1', state: 'completed', exit_code: 0, session_id: 's1' },
+      { type: 'system', subtype: 'command_lifecycle', command_id: 'b1', state: 'cleaned_up' },
+    ]
+      .map((e) => JSON.stringify(e))
+      .join('\n');
+    expect(parseClaudeOutput(`${stream}\n`)).toEqual({
+      text: answer,
+      costUsd: 1.25,
+      tokensIn: 320,
+      tokensOut: 9,
+      isError: false,
+    });
+    // No result event at all (the CLI died): an error with what it printed, never an empty answer.
+    const cut = stream.split('\n').slice(0, 4).join('\n');
+    expect(parseClaudeOutput(cut, 'killed')).toMatchObject({ isError: true, text: 'killed' });
+  });
+
   it('parses opencode JSON events: text parts and step_finish usage', () => {
     const lines = [
       { type: 'step_start', part: {} },

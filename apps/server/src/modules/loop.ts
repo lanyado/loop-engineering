@@ -205,13 +205,22 @@ export function loopConfigFromEnv(env: NodeJS.ProcessEnv): Partial<LoopConfig> {
   return config;
 }
 
-/** The Production Guardian's settings from LOOP_GUARDIAN_PROVIDER (claude or opencode). */
+/**
+ * The Production Guardian's settings: LOOP_GUARDIAN_PROVIDER (claude or opencode) and
+ * LOOP_GUARDIAN_JOB_TIMEOUT_MINUTES (one check's time limit, default 15).
+ */
 export function guardianConfigFromEnv(env: NodeJS.ProcessEnv): Partial<GuardianConfig> {
+  const problems: string[] = [];
+  const config: Partial<GuardianConfig> = {};
   const text = env.LOOP_GUARDIAN_PROVIDER?.trim().toLowerCase();
-  if (!text) return {};
-  if ((PROVIDERS as readonly string[]).includes(text))
-    return { provider: text as (typeof PROVIDERS)[number] };
-  throw new ConfigError(`LOOP_GUARDIAN_PROVIDER must be one of ${PROVIDERS.join(', ')}, got "${text}"`);
+  if (text && (PROVIDERS as readonly string[]).includes(text))
+    config.provider = text as (typeof PROVIDERS)[number];
+  else if (text)
+    problems.push(`LOOP_GUARDIAN_PROVIDER must be one of ${PROVIDERS.join(', ')}, got "${text}"`);
+  if (env.LOOP_GUARDIAN_JOB_TIMEOUT_MINUTES?.trim())
+    config.jobTimeoutMs = positiveInt(env, 'LOOP_GUARDIAN_JOB_TIMEOUT_MINUTES', 15, problems) * 60_000;
+  if (problems.length > 0) throw new ConfigError(problems.join('\n'));
+  return config;
 }
 
 /**
@@ -242,8 +251,10 @@ export function loopModuleFromEnv(env: NodeJS.ProcessEnv, deps: Partial<LoopDeps
         {
           store: ctx.store,
           github: new GhCli(),
-          launcher: new CliAgentLauncher(),
+          // As in the engine: a check's heavy runs are covered by the slot the Guardian holds for it.
+          launcher: new CliAgentLauncher({ extraEnv: { LOOP_HEAVY_HELD: '1' } }),
           workspace: new GitWorkspace(jobsRoot),
+          heavySlots: deps.heavySlots ?? new ScriptHeavySlots(),
           questions: ctx.questions,
           timers: ctx.timers,
           createRequest: (input) => ctx.requests.create({ ...input, source: 'dashboard' }),

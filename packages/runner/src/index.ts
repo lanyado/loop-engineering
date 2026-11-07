@@ -44,11 +44,19 @@ export {
   safeGit,
   safeWorktreeAdd,
   safeWorktreeRemove,
+  sharedGit,
   type ConfigEntry,
   type GitDriver,
   type RealGitOptions,
   type SafeGitOptions,
 } from './drivers/git.js';
+export {
+  GIT_LOCK_RETRY_MS,
+  isGitLockError,
+  retryGitLock,
+  withRepoLock,
+  type RepoLockOptions,
+} from './drivers/repo-lock.js';
 export {
   RealTmuxDriver,
   type NewWindow,

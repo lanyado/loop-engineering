@@ -10,6 +10,7 @@ import {
   gitEnvironment as runnerGitEnvironment,
   safeGit,
   safeWorktreeAdd,
+  sharedGit,
   type RunResult,
   type SafeGitOptions,
 } from '@loop-engineering/runner';
@@ -129,9 +130,20 @@ export class GitWorkspace implements Workspace {
     };
   }
 
-  private async exec(cwd: string, args: string[], timeoutMs = GIT_TIMEOUT_MS): Promise<RunResult> {
+  /**
+   * `shared`: the command writes the builder's repo, which every worktree, job checkout and the
+   * builder's own git share (refs, worktree metadata). Those run one at a time per repo, also
+   * across Loop's engine and Guardian, and again when another git held a lock (see sharedGit).
+   */
+  private async exec(
+    cwd: string,
+    args: string[],
+    timeoutMs = GIT_TIMEOUT_MS,
+    shared = false,
+  ): Promise<RunResult> {
     try {
-      const { stdout, stderr } = await safeGit(cwd, args, this.options(timeoutMs));
+      const options = this.options(timeoutMs);
+      const { stdout, stderr } = await (shared ? sharedGit : safeGit)(cwd, args, options);
       return { code: 0, stdout, stderr };
     } catch (err) {
       if (err instanceof ExecError && !(err instanceof GitConfigError) && typeof err.code === 'number')
@@ -140,8 +152,8 @@ export class GitWorkspace implements Workspace {
     }
   }
 
-  private async git(cwd: string, args: string[], timeoutMs?: number): Promise<string> {
-    const result = await this.exec(cwd, args, timeoutMs);
+  private async git(cwd: string, args: string[], timeoutMs?: number, shared = false): Promise<string> {
+    const result = await this.exec(cwd, args, timeoutMs, shared);
     if (result.code !== 0) throw new CommandError(`git ${args.join(' ')}`, result);
     return result.stdout;
   }
@@ -170,6 +182,7 @@ export class GitWorkspace implements Workspace {
         `+refs/heads/${input.branch}:refs/remotes/origin/${input.branch}`,
       ],
       GIT_LONG_TIMEOUT_MS,
+      true,
     );
     // The checkout runs as the new worktree, guarded from there (see safeWorktreeAdd).
     await safeWorktreeAdd(
@@ -194,10 +207,12 @@ export class GitWorkspace implements Workspace {
   async remove(repo: Repo, path: string): Promise<void> {
     if (!resolve(path).startsWith(this.root + sep)) return;
     if (await exists(path)) {
-      await this.git(repo.path, ['worktree', 'remove', '--force', '--', path]).catch(() => undefined);
+      await this.git(repo.path, ['worktree', 'remove', '--force', '--', path], undefined, true).catch(
+        () => undefined,
+      );
       await rm(path, { recursive: true, force: true });
     }
-    await this.git(repo.path, ['worktree', 'prune']).catch(() => undefined);
+    await this.git(repo.path, ['worktree', 'prune'], undefined, true).catch(() => undefined);
   }
 
   async isAncestor(repo: Repo, sha: string, ref: string): Promise<boolean> {
@@ -301,7 +316,7 @@ export class GitWorkspace implements Workspace {
     if (!(await this.isAncestor(repo, sha, mergedHeadSha))) return 'kept';
     const worktrees = await this.git(repo.path, ['worktree', 'list', '--porcelain']);
     if (worktrees.split('\n').includes(`branch ${ref}`)) return 'kept';
-    await this.git(repo.path, ['update-ref', '-d', ref, sha]);
+    await this.git(repo.path, ['update-ref', '-d', ref, sha], undefined, true);
     return 'deleted';
   }
 
