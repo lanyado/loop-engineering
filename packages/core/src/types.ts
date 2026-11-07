@@ -436,6 +436,11 @@ export interface GuardianAreaResult {
   flaky: boolean;
   /** The check could not run (agent crash, timeout): it says nothing about production. */
   errored: boolean;
+  /**
+   * Of the errored checks: Loop itself failed before the agent started (the job checkout), so this
+   * is an infrastructure error, not the site's.
+   */
+  infra?: boolean;
   /** The network was down: nothing was checked, and the whole run is skipped. */
   offline?: boolean;
 }

@@ -2145,7 +2145,12 @@ export class LoopEngine {
       timer = this.timers.setTimeout(() => controller.abort(), timeout * longer);
       // Raced, so a launcher that ignores the signal cannot hold the PR past the timeout.
       const logFile = this.config.logsDir ? jobLogFile(this.config.logsDir, c.pr.id, job.kind) : undefined;
-      const run = launcher.run({ ...job, cwd: path, ...(logFile ? { logFile } : {}) }, controller.signal);
+      // LOOP_HEAVY_HELD only with a slot held: then the job's own `scripts/heavy` runs don't wait for a second one.
+      const env = slot ? { env: { ...job.env, LOOP_HEAVY_HELD: '1' } } : {};
+      const run = launcher.run(
+        { ...job, cwd: path, ...(logFile ? { logFile } : {}), ...env },
+        controller.signal,
+      );
       const result = await Promise.race([run, aborted]);
       await finish(result, path);
       return result;

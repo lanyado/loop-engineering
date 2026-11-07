@@ -209,7 +209,12 @@ export class CliAgentLauncher implements AgentLauncher {
       const out = await this.exec(cmd.bin, cmd.args, {
         ...(log ? { onOutput: (chunk: string) => log.write(chunk) } : {}),
         cwd: job.cwd,
-        env: { ...jobEnvironment(this.sourceEnv, this.ghConfigDir), ...this.extraEnv, ...cmd.env },
+        env: {
+          ...jobEnvironment(this.sourceEnv, this.ghConfigDir),
+          ...this.extraEnv,
+          ...job.env,
+          ...cmd.env,
+        },
         cleanEnv: true,
         input: cmd.input,
         signal,

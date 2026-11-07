@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { gitConfigEnv, parseConfigList, RealGitDriver, repoConfigGuard } from './git.js';
+import { RepoLockTimeoutError, withRepoLock } from './repo-lock.js';
 import { gitEnvironment } from '../agent-env.js';
 
 const git = (cwd: string, ...args: string[]) =>
@@ -57,6 +58,23 @@ describe('RealGitDriver fetch + addWorktree (local bare origin)', () => {
     expect(git(wt, 'log', '-1', '--format=%s')).toBe('only on origin');
     expect(git(clone, 'log', '-1', '--format=%s', 'main')).toBe('first');
     expect(() => git(wt, 'rev-parse', '--abbrev-ref', 'loop/x@{upstream}')).toThrow();
+  });
+
+  it("waits only fetchLockWaitMs for the repo's git lock, then fails, so a session start branches from local", async () => {
+    // A loop job checkout holds the repo's lock for a long fetch.
+    let released = false;
+    const held = withRepoLock(clone, async () => {
+      await new Promise((done) => setTimeout(done, 1500));
+      released = true;
+    });
+    await new Promise((done) => setTimeout(done, 20));
+    const started = Date.now();
+    await expect(new RealGitDriver({ fetchLockWaitMs: 100 }).fetch(clone, 'main')).rejects.toBeInstanceOf(
+      RepoLockTimeoutError,
+    );
+    expect(released).toBe(false);
+    expect(Date.now() - started).toBeLessThan(1000);
+    await held;
   });
 
   it('rejects when the remote cannot be fetched', async () => {

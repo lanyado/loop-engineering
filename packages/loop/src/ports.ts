@@ -119,6 +119,8 @@ export interface AgentJob {
   rights: JobRights;
   /** Where the job's output is streamed as it runs, for the dashboard's stage terminal. */
   logFile?: string;
+  /** Set on top of the job's environment, e.g. LOOP_HEAVY_HELD when the loop holds a heavy-run slot for it. */
+  env?: Record<string, string>;
 }
 
 /** The agent's final answer and usage. */

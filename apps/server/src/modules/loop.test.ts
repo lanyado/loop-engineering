@@ -251,7 +251,8 @@ describe('loop server module', () => {
     cleanup.push(() => server.close());
     const { deps } = loop.engine() as unknown as { deps: LoopDeps };
     expect(deps.heavySlots).toBeInstanceOf(ScriptHeavySlots);
-    expect((deps.launcher as unknown as { extraEnv: unknown }).extraEnv).toEqual({ LOOP_HEAVY_HELD: '1' });
+    // LOOP_HEAVY_HELD comes with each job that holds a slot (its env), never with every job.
+    expect((deps.launcher as unknown as { extraEnv: unknown }).extraEnv).toEqual({});
   });
 
   it('POST /prs/:id/take-over takes a PR out of the loop, and /retry brings it back', async () => {
@@ -319,6 +320,33 @@ describe('guardianConfigFromEnv', () => {
     expect(guardianConfigFromEnv({})).toEqual({});
     expect(guardianConfigFromEnv({ LOOP_GUARDIAN_PROVIDER: ' OpenCode ' })).toEqual({ provider: 'opencode' });
     expect(() => guardianConfigFromEnv({ LOOP_GUARDIAN_PROVIDER: 'builder' })).toThrow(ConfigError);
+  });
+
+  it('takes the time limit of one check from LOOP_GUARDIAN_JOB_TIMEOUT_MINUTES', () => {
+    expect(guardianConfigFromEnv({ LOOP_GUARDIAN_JOB_TIMEOUT_MINUTES: '25' })).toEqual({
+      jobTimeoutMs: 25 * 60_000,
+    });
+    expect(() => guardianConfigFromEnv({ LOOP_GUARDIAN_JOB_TIMEOUT_MINUTES: '0' })).toThrow(
+      /LOOP_GUARDIAN_JOB_TIMEOUT_MINUTES must be a positive integer/,
+    );
+  });
+
+  it('refuses time limits past what a timer can hold, and numbers not in plain decimal', () => {
+    // 35792 minutes overflows setTimeout (2^31-1 ms), which then fires at once: every check would time out.
+    for (const minutes of ['1441', '35792', '1e2', '0x10', '15.0', '-5', '15 min']) {
+      expect(() => guardianConfigFromEnv({ LOOP_GUARDIAN_JOB_TIMEOUT_MINUTES: minutes }), minutes).toThrow(
+        /LOOP_GUARDIAN_JOB_TIMEOUT_MINUTES must be a positive integer up to 1440/,
+      );
+      expect(() => loopConfigFromEnv({ LOOP_JOB_TIMEOUT_MINUTES: minutes }), minutes).toThrow(
+        /LOOP_JOB_TIMEOUT_MINUTES must be a positive integer up to 1440/,
+      );
+    }
+    expect(guardianConfigFromEnv({ LOOP_GUARDIAN_JOB_TIMEOUT_MINUTES: '1440' }).jobTimeoutMs).toBe(
+      1440 * 60_000,
+    );
+    expect(() => loopConfigFromEnv({ LOOP_MAX_JOBS: '1e1' })).toThrow(
+      /LOOP_MAX_JOBS must be a positive integer, got "1e1"/,
+    );
   });
 });
 

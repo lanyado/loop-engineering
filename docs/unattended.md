@@ -165,6 +165,7 @@ These settings bound how much runs at once, all in `.env`:
 | `LOOP_HEAVY_SLOTS`                                    | 3       | Heavy runs at once on the machine: the loop's tests, browser and shell-check jobs, and builders' browser suites and full test runs                         |
 | `LOOP_JOB_TIMEOUT_MINUTES`, `LOOP_QA_TIMEOUT_MINUTES` | 30, 15  | One job's run time; the second applies to every job that drives a browser. A job killed at its timeout gets twice the time on its next try, at most 4x     |
 | `LOOP_HEAVY_MAX_SECONDS`                              | 7200    | One heavy run of a builder (or yours): then TERM, KILL 30 seconds later, and its slot is free. The loop's own slots are bounded by the job timeout instead |
+| `LOOP_GUARDIAN_JOB_TIMEOUT_MINUTES`                   | 15      | One Production Guardian check's run time. Waiting for a heavy-run slot doesn't count. At most 1440, like the other time limits                             |
 
 `scripts/heavy <command>` waits for a free slot and returns the command's exit code. Put the timeout inside it, so waiting doesn't count:
 
@@ -172,7 +173,7 @@ These settings bound how much runs at once, all in `.env`:
 ~/loop-engineering/scripts/heavy timeout 1800 npm test
 ```
 
-The loop takes a slot for each heavy job before its timeout starts; after 30 minutes without one, the job runs anyway and logs it. Builders are told to use the script (with its absolute path) for browser suites and full QA, and to run long tests under `timeout`, but nothing forces them. Use it yourself for anything heavy you run on the server. Conflict fixes and Production Guardian jobs take no slot, and **the number of sessions building at once has no limit**: if the load stays above the CPU count, lower `LOOP_HEAVY_SLOTS` and send fewer tasks at once.
+The loop takes a slot for each heavy job before its timeout starts, and so does each Production Guardian check; after 30 minutes without one, the job runs anyway and logs it. Builders are told to use the script (with its absolute path) for browser suites and full QA, and to run long tests under `timeout`, but nothing forces them. Use it yourself for anything heavy you run on the server. Conflict fixes and the Guardian's diagnosis take no slot, and **the number of sessions building at once has no limit**: if the load stays above the CPU count, lower `LOOP_HEAVY_SLOTS` and send fewer tasks at once. Guardian checks killed at their time limit on a loaded machine are a sign of that: lower the slots before raising `LOOP_GUARDIAN_JOB_TIMEOUT_MINUTES`.
 
 A test run stuck at 0% CPU (a browser waiting on a dialog, a server that never came up) holds its slot until `LOOP_HEAVY_MAX_SECONDS` in a builder, or until the job timeout in a loop job. A builder idle with undelivered work and a background shell running gets a reminder after 45 minutes that its run may have hung.
 

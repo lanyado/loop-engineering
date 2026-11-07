@@ -73,6 +73,62 @@ describe('GitWorkspace', () => {
     ]);
   });
 
+  it('runs its git writes in the shared repo one at a time, across workspaces (engine and Guardian)', async () => {
+    // A git that fails when another of these commands is running in the repo: what git's own ref
+    // locks do to concurrent fetches into refs/remotes/origin/<branch>, made certain.
+    const real = (await run('sh', ['-c', 'command -v git'])).stdout.trim();
+    const busy = join(dir, 'busy');
+    const probe = join(dir, 'git-probe');
+    await writeFile(
+      probe,
+      [
+        '#!/bin/sh',
+        'case " $* " in',
+        '  *" fetch "*|*" worktree "*|*" update-ref "*)',
+        `    mkdir '${busy}' 2>/dev/null || { echo 'probe: two git writes in the repo at once' >&2; exit 3; }`,
+        '    sleep 0.2',
+        `    '${real}' "$@"; code=$?`,
+        `    rmdir '${busy}'`,
+        '    exit $code ;;',
+        'esac',
+        `exec '${real}' "$@"`,
+        '',
+      ].join('\n'),
+    );
+    await chmod(probe, 0o755);
+    const sha = await git(repo.path, 'rev-parse', 'HEAD');
+    const engine = new GitWorkspace(join(dir, 'jobs'), { git: probe });
+    const guardian = new GitWorkspace(join(dir, 'jobs'), { git: probe });
+    const owners = [engine, guardian, engine, guardian];
+    const paths = await Promise.all(
+      owners.map((w, i) => w.checkout({ repo, branch: 'feature', sha, name: `job${i}`, envFiles: [] })),
+    );
+    for (const path of paths) expect(await exists(join(path, 'a.txt'))).toBe(true);
+    await Promise.all(paths.map((path, i) => owners[i]!.remove(repo, path)));
+    expect(await git(repo.path, 'worktree', 'list')).not.toContain('job');
+  });
+
+  it('waits out a ref lock that a git Loop does not run holds in the shared repo', async () => {
+    // The branch moved on the remote (pushed by URL, so origin/feature is behind): the job's fetch
+    // has to write refs/remotes/origin/feature, which a builder's own fetch holds for a moment.
+    await writeFile(join(repo.path, 'b.txt'), 'b\n');
+    await git(repo.path, 'add', 'b.txt');
+    await git(repo.path, 'commit', '-q', '-m', 'b');
+    await git(repo.path, 'push', '-q', repo.remote, 'HEAD:refs/heads/feature');
+    const sha = await git(repo.path, 'rev-parse', 'HEAD');
+    const lock = join(repo.path, '.git', 'refs', 'remotes', 'origin', 'feature.lock');
+    await writeFile(lock, '');
+    const unlock = setTimeout(() => void rm(lock, { force: true }), 300);
+    try {
+      const path = await workspace.checkout({ repo, branch: 'feature', sha, name: 'pr1-qa', envFiles: [] });
+      expect(await exists(join(path, 'b.txt'))).toBe(true);
+      expect(await git(repo.path, 'rev-parse', 'refs/remotes/origin/feature')).toBe(sha);
+    } finally {
+      clearTimeout(unlock);
+      await rm(lock, { force: true });
+    }
+  });
+
   it("commits as the repo's git user, so deploy hosts accept the commit", async () => {
     await git(repo.path, 'config', 'user.name', 'Ada');
     await git(repo.path, 'config', 'user.email', 'ada@example.com');

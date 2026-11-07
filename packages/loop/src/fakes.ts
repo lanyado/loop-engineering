@@ -242,6 +242,8 @@ export class FakeDeployments implements Deployments {
 export class FakeWorkspace implements Workspace {
   readonly checkouts: { repo: string; branch: string; sha: string; path: string; envFiles: EnvFile[] }[] = [];
   readonly removed: string[] = [];
+  /** Names of the checkouts failCheckout failed. */
+  readonly failedCheckouts: string[] = [];
   readonly live = new Set<string>();
   /** Every branch delete the loop asked for, with its result. */
   readonly remoteDeletes: {
@@ -267,6 +269,9 @@ export class FakeWorkspace implements Workspace {
     status: 'none',
   });
 
+  /** An error to fail a checkout with (a ref lock, a full disk), or null to check out. */
+  failCheckout: (name: string) => Error | null = () => null;
+
   checkout(input: {
     repo: Repo;
     branch: string;
@@ -274,6 +279,11 @@ export class FakeWorkspace implements Workspace {
     name: string;
     envFiles: EnvFile[];
   }): Promise<string> {
+    const failure = this.failCheckout(input.name);
+    if (failure) {
+      this.failedCheckouts.push(input.name);
+      return Promise.reject(failure);
+    }
     const path = `/jobs/${input.name}`;
     this.checkouts.push({
       repo: input.repo.name,
